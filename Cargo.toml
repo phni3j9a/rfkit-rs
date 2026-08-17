@@ -1,0 +1,17 @@
+[workspace]
+resolver = "2"
+members = ["crates/rfkit-core"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "BSD-3-Clause"
+repository = "https://github.com/phni3j9a/rfkit-rs"
+
+[workspace.dependencies]
+ndarray = { version = "0.16", features = ["serde"] }
+num-complex = { version = "0.4", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+approx = "0.5"

@@ -1,0 +1,19 @@
+[package]
+name = "rfkit-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Rust-native RF and microwave network analysis core"
+keywords = ["rf", "microwave", "s-parameters", "network-analysis"]
+categories = ["science", "mathematics"]
+
+[dependencies]
+ndarray.workspace = true
+num-complex.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+approx.workspace = true
