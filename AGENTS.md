@@ -60,6 +60,24 @@ Keep the numerical core independent of plotting frameworks, Python, WASM, GUI fr
 
 BSD-3-Clause permits reuse but attribution still matters. Do not erase lineage to make code appear original. If copying or closely adapting code, preserve the applicable copyright/license terms and log the source commit/path.
 
+## Scheduled loop engineering
+
+Read `docs/LOOP_ENGINEERING.md` when operating as a scheduled maintainer or coding worker.
+
+For the scheduled Codex worker:
+
+- only an open Issue explicitly marked `loop:ready` is permission to start autonomous implementation;
+- do not implement arbitrary open Issues merely because they exist;
+- claim the selected Issue before implementation by moving it from `loop:ready` to `loop:in-progress` when GitHub write access is available;
+- process at most one dispatched Issue per scheduled worker run unless the human owner explicitly changes the WIP policy;
+- use the Issue as the product contract and own the repository-specific implementation plan after inspection;
+- follow the configured IssueFlow `issue-to-pr` workflow when available: Codex Main plans/orchestrates, Luna MAX implements bounded product-code tasks, and a fresh Sol XHIGH independently reviews the integrated candidate;
+- Main owns deterministic verification, review-finding adjudication, Git, and PR creation;
+- do not silently substitute an unspecified child model when required role routing is unavailable;
+- if the Issue requires a material product/RF/licensing decision not settled by the Issue or repository policy, stop and surface the blocker rather than guessing.
+
+The `loop:*` labels are dispatch state, not feature taxonomy. Keep implementation content in the Issue and PR rather than encoding design decisions in labels.
+
 ## Avoid
 
 - bulk-porting thousands of lines before the conformance harness exists
@@ -67,3 +85,5 @@ BSD-3-Clause permits reuse but attribution still matters. Do not erase lineage t
 - Python API mimicry that fights Rust's type system
 - introducing plotting/UI dependencies into the numerical core
 - optimizing before correctness is characterized
+- scheduled implementation of untriaged open Issues without `loop:ready`
+- pre-generating a long autonomous roadmap when WIP=1 is configured
