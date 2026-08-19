@@ -47,7 +47,7 @@ docs/                architecture, conformance and provenance policy
 
 The repository is designed to support a bounded ChatGPT → GitHub Issue → Codex → Pull Request maintenance loop. Scheduled automation uses explicit `loop:*` dispatch state and defaults to one implementation-ready Issue at a time rather than pre-generating a long AI roadmap.
 
-See `docs/LOOP_ENGINEERING.md` for the maintainer/worker roles, dispatch labels, prioritization policy, merge gates, and escalation boundary.
+See `docs/LOOP_ENGINEERING.md` for the maintainer/worker roles, dispatch labels, prioritization policy, merge gates, and escalation boundary. See `docs/CODEX_AUTOMATION.md` for the one-time label setup and the recommended scheduled Codex worker instruction.
 
 ## Development
 
