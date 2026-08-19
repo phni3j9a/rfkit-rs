@@ -43,6 +43,12 @@ tools/oracle/        scikit-rf reference/differential-test tools
 docs/                architecture, conformance and provenance policy
 ```
 
+## Loop engineering
+
+The repository is designed to support a bounded ChatGPT → GitHub Issue → Codex → Pull Request maintenance loop. Scheduled automation uses explicit `loop:*` dispatch state and defaults to one implementation-ready Issue at a time rather than pre-generating a long AI roadmap.
+
+See `docs/LOOP_ENGINEERING.md` for the maintainer/worker roles, dispatch labels, prioritization policy, merge gates, and escalation boundary.
+
 ## Development
 
 ```bash
