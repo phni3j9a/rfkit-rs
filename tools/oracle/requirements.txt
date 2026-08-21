@@ -1,0 +1,4 @@
+# Direct dependencies for the reproducible scikit-rf oracle harness.
+# Keep these pins exact: the generated fixture is checked by canonical bytes.
+numpy==2.5.1
+scikit-rf==2.0.1
