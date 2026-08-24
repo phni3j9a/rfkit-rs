@@ -150,12 +150,13 @@ The escalation should state the decision needed and the smallest useful set of o
 
 ## Suggested schedule
 
-A simple initial cadence is:
+After the initial once-daily rollout has been validated, use this cadence:
 
 ```text
 09:00 JST  ChatGPT maintainer cycle
 10:00 JST  Codex worker checks for one loop:ready Issue
-next day  ChatGPT reviews the resulting PR before dispatching more work
+21:00 JST  ChatGPT maintainer cycle
+22:00 JST  Codex worker checks for one loop:ready Issue
 ```
 
 The exact clock times may change. The important invariant is **maintainer review before new generation** and **explicit Issue dispatch before Codex implementation**.
