@@ -1,10 +1,9 @@
 # scikit-rf oracle
 
-This directory contains the first reproducible Python oracle harness for
-`rfkit-rs`. It generates a checked-in JSON fixture through
-`scikit-rf==2.0.1`, with `numpy==2.5.1` pinned directly. scikit-rf is an
-oracle for numerical behavior here, not the public API specification for the
-Rust library.
+This directory contains the reproducible Python oracle harness for `rfkit-rs`.
+It generates checked-in JSON fixtures through `scikit-rf==2.0.1`, with
+`numpy==2.5.1` pinned directly. scikit-rf is an oracle for numerical behavior
+here, not the public API specification for the Rust library.
 
 ## Clean-checkout setup
 
@@ -24,10 +23,16 @@ fails clearly instead of silently regenerating a fixture with another version.
 
 ## Generate and verify
 
-The checked-in fixture is `fixtures/three_port_complex_z0.json` from this
-directory (repository path:
-`tools/oracle/fixtures/three_port_complex_z0.json`). Check its canonical bytes
-against a fresh scikit-rf run with:
+The harness has two registered canonical cases:
+
+- `three_port_complex_z0` — the representative four-frequency, three-port
+  Network input with frequency-dependent, per-port complex reference
+  impedances.
+- `power_wave_s_to_z_three_port_complex_z0` — the same input plus the complete
+  expected power-wave S-to-Z result obtained from the public `Network.z`
+  property.
+
+Both checked-in fixtures are checked by default against a fresh scikit-rf run:
 
 ```bash
 python generate_oracle.py check
@@ -41,18 +46,32 @@ python generate_oracle.py write
 python generate_oracle.py check
 ```
 
-Both modes return a non-zero status on setup or comparison failure. `write`
-is the only mode that changes a file; it writes the canonical bytes from the
-generator's in-memory document (the checked-in fixture should be reviewed
-together with the generator change).
+Both modes return a non-zero status on setup or comparison failure. `write` is
+the only mode that changes files; it writes every registered case's canonical
+bytes from the generator's in-memory documents. The checked-in fixtures should
+be reviewed together with the generator change.
+
+To work with one case, pass its case id. A temporary path can be supplied for
+safe failure testing or review before replacing a checked-in fixture:
+
+```bash
+python generate_oracle.py check --case power_wave_s_to_z_three_port_complex_z0
+python generate_oracle.py write --case power_wave_s_to_z_three_port_complex_z0 \
+  --fixture /tmp/power_wave_s_to_z.json
+```
+
+For compatibility with the original one-fixture harness, `--fixture` without
+`--case` selects `three_port_complex_z0`; an invocation without either option
+always selects all registered cases.
 
 ## Fixture contents and canonicalization
 
-The initial case is a four-frequency, three-port `Network` with a non-
-symmetric complex S matrix and frequency-dependent, per-port complex `z0`.
-The S and `z0` values are read back from the scikit-rf `Network` object. A
-local NumPy `default_rng` uses the recorded seed `20250308`; no process-global
-random state is changed.
+The input case is a four-frequency, three-port `Network` with a non-symmetric
+complex S matrix and frequency-dependent, per-port complex `z0`. The S and
+`z0` values are read back from the scikit-rf `Network` object. A local NumPy
+`default_rng` uses the recorded seed `20250308`; no process-global random state
+is changed. The operation case constructs that exact same input and obtains
+expected Z values only through the public `Network.z` property.
 
 The JSON representation is deliberately machine-readable and byte-stable:
 
@@ -60,18 +79,22 @@ The JSON representation is deliberately machine-readable and byte-stable:
 - Python's JSON encoder rejects NaN and infinity (`allow_nan=False`);
 - complex numbers are objects with explicit `real` and `imag` fields;
 - metadata records schema version, operation, case id, dependency versions,
-  seed, array shapes, wave definition, and the tolerance policy;
+  seed, input/output array shapes, wave definition, the linked input case, and
+  reference-impedance characteristics;
 - check mode compares the complete canonical byte sequence, so regeneration
-  has no numeric tolerance. Numerical operations built on this fixture should
-  document their own tolerance policy.
+  has no numeric tolerance. For the S-to-Z operation, downstream comparisons
+  use `abs(actual-expected) <= atol_ohm + rtol*abs(expected)` with
+  `rtol=1e-12` and `atol_ohm=1e-12`. This is a strict binary64 tolerance for
+  this well-conditioned, modest-magnitude deterministic case: it allows normal
+  cross-language linear-algebra rounding while catching material disagreement.
 
 ## Adding a future case
 
-Add a deterministic case builder beside `_network_fixture` and give it a
-unique `case_id`. Keep each case's operation, input dimensions, wave
-definition, seed (when random), and tolerance policy in its metadata. Extend
-the command-line selection and add a fixture under `fixtures/`; then run
-`write` followed by `check` in the pinned environment. Cases should cover
+Add a deterministic case builder beside `_network_fixture`, register it in
+`_CASES`, and give it a unique `case_id`. Keep each case's operation, input
+dimensions, wave definition, seed (when random), and tolerance policy in its
+metadata. Add a fixture under `fixtures/`; then run the default `write`
+followed by the default `check` in the pinned environment. Cases should cover
 additional N-port, reference-impedance, and edge-condition dimensions without
 turning this directory into a plotting/UI or broad feature-porting layer.
 

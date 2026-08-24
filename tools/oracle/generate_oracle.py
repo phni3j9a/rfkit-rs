@@ -14,7 +14,7 @@ import json
 import sys
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, NamedTuple
 
 
 EXPECTED_NUMPY_VERSION = "2.5.1"
@@ -24,6 +24,27 @@ SCHEMA_VERSION = 1
 DEFAULT_FIXTURE = (
     Path(__file__).resolve().parent / "fixtures" / "three_port_complex_z0.json"
 )
+S_TO_Z_FIXTURE = (
+    Path(__file__).resolve().parent
+    / "fixtures"
+    / "power_wave_s_to_z_three_port_complex_z0.json"
+)
+
+S_TO_Z_RTOL = 1e-12
+S_TO_Z_ATOL_OHM = 1e-12
+S_TO_Z_TOLERANCE_JUSTIFICATION = (
+    "Strict binary64 tolerance for this well-conditioned, modest-magnitude "
+    "deterministic case; it allows normal cross-language linear-algebra rounding "
+    "while catching material disagreement."
+)
+
+
+class _OracleCase(NamedTuple):
+    """A registered canonical fixture and its deterministic document builder."""
+
+    case_id: str
+    path: Path
+    builder: Callable[[Any, Any], dict[str, Any]]
 
 
 def _load_dependencies() -> tuple[Any, Any]:
@@ -110,8 +131,8 @@ def _complex_array(values: Any) -> Any:
     return [_complex_array(row) for row in values]
 
 
-def _network_fixture(np: Any, skrf: Any) -> dict[str, Any]:
-    """Build the deterministic Network and return its canonical data model."""
+def _network_inputs(np: Any) -> tuple[Any, Any, Any]:
+    """Build the shared deterministic frequency, S, and z0 input arrays."""
 
     # The seed is part of the fixture contract.  A local Generator avoids
     # mutating NumPy's process-global RNG state and is stable for this pinned
@@ -142,13 +163,27 @@ def _network_fixture(np: Any, skrf: Any) -> dict[str, Any]:
         )
     ).astype(np.complex128)
 
-    network = skrf.Network(
+    return frequency_hz, s, z0
+
+
+def _build_network(np: Any, skrf: Any) -> Any:
+    """Construct the shared deterministic scikit-rf Network input."""
+
+    frequency_hz, s, z0 = _network_inputs(np)
+
+    return skrf.Network(
         f=frequency_hz,
         s=s,
         z0=z0,
         s_def="power",
         name="three_port_complex_z0",
     )
+
+
+def _network_fixture(np: Any, skrf: Any) -> dict[str, Any]:
+    """Build the deterministic Network and return its canonical data model."""
+
+    network = _build_network(np, skrf)
 
     # Read values back through Network rather than serializing the pre-
     # constructor arrays.  This makes the fixture explicitly an oracle output.
@@ -187,6 +222,75 @@ def _network_fixture(np: Any, skrf: Any) -> dict[str, Any]:
             "z0_ohm": _complex_array(network_z0),
         },
     }
+
+
+def _s_to_z_fixture(np: Any, skrf: Any) -> dict[str, Any]:
+    """Build the power-wave S-to-Z operation fixture from the shared Network."""
+
+    network = _build_network(np, skrf)
+
+    # Obtain the expected operation output exclusively through scikit-rf's
+    # public Network.z property after constructing the Network.  Do not replace
+    # this with a local conversion formula: this document is a behavior oracle.
+    frequency = np.asarray(network.f, dtype=np.float64)
+    network_s = np.asarray(network.s, dtype=np.complex128)
+    network_z0 = np.asarray(network.z0, dtype=np.complex128)
+    network_z = np.asarray(network.z, dtype=np.complex128)
+
+    shape = {
+        "frequency": list(frequency.shape),
+        "input_s": list(network_s.shape),
+        "input_z0": list(network_z0.shape),
+        "output_z": list(network_z.shape),
+    }
+
+    return {
+        "metadata": {
+            "case_id": "power_wave_s_to_z_three_port_complex_z0",
+            "input_case_id": "three_port_complex_z0",
+            "numpy_version": np.__version__,
+            "operation": "s_to_z",
+            "random_seed": RANDOM_SEED,
+            "reference_impedance": {
+                "complex": True,
+                "frequency_dependent": True,
+                "per_port": True,
+                "unit": "ohm",
+            },
+            "schema": "rfkit-rs.oracle.fixture",
+            "schema_version": SCHEMA_VERSION,
+            "scikit_rf_version": skrf.__version__,
+            "shape": shape,
+            "tolerance_policy": {
+                "atol_ohm": S_TO_Z_ATOL_OHM,
+                "comparison": (
+                    "abs(actual-expected) <= "
+                    "atol_ohm + rtol*abs(expected)"
+                ),
+                "justification": S_TO_Z_TOLERANCE_JUSTIFICATION,
+                "regeneration": "exact canonical UTF-8 JSON bytes",
+                "rtol": S_TO_Z_RTOL,
+            },
+            "wave_definition": network.s_def,
+        },
+        "data": {
+            "frequency_hz": [float(value) for value in frequency],
+            "s": _complex_array(network_s),
+            "z0_ohm": _complex_array(network_z0),
+            "z_ohm": _complex_array(network_z),
+        },
+    }
+
+
+_CASES = (
+    _OracleCase("three_port_complex_z0", DEFAULT_FIXTURE, _network_fixture),
+    _OracleCase(
+        "power_wave_s_to_z_three_port_complex_z0",
+        S_TO_Z_FIXTURE,
+        _s_to_z_fixture,
+    ),
+)
+_CASES_BY_ID = {case.case_id: case for case in _CASES}
 
 
 def _canonical_bytes(document: dict[str, Any]) -> bytes:
@@ -229,6 +333,21 @@ def _check_fixture(path: Path, expected: bytes) -> int:
     return 0
 
 
+def _selected_cases(case_id: str | None, fixture: Path | None) -> tuple[_OracleCase, ...]:
+    """Resolve the requested cases while retaining the old fixture override."""
+
+    if case_id is not None:
+        return (_CASES_BY_ID[case_id],)
+
+    # Before operation cases were registered, --fixture selected the sole
+    # network fixture.  Keep that invocation useful; --case selects an
+    # operation fixture when an alternate path is needed.
+    if fixture is not None:
+        return (_CASES_BY_ID["three_port_complex_z0"],)
+
+    return _CASES
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -237,21 +356,33 @@ def main(argv: list[str] | None = None) -> int:
         help="check the checked-in canonical bytes or write regenerated bytes",
     )
     parser.add_argument(
+        "--case",
+        choices=tuple(_CASES_BY_ID),
+        help="select one case (default: check or write every registered case)",
+    )
+    parser.add_argument(
         "--fixture",
         type=Path,
-        default=DEFAULT_FIXTURE,
-        help=f"fixture path (default: {DEFAULT_FIXTURE})",
+        help=(
+            "override the selected fixture path; without --case this retains "
+            f"the legacy network-case behavior (default: all registered paths)"
+        ),
     )
     args = parser.parse_args(argv)
 
     try:
         np, skrf = _load_dependencies()
-        expected = _canonical_bytes(_network_fixture(np, skrf))
-        if args.mode == "write":
-            _write_fixture(args.fixture, expected)
-            print(f"fixture written: {args.fixture}")
-            return 0
-        return _check_fixture(args.fixture, expected)
+        cases = _selected_cases(args.case, args.fixture)
+        status = 0
+        for case in cases:
+            path = args.fixture if args.fixture is not None and len(cases) == 1 else case.path
+            expected = _canonical_bytes(case.builder(np, skrf))
+            if args.mode == "write":
+                _write_fixture(path, expected)
+                print(f"fixture written: {path}")
+            else:
+                status = max(status, _check_fixture(path, expected))
+        return status
     except RuntimeError as error:
         print(f"oracle setup error: {error}", file=sys.stderr)
         return 2
