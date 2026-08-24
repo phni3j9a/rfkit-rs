@@ -28,13 +28,14 @@ If a label already exists, do not recreate or rename it during a normal worker r
 
 ## Recommended schedule
 
-Start with one worker run per day:
+After the initial once-daily rollout has been validated, run the worker twice per day:
 
 ```text
 10:00 JST daily
+22:00 JST daily
 ```
 
-The ChatGPT maintainer cycle is expected to run earlier, for example at 09:00 JST, so it can review pull requests and prepare at most one `loop:ready` Issue before the worker checks the queue.
+Pair each worker run with an earlier ChatGPT maintainer cycle, for example at 09:00 JST and 21:00 JST. Each maintainer cycle can review pull requests and prepare at most one `loop:ready` Issue before the next worker checks the queue. If an existing Issue or PR still occupies the WIP=1 slot, do not dispatch another Issue for the later run.
 
 ## Automation instruction
 
