@@ -1,14 +1,16 @@
 # Third-party provenance
 
-The initial scaffold contains no source code copied from scikit-rf, rust-rf, or rust-skrf.
-
-The oracle harness is an independent rewrite. It uses the public
-`scikit-rf==2.0.1` `Network` constructor and read-back behavior as a reference,
-but does not copy source code or fixture values.
+The oracle harness and both checked-in fixtures are independent rewrites. They
+use the public `scikit-rf==2.0.1` `Network` constructor and `Network.z`
+behavior/API as a numerical reference, but do not copy scikit-rf source code,
+conversion code, or fixture values. The S-to-Z expected values are generated
+through the public `Network.z` property after constructing the shared input
+Network.
 
 | Local path | Source project | Source commit/tag | Source path | Use | License | Notes |
 |---|---|---|---|---|---|---|
-| `tools/oracle/generate_oracle.py` | scikit-rf | `2.0.1` | `skrf.Network` public API | REWRITE | BSD-3-Clause | Behavior/API reference only; no source code or fixture copied |
+| `tools/oracle/generate_oracle.py` | scikit-rf | `v2.0.1` | `skrf.Network` constructor and public `Network.z` API | REWRITE | BSD-3-Clause | Independent deterministic generator; behavior/API reference only; no source code or fixture copied |
+| `tools/oracle/fixtures/three_port_complex_z0.json`; `tools/oracle/fixtures/power_wave_s_to_z_three_port_complex_z0.json` | scikit-rf | `v2.0.1` | Public `Network` read-back and `Network.z` behavior | REWRITE | BSD-3-Clause | Independently generated canonical outputs; no fixture values copied |
 
 Before adding copied or closely adapted third-party code or fixtures, record an entry here and preserve the applicable license notice under `THIRD_PARTY_LICENSES/`.
 
