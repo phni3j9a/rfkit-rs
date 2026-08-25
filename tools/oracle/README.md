@@ -32,13 +32,14 @@ The harness has two registered canonical cases:
   expected power-wave S-to-Z result obtained from the public `Network.z`
   property.
 
-Both checked-in fixtures are checked by default against a fresh scikit-rf run:
+Both registered cases are checked by default against a fresh scikit-rf run;
+the default command checks every case:
 
 ```bash
 python generate_oracle.py check
 ```
 
-To intentionally regenerate the fixture after a reviewed case or dependency
+To intentionally regenerate every fixture after a reviewed case or dependency
 change, use write mode and then check mode:
 
 ```bash
@@ -49,7 +50,8 @@ python generate_oracle.py check
 Both modes return a non-zero status on setup or comparison failure. `write` is
 the only mode that changes files; it writes every registered case's canonical
 bytes from the generator's in-memory documents. The checked-in fixtures should
-be reviewed together with the generator change.
+be reviewed together with the generator change. `check` never rewrites a
+fixture, retries a failed comparison, or widens a tolerance.
 
 To work with one case, pass its case id. A temporary path can be supplied for
 safe failure testing or review before replacing a checked-in fixture:
@@ -81,12 +83,18 @@ The JSON representation is deliberately machine-readable and byte-stable:
 - metadata records schema version, operation, case id, dependency versions,
   seed, input/output array shapes, wave definition, the linked input case, and
   reference-impedance characteristics;
-- check mode compares the complete canonical byte sequence, so regeneration
-  has no numeric tolerance. For the S-to-Z operation, downstream comparisons
-  use `abs(actual-expected) <= atol_ohm + rtol*abs(expected)` with
-  `rtol=1e-12` and `atol_ohm=1e-12`. This is a strict binary64 tolerance for
-  this well-conditioned, modest-magnitude deterministic case: it allows normal
-  cross-language linear-algebra rounding while catching material disagreement.
+- The `three_port_complex_z0` network case retains an exact canonical UTF-8
+  byte comparison.
+- The `power_wave_s_to_z_three_port_complex_z0` case requires strict JSON
+  parsing (including finite numbers), canonical encoding of the actual
+  document, and exact canonical equality for metadata, schema, dependency
+  versions, shapes, frequency, S, z0, and every other field except `z_ohm`.
+  Its recursively validated `z_ohm` complex array is compared with the
+  recorded `abs(actual-expected) <= atol_ohm + rtol*abs(expected)` policy,
+  currently `rtol=1e-12` and `atol_ohm=1e-12`. This is a strict binary64
+  tolerance for this well-conditioned, modest-magnitude deterministic case:
+  it allows normal cross-language linear-algebra rounding while catching
+  material disagreement.
 
 ## Adding a future case
 
