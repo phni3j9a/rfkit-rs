@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
@@ -40,11 +41,13 @@ S_TO_Z_TOLERANCE_JUSTIFICATION = (
 
 
 class _OracleCase(NamedTuple):
-    """A registered canonical fixture and its deterministic document builder."""
+    """A registered fixture, builder, and case-specific check strategy."""
 
     case_id: str
     path: Path
     builder: Callable[[Any, Any], dict[str, Any]]
+    comparison: str
+    numeric_output_key: str | None = None
 
 
 def _load_dependencies() -> tuple[Any, Any]:
@@ -268,7 +271,10 @@ def _s_to_z_fixture(np: Any, skrf: Any) -> dict[str, Any]:
                     "atol_ohm + rtol*abs(expected)"
                 ),
                 "justification": S_TO_Z_TOLERANCE_JUSTIFICATION,
-                "regeneration": "exact canonical UTF-8 JSON bytes",
+                "regeneration": (
+                    "canonical UTF-8 JSON serialization; z_ohm is checked "
+                    "with the recorded numeric tolerance"
+                ),
                 "rtol": S_TO_Z_RTOL,
             },
             "wave_definition": network.s_def,
@@ -283,11 +289,18 @@ def _s_to_z_fixture(np: Any, skrf: Any) -> dict[str, Any]:
 
 
 _CASES = (
-    _OracleCase("three_port_complex_z0", DEFAULT_FIXTURE, _network_fixture),
+    _OracleCase(
+        "three_port_complex_z0",
+        DEFAULT_FIXTURE,
+        _network_fixture,
+        "exact",
+    ),
     _OracleCase(
         "power_wave_s_to_z_three_port_complex_z0",
         S_TO_Z_FIXTURE,
         _s_to_z_fixture,
+        "numeric_output",
+        "z_ohm",
     ),
 )
 _CASES_BY_ID = {case.case_id: case for case in _CASES}
@@ -333,6 +346,261 @@ def _check_fixture(path: Path, expected: bytes) -> int:
     return 0
 
 
+def _reject_json_constant(value: str) -> None:
+    """Reject JSON extensions such as NaN and Infinity during parsing."""
+
+    raise ValueError(f"non-finite JSON constant is not allowed: {value}")
+
+
+def _reject_duplicate_json_keys(
+    pairs: list[tuple[str, Any]],
+) -> dict[str, Any]:
+    """Reject duplicate object members instead of silently keeping the last."""
+
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON object key: {key!r}")
+        result[key] = value
+    return result
+
+
+def _assert_finite_json(value: Any, path: str = "$") -> None:
+    """Reject non-finite JSON numbers, including overflowed ``1e999``."""
+
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError(f"non-finite JSON number at {path}")
+        return
+
+    if isinstance(value, int) and not isinstance(value, bool):
+        # Python accepts arbitrarily large JSON integers.  Reject integers that
+        # cannot be represented as a finite binary64 value because all oracle
+        # numerical data is consumed as binary64 downstream.
+        try:
+            finite = math.isfinite(float(value))
+        except OverflowError as error:
+            raise ValueError(f"non-finite JSON number at {path}") from error
+        if not finite:
+            raise ValueError(f"non-finite JSON number at {path}")
+        return
+
+    if isinstance(value, list):
+        for index, item in enumerate(value):
+            _assert_finite_json(item, f"{path}[{index}]")
+        return
+
+    if isinstance(value, dict):
+        for key, item in value.items():
+            _assert_finite_json(item, f"{path}.{key}")
+
+
+def _parse_strict_json(raw: bytes) -> dict[str, Any]:
+    """Parse a fixture with strict JSON and finite-number semantics."""
+
+    try:
+        text = raw.decode("utf-8")
+        document = json.loads(
+            text,
+            object_pairs_hook=_reject_duplicate_json_keys,
+            parse_constant=_reject_json_constant,
+            strict=True,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
+        raise ValueError(f"invalid strict JSON: {error}") from error
+
+    if not isinstance(document, dict):
+        raise ValueError("fixture root must be a JSON object")
+    _assert_finite_json(document)
+    return document
+
+
+def _read_canonical_json(path: Path) -> dict[str, Any]:
+    """Read, strictly parse, and canonical-encoding-check one fixture."""
+
+    raw = path.read_bytes()
+    document = _parse_strict_json(raw)
+    try:
+        canonical = _canonical_bytes(document)
+    except (TypeError, ValueError, OverflowError) as error:
+        raise ValueError(f"fixture cannot be canonically encoded: {error}") from error
+    if raw != canonical:
+        raise ValueError("fixture is not in canonical UTF-8 JSON encoding")
+    return document
+
+
+def _contract_projection(document: dict[str, Any], output_key: str) -> dict[str, Any]:
+    """Remove only the operation output before exact contract comparison."""
+
+    data = document.get("data")
+    if not isinstance(data, dict):
+        raise ValueError("fixture data must be a JSON object")
+    if output_key not in data:
+        raise ValueError(f"fixture data is missing numeric output {output_key!r}")
+
+    projection = dict(document)
+    projected_data = dict(data)
+    del projected_data[output_key]
+    projection["data"] = projected_data
+    return projection
+
+
+def _numeric_tolerance(document: dict[str, Any]) -> tuple[float, float]:
+    """Read and validate the recorded relative/absolute output tolerances."""
+
+    metadata = document.get("metadata")
+    if not isinstance(metadata, dict):
+        raise ValueError("fixture metadata must be a JSON object")
+    policy = metadata.get("tolerance_policy")
+    if not isinstance(policy, dict):
+        raise ValueError("fixture tolerance_policy must be a JSON object")
+
+    values: list[tuple[str, Any]] = [
+        ("rtol", policy.get("rtol")),
+        ("atol_ohm", policy.get("atol_ohm")),
+    ]
+    parsed: dict[str, float] = {}
+    for name, value in values:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f"tolerance_policy.{name} must be a JSON number")
+        try:
+            converted = float(value)
+        except OverflowError as error:
+            raise ValueError(
+                f"tolerance_policy.{name} must be finite and non-negative"
+            ) from error
+        if not math.isfinite(converted) or converted < 0.0:
+            raise ValueError(f"tolerance_policy.{name} must be finite and non-negative")
+        parsed[name] = converted
+    return parsed["rtol"], parsed["atol_ohm"]
+
+
+def _numeric_value(value: Any, path: str) -> float:
+    """Validate one JSON number used as a real or imaginary component."""
+
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{path} must be a JSON number")
+    try:
+        converted = float(value)
+    except OverflowError as error:
+        raise ValueError(f"{path} must be finite") from error
+    if not math.isfinite(converted):
+        raise ValueError(f"{path} must be finite")
+    return converted
+
+
+def _compare_numeric_output(
+    actual: Any,
+    expected: Any,
+    *,
+    path: str,
+    rtol: float,
+    atol: float,
+) -> str | None:
+    """Validate shape and compare complex leaves with one absolute bound."""
+
+    if isinstance(expected, list):
+        if not isinstance(actual, list):
+            return f"{path} must be an array"
+        if len(actual) != len(expected):
+            return f"{path} has length {len(actual)}; expected {len(expected)}"
+        for index, (actual_item, expected_item) in enumerate(zip(actual, expected)):
+            mismatch = _compare_numeric_output(
+                actual_item,
+                expected_item,
+                path=f"{path}[{index}]",
+                rtol=rtol,
+                atol=atol,
+            )
+            if mismatch is not None:
+                return mismatch
+        return None
+
+    if isinstance(expected, dict):
+        if not isinstance(actual, dict):
+            return f"{path} must be a complex object"
+        expected_keys = {"real", "imag"}
+        if set(expected) != expected_keys:
+            return (
+                f"{path} expected value must contain exactly real/imag fields; "
+                f"found {sorted(expected)!r}"
+            )
+        actual_keys = set(actual)
+        if actual_keys != expected_keys:
+            return (
+                f"{path} must contain exactly real/imag fields; "
+                f"found {sorted(actual_keys)!r}"
+            )
+        try:
+            actual_real = _numeric_value(actual["real"], f"{path}.real")
+            actual_imag = _numeric_value(actual["imag"], f"{path}.imag")
+            expected_real = _numeric_value(expected["real"], f"{path}.real (expected)")
+            expected_imag = _numeric_value(expected["imag"], f"{path}.imag (expected)")
+        except ValueError as error:
+            return str(error)
+
+        actual_complex = complex(actual_real, actual_imag)
+        expected_complex = complex(expected_real, expected_imag)
+        difference = abs(actual_complex - expected_complex)
+        bound = atol + rtol * abs(expected_complex)
+        if not math.isfinite(difference) or difference > bound:
+            return (
+                f"{path} differs by {difference:.17g}; "
+                f"allowed {bound:.17g}"
+            )
+        return None
+
+    return f"{path} has an invalid expected numeric-output shape"
+
+
+def _check_numeric_fixture(
+    path: Path,
+    expected: dict[str, Any],
+    output_key: str,
+) -> int:
+    """Check a canonical fixture whose selected output is numerically tolerant."""
+
+    try:
+        actual = _read_canonical_json(path)
+    except FileNotFoundError:
+        print(f"fixture missing: {path}; run `generate_oracle.py write`", file=sys.stderr)
+        return 1
+    except ValueError as error:
+        print(f"fixture schema/encoding check failed: {path}: {error}", file=sys.stderr)
+        return 1
+
+    try:
+        expected_contract = _contract_projection(expected, output_key)
+        actual_contract = _contract_projection(actual, output_key)
+        if _canonical_bytes(actual_contract) != _canonical_bytes(expected_contract):
+            print(
+                f"fixture contract differs from regenerated canonical output: {path}\n"
+                "metadata, inputs, shape, and non-output fields must match exactly",
+                file=sys.stderr,
+            )
+            return 1
+
+        rtol, atol = _numeric_tolerance(actual)
+        regenerated_output = expected["data"][output_key]
+        checked_in_output = actual["data"][output_key]
+        mismatch = _compare_numeric_output(
+            regenerated_output,
+            checked_in_output,
+            path=f"data.{output_key}",
+            rtol=rtol,
+            atol=atol,
+        )
+        if mismatch is not None:
+            print(f"fixture numeric output check failed: {path}: {mismatch}", file=sys.stderr)
+            return 1
+    except (KeyError, TypeError, ValueError) as error:
+        print(f"fixture schema check failed: {path}: {error}", file=sys.stderr)
+        return 1
+
+    print(f"fixture check passed: {path}")
+    return 0
+
+
 def _selected_cases(case_id: str | None, fixture: Path | None) -> tuple[_OracleCase, ...]:
     """Resolve the requested cases while retaining the old fixture override."""
 
@@ -346,6 +614,22 @@ def _selected_cases(case_id: str | None, fixture: Path | None) -> tuple[_OracleC
         return (_CASES_BY_ID["three_port_complex_z0"],)
 
     return _CASES
+
+
+def _check_registered_case(
+    case: _OracleCase,
+    expected: dict[str, Any],
+    expected_bytes: bytes,
+) -> int:
+    """Dispatch checking according to the registered case strategy."""
+
+    if case.comparison == "exact":
+        return _check_fixture(case.path, expected_bytes)
+    if case.comparison == "numeric_output":
+        if case.numeric_output_key is None:
+            raise ValueError(f"numeric case {case.case_id!r} has no output key")
+        return _check_numeric_fixture(case.path, expected, case.numeric_output_key)
+    raise ValueError(f"unknown fixture comparison strategy: {case.comparison!r}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -376,12 +660,20 @@ def main(argv: list[str] | None = None) -> int:
         status = 0
         for case in cases:
             path = args.fixture if args.fixture is not None and len(cases) == 1 else case.path
-            expected = _canonical_bytes(case.builder(np, skrf))
+            document = case.builder(np, skrf)
+            expected = _canonical_bytes(document)
             if args.mode == "write":
                 _write_fixture(path, expected)
                 print(f"fixture written: {path}")
             else:
-                status = max(status, _check_fixture(path, expected))
+                # Keep the generated document independent from the checked
+                # path: --fixture is a path override, not a second source of
+                # expected values.
+                selected_case = case._replace(path=path)
+                status = max(
+                    status,
+                    _check_registered_case(selected_case, document, expected),
+                )
         return status
     except RuntimeError as error:
         print(f"oracle setup error: {error}", file=sys.stderr)

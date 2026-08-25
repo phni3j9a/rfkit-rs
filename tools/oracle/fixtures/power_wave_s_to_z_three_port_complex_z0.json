@@ -459,7 +459,7 @@
       "atol_ohm": 1e-12,
       "comparison": "abs(actual-expected) <= atol_ohm + rtol*abs(expected)",
       "justification": "Strict binary64 tolerance for this well-conditioned, modest-magnitude deterministic case; it allows normal cross-language linear-algebra rounding while catching material disagreement.",
-      "regeneration": "exact canonical UTF-8 JSON bytes",
+      "regeneration": "canonical UTF-8 JSON serialization; z_ohm is checked with the recorded numeric tolerance",
       "rtol": 1e-12
     },
     "wave_definition": "power"
