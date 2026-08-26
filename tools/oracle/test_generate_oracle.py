@@ -97,5 +97,32 @@ class NumericFixtureCheckerTests(unittest.TestCase):
             )
 
 
+class ZToSNumericFixtureCheckerTests(unittest.TestCase):
+    """Exercise the dimensionless ``atol`` policy used by Z-to-S."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.fixture_path = oracle.Z_TO_S_FIXTURE
+        cls.fixture = oracle._read_canonical_json(cls.fixture_path)
+
+    def _check_document(self, document: dict[str, object]) -> int:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / self.fixture_path.name
+            path.write_bytes(oracle._canonical_bytes(document))
+            return oracle._check_numeric_fixture(path, self.fixture, "s")
+
+    def test_output_within_recorded_atol_tolerance_passes(self) -> None:
+        document = copy.deepcopy(self.fixture)
+        document["data"]["s"][0][0][0]["real"] += 1e-13
+
+        self.assertEqual(self._check_document(document), 0)
+
+    def test_output_outside_recorded_atol_tolerance_fails(self) -> None:
+        document = copy.deepcopy(self.fixture)
+        document["data"]["s"][0][0][0]["real"] += 1e-3
+
+        self.assertEqual(self._check_document(document), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

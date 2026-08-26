@@ -30,6 +30,11 @@ S_TO_Z_FIXTURE = (
     / "fixtures"
     / "power_wave_s_to_z_three_port_complex_z0.json"
 )
+Z_TO_S_FIXTURE = (
+    Path(__file__).resolve().parent
+    / "fixtures"
+    / "power_wave_z_to_s_three_port_complex_z0.json"
+)
 
 S_TO_Z_RTOL = 1e-12
 S_TO_Z_ATOL_OHM = 1e-12
@@ -37,6 +42,14 @@ S_TO_Z_TOLERANCE_JUSTIFICATION = (
     "Strict binary64 tolerance for this well-conditioned, modest-magnitude "
     "deterministic case; it allows normal cross-language linear-algebra rounding "
     "while catching material disagreement."
+)
+Z_TO_S_RTOL = 1e-12
+Z_TO_S_ATOL = 1e-12
+Z_TO_S_RANDOM_SEED = 20_260_826
+Z_TO_S_TOLERANCE_JUSTIFICATION = (
+    "Strict binary64 tolerance for this well-conditioned, modest-magnitude, "
+    "dimensionless deterministic case; it allows normal cross-language "
+    "linear-algebra rounding while catching material disagreement."
 )
 
 
@@ -288,6 +301,86 @@ def _s_to_z_fixture(np: Any, skrf: Any) -> dict[str, Any]:
     }
 
 
+def _z_to_s_fixture(np: Any, skrf: Any) -> dict[str, Any]:
+    """Build the power-wave Z-to-S operation fixture from direct Z inputs."""
+
+    # Keep the operation input independent of Network.z: that property is a
+    # floating-point matrix solve and is therefore unsuitable as an exact
+    # fixture contract.  Reuse only the stable frequency/z0 construction from
+    # the representative input case, and generate a separate deterministic,
+    # non-symmetric, diagonally dominant complex Z array locally.
+    frequency_hz, _unused_s, source_z0 = _network_inputs(np)
+    rng = np.random.default_rng(Z_TO_S_RANDOM_SEED)
+    nfreq = frequency_hz.size
+    nports = source_z0.shape[1]
+    source_z = (
+        rng.normal(loc=0.0, scale=0.35, size=(nfreq, nports, nports))
+        + 1j * rng.normal(loc=0.0, scale=0.35, size=(nfreq, nports, nports))
+    ).astype(np.complex128)
+    for frequency_index in range(nfreq):
+        for port in range(nports):
+            source_z[frequency_index, port, port] += (
+                55.0
+                + 3.5 * frequency_index
+                + 5.0 * port
+                + 1j * (2.0 + 0.25 * frequency_index - 0.5 * port)
+            )
+
+    # The expected output still comes exclusively from scikit-rf's public
+    # Network.from_z constructor and public Network.s property.
+    converted = skrf.Network.from_z(
+        source_z,
+        f=frequency_hz,
+        z0=source_z0,
+        s_def="power",
+        name="power_wave_z_to_s_three_port_complex_z0",
+    )
+    converted_s = np.asarray(converted.s, dtype=np.complex128)
+
+    shape = {
+        "frequency": list(frequency_hz.shape),
+        "input_z": list(source_z.shape),
+        "input_z0": list(source_z0.shape),
+        "output_s": list(converted_s.shape),
+    }
+
+    return {
+        "metadata": {
+            "case_id": "power_wave_z_to_s_three_port_complex_z0",
+            "numpy_version": np.__version__,
+            "operation": "z_to_s",
+            "random_seed": Z_TO_S_RANDOM_SEED,
+            "reference_impedance": {
+                "complex": True,
+                "frequency_dependent": True,
+                "per_port": True,
+                "unit": "ohm",
+            },
+            "schema": "rfkit-rs.oracle.fixture",
+            "schema_version": SCHEMA_VERSION,
+            "scikit_rf_version": skrf.__version__,
+            "shape": shape,
+            "tolerance_policy": {
+                "atol": Z_TO_S_ATOL,
+                "comparison": "abs(actual-expected) <= atol + rtol*abs(expected)",
+                "justification": Z_TO_S_TOLERANCE_JUSTIFICATION,
+                "regeneration": (
+                    "canonical UTF-8 JSON serialization; s is checked with the "
+                    "recorded numeric tolerance"
+                ),
+                "rtol": Z_TO_S_RTOL,
+            },
+            "wave_definition": converted.s_def,
+        },
+        "data": {
+            "frequency_hz": [float(value) for value in frequency_hz],
+            "s": _complex_array(converted_s),
+            "z0_ohm": _complex_array(source_z0),
+            "z_ohm": _complex_array(source_z),
+        },
+    }
+
+
 _CASES = (
     _OracleCase(
         "three_port_complex_z0",
@@ -301,6 +394,13 @@ _CASES = (
         _s_to_z_fixture,
         "numeric_output",
         "z_ohm",
+    ),
+    _OracleCase(
+        "power_wave_z_to_s_three_port_complex_z0",
+        Z_TO_S_FIXTURE,
+        _z_to_s_fixture,
+        "numeric_output",
+        "s",
     ),
 )
 _CASES_BY_ID = {case.case_id: case for case in _CASES}
@@ -455,9 +555,17 @@ def _numeric_tolerance(document: dict[str, Any]) -> tuple[float, float]:
     if not isinstance(policy, dict):
         raise ValueError("fixture tolerance_policy must be a JSON object")
 
+    absolute_keys = [key for key in ("atol", "atol_ohm") if key in policy]
+    if len(absolute_keys) != 1:
+        raise ValueError(
+            "fixture tolerance_policy must contain exactly one of "
+            "'atol' or 'atol_ohm'"
+        )
+
+    absolute_key = absolute_keys[0]
     values: list[tuple[str, Any]] = [
         ("rtol", policy.get("rtol")),
-        ("atol_ohm", policy.get("atol_ohm")),
+        (absolute_key, policy.get(absolute_key)),
     ]
     parsed: dict[str, float] = {}
     for name, value in values:
@@ -472,7 +580,7 @@ def _numeric_tolerance(document: dict[str, Any]) -> tuple[float, float]:
         if not math.isfinite(converted) or converted < 0.0:
             raise ValueError(f"tolerance_policy.{name} must be finite and non-negative")
         parsed[name] = converted
-    return parsed["rtol"], parsed["atol_ohm"]
+    return parsed["rtol"], parsed[absolute_key]
 
 
 def _numeric_value(value: Any, path: str) -> float:

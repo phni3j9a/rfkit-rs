@@ -32,13 +32,18 @@ pub(crate) enum PowerWaveError {
     #[error("S-parameter shape must be (nfreq, nport, nport), got {shape:?}")]
     InvalidSShape { shape: (usize, usize, usize) },
 
+    #[error("Z-parameter shape must be (nfreq, nport, nport), got {shape:?}")]
+    InvalidZShape { shape: (usize, usize, usize) },
+
     #[error("reference-impedance shape must be (nfreq, nport), got {shape:?}")]
     InvalidZ0Shape { shape: (usize, usize) },
 
     #[error("reference impedance has zero real part at frequency {frequency}, port {port}")]
     ZeroRealReferenceImpedance { frequency: usize, port: usize },
 
-    #[error("S-to-Z system is exactly singular at frequency {frequency}, pivot {pivot}")]
+    #[error(
+        "power-wave conversion system is exactly singular at frequency {frequency}, pivot {pivot}"
+    )]
     Singular { frequency: usize, pivot: usize },
 
     #[error("non-finite S-parameter at frequency {frequency}, row {row}, column {column}")]
@@ -48,11 +53,18 @@ pub(crate) enum PowerWaveError {
         column: usize,
     },
 
+    #[error("non-finite Z-parameter at frequency {frequency}, row {row}, column {column}")]
+    NonFiniteZ {
+        frequency: usize,
+        row: usize,
+        column: usize,
+    },
+
     #[error("non-finite reference impedance at frequency {frequency}, port {port}")]
     NonFiniteZ0 { frequency: usize, port: usize },
 
     #[error(
-        "non-finite value while solving S-to-Z system at frequency {frequency}, row {row}, column {column}"
+        "non-finite value while solving power-wave conversion system at frequency {frequency}, row {row}, column {column}"
     )]
     NonFiniteComputation {
         frequency: usize,
@@ -190,6 +202,129 @@ pub(crate) fn s_to_z_power(
     }
 
     Ok(z)
+}
+
+/// Convert frequency-major power-wave Z-parameters to S-parameters.
+///
+/// This is the inverse of [`s_to_z_power`] under the same Kurokawa
+/// convention.  For every frequency sample it forms
+///
+/// ```text
+/// A = F (Z + G)
+/// B = F (Z - G*)
+/// ```
+///
+/// with `G = diag(z0)` and
+/// `F = diag(1 / (2 * sqrt(abs(Re(z0)))))`, then solves `S A = B`.  The
+/// existing exact-pivot left solver is reused by transposing the two systems
+/// without conjugation: `A^T S^T = B^T`.  This avoids an explicit matrix
+/// inverse and preserves the exact-zero-pivot singularity rule.
+#[allow(dead_code)] // Internal kernel is staged for future Network conversion call sites; unit tests exercise it now.
+pub(crate) fn z_to_s_power(
+    z: &Array3<Complex64>,
+    z0: &Array2<Complex64>,
+) -> Result<Array3<Complex64>, PowerWaveError> {
+    let (nfreq, nport_rows, nport_columns) = z.dim();
+    if nport_rows == 0 || nport_rows != nport_columns {
+        return Err(PowerWaveError::InvalidZShape {
+            shape: (nfreq, nport_rows, nport_columns),
+        });
+    }
+    let (z0_nfreq, z0_nport) = z0.dim();
+    if (z0_nfreq, z0_nport) != (nfreq, nport_rows) {
+        return Err(PowerWaveError::InvalidZ0Shape {
+            shape: (z0_nfreq, z0_nport),
+        });
+    }
+
+    let nport = nport_rows;
+    let mut s = Array3::from_elem((nfreq, nport, nport), ZERO);
+
+    for frequency in 0..nfreq {
+        let mut normalization = vec![ZERO; nport];
+        for port in 0..nport {
+            let impedance = z0[[frequency, port]];
+            if !is_finite(impedance) {
+                return Err(PowerWaveError::NonFiniteZ0 { frequency, port });
+            }
+            if impedance.re == 0.0 {
+                return Err(PowerWaveError::ZeroRealReferenceImpedance { frequency, port });
+            }
+
+            let scale = 2.0 * impedance.re.abs().sqrt();
+            let f = 1.0 / scale;
+            let f = Complex64::new(f, 0.0);
+            if !is_finite(f) {
+                return Err(PowerWaveError::NonFiniteComputation {
+                    frequency,
+                    row: port,
+                    column: port,
+                });
+            }
+            normalization[port] = f;
+        }
+
+        // A and B are stored as plain transposes so the existing left solver
+        // computes A^T S^T = B^T.  Transposition here deliberately does not
+        // conjugate complex values.
+        let mut a_transpose = vec![ZERO; nport * nport];
+        let mut b_transpose = vec![ZERO; nport * nport];
+        for row in 0..nport {
+            for column in 0..nport {
+                let z_value = z[[frequency, row, column]];
+                if !is_finite(z_value) {
+                    return Err(PowerWaveError::NonFiniteZ {
+                        frequency,
+                        row,
+                        column,
+                    });
+                }
+
+                // F multiplies from the left, so it scales each row by its
+                // corresponding normalization factor.
+                let mut a_value = z_value;
+                let mut b_value = z_value;
+                if row == column {
+                    a_value += z0[[frequency, row]];
+                    b_value -= z0[[frequency, row]].conj();
+                }
+                a_value *= normalization[row];
+                b_value *= normalization[row];
+
+                if !is_finite(a_value) || !is_finite(b_value) {
+                    return Err(PowerWaveError::NonFiniteComputation {
+                        frequency,
+                        row,
+                        column,
+                    });
+                }
+
+                // A^T[column, row] = A[row, column] and likewise for B.
+                let index = column * nport + row;
+                a_transpose[index] = a_value;
+                b_transpose[index] = b_value;
+            }
+        }
+
+        solve_multiple_rhs(&mut a_transpose, &mut b_transpose, nport, frequency)?;
+
+        for row in 0..nport {
+            for column in 0..nport {
+                // The solved value is S^T[row, column] = S[column, row].
+                let value = b_transpose[row * nport + column];
+                if !is_finite(value) {
+                    return Err(PowerWaveError::NonFiniteComputation {
+                        frequency,
+                        row,
+                        column,
+                    });
+                }
+                s[[frequency, column, row]] = value;
+            }
+        }
+    }
+
+    Ok(s)
 }
 
 /// Solve `A X = B` in place for a square `A` and multiple right-hand sides.
@@ -336,6 +471,8 @@ mod tests {
 
     const FIXTURE_JSON: &str =
         include_str!("../../../tools/oracle/fixtures/power_wave_s_to_z_three_port_complex_z0.json");
+    const Z_TO_S_FIXTURE_JSON: &str =
+        include_str!("../../../tools/oracle/fixtures/power_wave_z_to_s_three_port_complex_z0.json");
 
     #[derive(Debug, Deserialize)]
     #[serde(deny_unknown_fields)]
@@ -399,6 +536,57 @@ mod tests {
     #[serde(deny_unknown_fields)]
     struct TolerancePolicy {
         atol_ohm: f64,
+        comparison: String,
+        justification: String,
+        regeneration: String,
+        rtol: f64,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct ZToSFixtureDocument {
+        data: ZToSFixtureData,
+        metadata: ZToSFixtureMetadata,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct ZToSFixtureData {
+        frequency_hz: Vec<f64>,
+        s: Vec<Vec<Vec<ComplexValue>>>,
+        z0_ohm: Vec<Vec<ComplexValue>>,
+        z_ohm: Vec<Vec<Vec<ComplexValue>>>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct ZToSFixtureMetadata {
+        case_id: String,
+        numpy_version: String,
+        operation: String,
+        random_seed: u64,
+        reference_impedance: ReferenceImpedanceMetadata,
+        schema: String,
+        schema_version: u32,
+        scikit_rf_version: String,
+        shape: ZToSFixtureShape,
+        tolerance_policy: ZToSTolerancePolicy,
+        wave_definition: String,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct ZToSFixtureShape {
+        frequency: Vec<usize>,
+        input_z: Vec<usize>,
+        input_z0: Vec<usize>,
+        output_s: Vec<usize>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct ZToSTolerancePolicy {
+        atol: f64,
         comparison: String,
         justification: String,
         regeneration: String,
@@ -493,6 +681,17 @@ mod tests {
     }
 
     #[test]
+    fn one_port_conjugate_z0_has_zero_s() {
+        let z0_value = Complex64::new(50.0, 12.5);
+        let z = Array3::from_elem((1, 1, 1), z0_value.conj());
+        let z0 = Array2::from_elem((1, 1), z0_value);
+
+        let s = z_to_s_power(&z, &z0).expect("well-formed one-port conversion must succeed");
+        let actual = s[[0, 0, 0]];
+        assert!(actual.norm() <= 1e-13, "expected zero, got {actual:?}");
+    }
+
+    #[test]
     fn exact_identity_s_is_reported_as_singular() {
         let mut identity = Array3::from_elem((1, 2, 2), ZERO);
         identity[[0, 0, 0]] = Complex64::new(1.0, 0.0);
@@ -505,6 +704,48 @@ mod tests {
             PowerWaveError::Singular {
                 frequency: 0,
                 pivot: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn exact_negative_reference_impedance_z_is_reported_as_singular() {
+        let z0_value = Complex64::new(50.0, 12.5);
+        let z = Array3::from_elem((1, 1, 1), -z0_value);
+        let z0 = Array2::from_elem((1, 1), z0_value);
+
+        let error = z_to_s_power(&z, &z0).expect_err("Z+G must be exactly singular");
+        assert_eq!(
+            error,
+            PowerWaveError::Singular {
+                frequency: 0,
+                pivot: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_non_square_z_matrices() {
+        let z = Array3::zeros((1, 2, 3));
+        let z0 = Array2::from_elem((1, 2), Complex64::new(50.0, 0.0));
+
+        let error = z_to_s_power(&z, &z0).expect_err("non-square Z must be rejected");
+        assert_eq!(error, PowerWaveError::InvalidZShape { shape: (1, 2, 3) });
+    }
+
+    #[test]
+    fn rejects_non_finite_z_values() {
+        let mut z = Array3::from_elem((1, 1, 1), Complex64::new(50.0, 0.0));
+        z[[0, 0, 0]] = Complex64::new(f64::NAN, 0.0);
+        let z0 = Array2::from_elem((1, 1), Complex64::new(50.0, 0.0));
+
+        let error = z_to_s_power(&z, &z0).expect_err("non-finite Z must be rejected");
+        assert_eq!(
+            error,
+            PowerWaveError::NonFiniteZ {
+                frequency: 0,
+                row: 0,
+                column: 0,
             }
         );
     }
@@ -556,6 +797,9 @@ mod tests {
         assert_ne!(z0[[0, 1]], z0[[1, 1]]);
 
         let z = s_to_z_power(&source_s, &z0).expect("well-conditioned round-trip must succeed");
+        let direct_reconstructed_s =
+            z_to_s_power(&z, &z0).expect("well-conditioned inverse round-trip must succeed");
+        assert_eq!(direct_reconstructed_s.dim(), source_s.dim());
 
         // The matrices are modest in magnitude and well-conditioned.  A
         // 1e-13 mixed bound is comfortably above accumulated binary64
@@ -574,6 +818,19 @@ mod tests {
                     assert!(
                         difference <= tolerance,
                         "S[{frequency},{row},{column}] differs: actual={actual:?}, expected={expected:?}, difference={difference:e}, tolerance={tolerance:e}"
+                    );
+                }
+            }
+
+            for row in 0..2 {
+                for column in 0..2 {
+                    let expected = source_s[[frequency, row, column]];
+                    let actual = direct_reconstructed_s[[frequency, row, column]];
+                    let difference = (actual - expected).norm();
+                    let tolerance = ATOL + RTOL * expected.norm();
+                    assert!(
+                        difference <= tolerance,
+                        "direct S[{frequency},{row},{column}] differs: actual={actual:?}, expected={expected:?}, difference={difference:e}, tolerance={tolerance:e}"
                     );
                 }
             }
@@ -679,6 +936,111 @@ mod tests {
                     assert!(
                         difference <= tolerance,
                         "Z[{frequency},{row},{column}] differs: actual={:?}, expected={expected:?}, difference={difference:e}, tolerance={tolerance:e}",
+                        actual[[frequency, row, column]]
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn matches_power_wave_z_to_s_three_port_complex_z0_fixture() {
+        let fixture: ZToSFixtureDocument =
+            serde_json::from_str(Z_TO_S_FIXTURE_JSON).expect("checked-in fixture must parse");
+
+        assert_eq!(
+            fixture.metadata.case_id,
+            "power_wave_z_to_s_three_port_complex_z0"
+        );
+        assert_eq!(fixture.metadata.operation, "z_to_s");
+        assert_eq!(fixture.metadata.wave_definition, "power");
+        assert_eq!(fixture.metadata.schema, "rfkit-rs.oracle.fixture");
+        assert_eq!(fixture.metadata.schema_version, 1);
+        assert_eq!(fixture.metadata.numpy_version, "2.5.1");
+        assert_eq!(fixture.metadata.scikit_rf_version, "2.0.1");
+        assert_eq!(fixture.metadata.random_seed, 20_260_826);
+
+        assert_eq!(fixture.metadata.shape.frequency, vec![4]);
+        assert_eq!(fixture.metadata.shape.input_z, vec![4, 3, 3]);
+        assert_eq!(fixture.metadata.shape.input_z0, vec![4, 3]);
+        assert_eq!(fixture.metadata.shape.output_s, vec![4, 3, 3]);
+        assert!(fixture.metadata.reference_impedance.complex);
+        assert!(fixture.metadata.reference_impedance.frequency_dependent);
+        assert!(fixture.metadata.reference_impedance.per_port);
+        assert_eq!(fixture.metadata.reference_impedance.unit, "ohm");
+
+        assert_eq!(fixture.metadata.tolerance_policy.rtol, 1e-12);
+        assert_eq!(fixture.metadata.tolerance_policy.atol, 1e-12);
+        assert_eq!(
+            fixture.metadata.tolerance_policy.comparison,
+            "abs(actual-expected) <= atol + rtol*abs(expected)"
+        );
+        assert!(!fixture.metadata.tolerance_policy.justification.is_empty());
+        assert!(!fixture.metadata.tolerance_policy.regeneration.is_empty());
+
+        // The shape contract is frequency-major: the first Z and z0 axis is
+        // frequency, followed by output/input port axes.
+        assert_eq!(fixture.data.frequency_hz.len(), 4);
+        assert_eq!(fixture.data.z_ohm.len(), 4);
+        assert!(fixture.data.z_ohm.iter().all(|matrix| matrix.len() == 3));
+        assert!(
+            fixture
+                .data
+                .z_ohm
+                .iter()
+                .all(|matrix| matrix.iter().all(|row| row.len() == 3))
+        );
+        assert_eq!(fixture.data.z0_ohm.len(), 4);
+        assert!(fixture.data.z0_ohm.iter().all(|row| row.len() == 3));
+        assert_eq!(fixture.data.s.len(), 4);
+        assert!(fixture.data.s.iter().all(|matrix| matrix.len() == 3));
+        assert!(
+            fixture
+                .data
+                .s
+                .iter()
+                .all(|matrix| matrix.iter().all(|row| row.len() == 3))
+        );
+
+        // Check that the data itself exercises complex, per-port,
+        // frequency-dependent reference impedances rather than relying only
+        // on the metadata flags.
+        assert!(
+            fixture
+                .data
+                .z0_ohm
+                .iter()
+                .flatten()
+                .any(|value| value.imag != 0.0)
+        );
+        assert!(fixture.data.z0_ohm[0][0].real != fixture.data.z0_ohm[0][1].real);
+        assert!(fixture.data.z0_ohm[0][1].real != fixture.data.z0_ohm[0][2].real);
+        assert!(fixture.data.z0_ohm[0][0].real != fixture.data.z0_ohm[1][0].real);
+
+        let z = Array3::from_shape_fn((4, 3, 3), |(frequency, row, column)| {
+            let value = &fixture.data.z_ohm[frequency][row][column];
+            Complex64::new(value.real, value.imag)
+        });
+        let z0 = Array2::from_shape_fn((4, 3), |(frequency, port)| {
+            let value = &fixture.data.z0_ohm[frequency][port];
+            Complex64::new(value.real, value.imag)
+        });
+
+        let actual = z_to_s_power(&z, &z0).expect("fixture conversion must succeed");
+        assert_eq!(actual.dim(), (4, 3, 3));
+
+        let rtol = fixture.metadata.tolerance_policy.rtol;
+        let atol = fixture.metadata.tolerance_policy.atol;
+        for frequency in 0..4 {
+            for row in 0..3 {
+                for column in 0..3 {
+                    let expected_value = &fixture.data.s[frequency][row][column];
+                    let expected = Complex64::new(expected_value.real, expected_value.imag);
+                    let difference = (actual[[frequency, row, column]] - expected).norm();
+                    let tolerance = atol + rtol * expected.norm();
+                    assert!(
+                        difference <= tolerance,
+                        "S[{frequency},{row},{column}] differs: actual={:?}, expected={expected:?}, difference={difference:e}, tolerance={tolerance:e}",
                         actual[[frequency, row, column]]
                     );
                 }
