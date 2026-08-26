@@ -23,7 +23,7 @@ fails clearly instead of silently regenerating a fixture with another version.
 
 ## Generate and verify
 
-The harness has two registered canonical cases:
+The harness has three registered canonical cases:
 
 - `three_port_complex_z0` — the representative four-frequency, three-port
   Network input with frequency-dependent, per-port complex reference
@@ -31,8 +31,12 @@ The harness has two registered canonical cases:
 - `power_wave_s_to_z_three_port_complex_z0` — the same input plus the complete
   expected power-wave S-to-Z result obtained from the public `Network.z`
   property.
+- `power_wave_z_to_s_three_port_complex_z0` — a directly generated,
+  non-symmetric, diagonally dominant complex Z input with frequency-dependent
+  per-port `z0`; the complete expected power-wave Z-to-S result is obtained
+  from public `Network.from_z(..., s_def="power").s`.
 
-Both registered cases are checked by default against a fresh scikit-rf run;
+All three registered cases are checked by default against a fresh scikit-rf run;
 the default command checks every case:
 
 ```bash
@@ -72,8 +76,10 @@ The input case is a four-frequency, three-port `Network` with a non-symmetric
 complex S matrix and frequency-dependent, per-port complex `z0`. The S and
 `z0` values are read back from the scikit-rf `Network` object. A local NumPy
 `default_rng` uses the recorded seed `20250308`; no process-global random state
-is changed. The operation case constructs that exact same input and obtains
-expected Z values only through the public `Network.z` property.
+is changed. The S-to-Z operation case obtains its expected values through the
+public `Network.z` property. The Z-to-S operation case uses a dedicated local
+`default_rng` seed (`20260826`) to construct its input Z directly, then obtains
+expected S values only through public `Network.from_z` and `Network.s`.
 
 The JSON representation is deliberately machine-readable and byte-stable:
 
@@ -81,8 +87,8 @@ The JSON representation is deliberately machine-readable and byte-stable:
 - Python's JSON encoder rejects NaN and infinity (`allow_nan=False`);
 - complex numbers are objects with explicit `real` and `imag` fields;
 - metadata records schema version, operation, case id, dependency versions,
-  seed, input/output array shapes, wave definition, the linked input case, and
-  reference-impedance characteristics;
+  seed, input/output array shapes, wave definition, and reference-impedance
+  characteristics; operation cases may additionally link a shared input case;
 - The `three_port_complex_z0` network case retains an exact canonical UTF-8
   byte comparison.
 - The `power_wave_s_to_z_three_port_complex_z0` case requires strict JSON
@@ -95,6 +101,14 @@ The JSON representation is deliberately machine-readable and byte-stable:
   tolerance for this well-conditioned, modest-magnitude deterministic case:
   it allows normal cross-language linear-algebra rounding while catching
   material disagreement.
+- The `power_wave_z_to_s_three_port_complex_z0` case uses the same strict
+  contract checks and compares its dimensionless `s` output with the recorded
+  `rtol=1e-12` and `atol=1e-12` policy. Its direct Z input is generated with
+  the recorded dedicated seed, so it remains an exact contract even when
+  linear-algebra implementation details vary. The checker accepts the
+  case-specific absolute-tolerance key (`atol` for dimensionless output,
+  `atol_ohm` for the existing impedance output) without weakening either
+  contract.
 
 ## Adding a future case
 
