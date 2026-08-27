@@ -5,7 +5,7 @@ It generates checked-in JSON fixtures through `scikit-rf==2.0.1`, with
 `numpy==2.5.1` pinned directly. scikit-rf is an oracle for numerical behavior
 here, not the public API specification for the Rust library. The harness keeps
 the original three-port fixture and registers an additional eight-case
-S↔Z power-wave conformance matrix.
+S↔Z power-wave conformance matrix plus one S renormalization case.
 
 ## Clean-checkout setup
 
@@ -25,7 +25,7 @@ fails clearly instead of silently regenerating a fixture with another version.
 
 ## Generate and verify
 
-The harness has eleven registered canonical cases. The original three cases
+The harness has twelve registered canonical cases. The original three cases
 remain unchanged:
 
 - `three_port_complex_z0` — the representative four-frequency, three-port
@@ -57,6 +57,18 @@ non-symmetric/non-reciprocal.
 The full case ids are prefixed with `power_wave_s_to_z_` or
 `power_wave_z_to_s_`, and the fixture filenames use the same id with a
 `.json` suffix.
+
+The S renormalization case is registered separately:
+
+| Operation | Ports | Reference-impedance profile | Case id |
+| --- | ---: | --- | --- |
+| S renormalization | 4 | complex, per-port, frequency-dependent source and target z0 | `power_wave_renormalize_four_port_complex_per_port_frequency_dependent_z0` |
+
+Its source and target reference impedances are explicit `(frequency, port)`
+arrays, and the target values are materially different from the source values.
+The expected `s_renormalized` output is obtained through the public
+`Network.renormalize(..., s_def="power")` operation followed by the public
+`Network.s` property; the target z0 is read back through `Network.z0`.
 
 All registered cases are checked by default against a fresh scikit-rf run; the
 default command checks every case:
@@ -110,6 +122,10 @@ dominant and pass the corresponding bound for `Z+G`. These checks are
 generation-time guards only: platform-sensitive condition-number values are
 not recorded in the schema. Matrix outputs are likewise obtained only from
 public scikit-rf `Network.z` or `Network.from_z(..., s_def="power").s`.
+The renormalization case uses its own recorded local RNG seed for a modest,
+non-symmetric S input and applies the same `I-S` guard. Both source and target
+z0 arrays are checked for finite positive real parts, non-zero imaginary parts,
+frequency variation, port variation, and material separation.
 
 The JSON representation is deliberately machine-readable and byte-stable:
 
@@ -119,16 +135,20 @@ The JSON representation is deliberately machine-readable and byte-stable:
 - metadata records schema version, operation, case id, dependency versions,
   seed, input/output array shapes, wave definition, and reference-impedance
   characteristics; operation cases may additionally link a shared input case;
+  renormalization records separate source and target reference-impedance flags
+  and shapes for each input/output array;
 - The `three_port_complex_z0` network case retains an exact canonical UTF-8
   byte comparison.
 - Every operation case requires strict JSON parsing (including finite
   numbers), canonical encoding of the actual document, and exact canonical
   equality for metadata, schema, dependency versions, shapes, frequency,
   inputs, z0, and every other field except the computed output (`z_ohm` for
-  S→Z or `s` for Z→S). The output's recursively validated complex array is
+  S→Z, `s` for Z→S, or `s_renormalized` for S renormalization). The output's
+  recursively validated complex array is
   compared with the recorded
   `abs(actual-expected) <= atol + rtol*abs(expected)` policy. S→Z uses
-  `rtol=1e-12` and `atol_ohm=1e-12`; Z→S uses `rtol=1e-12` and `atol=1e-12`.
+  `rtol=1e-12` and `atol_ohm=1e-12`; Z→S and S renormalization use
+  `rtol=1e-12` and `atol=1e-12`.
   These are strict binary64 tolerances for the well-conditioned,
   modest-magnitude deterministic cases: they allow normal cross-language
   linear-algebra rounding while catching material disagreement.

@@ -80,6 +80,11 @@ Z_TO_S_EIGHT_PORT_FIXTURE = (
     / "fixtures"
     / "power_wave_z_to_s_eight_port_complex_per_port_frequency_dependent_z0.json"
 )
+RENORMALIZE_FIXTURE = (
+    Path(__file__).resolve().parent
+    / "fixtures"
+    / "power_wave_renormalize_four_port_complex_per_port_frequency_dependent_z0.json"
+)
 
 S_TO_Z_RTOL = 1e-12
 S_TO_Z_ATOL_OHM = 1e-12
@@ -105,6 +110,15 @@ MATRIX_Z_TO_S_TOLERANCE_JUSTIFICATION = (
     "Strict binary64 tolerance for a well-conditioned, modest-magnitude "
     "deterministic matrix case; diagonal-dominance checks keep Z+G away from "
     "singularity while allowing normal cross-language linear-algebra rounding."
+)
+RENORMALIZE_RANDOM_SEED = 20_260_915
+RENORMALIZE_RTOL = 1e-12
+RENORMALIZE_ATOL = 1e-12
+RENORMALIZE_TOLERANCE_JUSTIFICATION = (
+    "Strict binary64 tolerance for a well-conditioned, modest-magnitude "
+    "deterministic renormalization case; the source S input passes a conservative "
+    "I-S diagonal-dominance guard while allowing normal cross-language "
+    "linear-algebra rounding."
 )
 
 
@@ -348,6 +362,95 @@ def _matrix_s_inputs(
     _assert_non_symmetric(np, s, name="S input")
     _assert_s_conditioning(s)
     return frequency_hz, s, constructor_z0, expanded_z0
+
+
+def _assert_renormalization_z0(
+    np: Any,
+    source_z0: Any,
+    target_z0: Any,
+    *,
+    expected_shape: tuple[int, int],
+) -> None:
+    """Validate the explicit source/target z0 contract for renormalization."""
+
+    if source_z0.shape != expected_shape or target_z0.shape != expected_shape:
+        raise ValueError(
+            "renormalization z0 arrays must have shape "
+            f"{expected_shape}; got {source_z0.shape} and {target_z0.shape}"
+        )
+
+    for name, z0 in (("source", source_z0), ("target", target_z0)):
+        if not np.isfinite(z0).all():
+            raise ValueError(f"renormalization {name} z0 must be finite")
+        if not (z0.real > 0.0).all():
+            raise ValueError(
+                f"renormalization {name} z0 must have positive real parts"
+            )
+        if (z0.imag == 0.0).any():
+            raise ValueError(
+                f"renormalization {name} z0 must have non-zero imaginary parts"
+            )
+        if np.all(z0[1:] == z0[0]):
+            raise ValueError(
+                f"renormalization {name} z0 must vary by frequency"
+            )
+        if np.all(z0[:, 1:] == z0[:, :1]):
+            raise ValueError(f"renormalization {name} z0 must vary by port")
+
+    # Keep the two reference-impedance sets materially separated at every
+    # frequency/port so this is a genuine renormalization rather than an
+    # identity or near-identity exercise.
+    if (np.abs(source_z0 - target_z0) <= 1.0).any():
+        raise ValueError(
+            "renormalization source and target z0 must differ materially "
+            "at every frequency/port"
+        )
+
+
+def _renormalize_inputs(np: Any) -> tuple[Any, Any, Any, Any]:
+    """Build the deterministic S/source-z0/target-z0 renormalization input."""
+
+    nfreq = 3
+    nports = 4
+    frequency_hz = np.array([0.91e9, 1.37e9, 2.11e9], dtype=np.float64)
+
+    # Use a local Generator so this case's recorded seed is independent of
+    # every other fixture and does not mutate NumPy's process-global RNG.
+    rng = np.random.default_rng(RENORMALIZE_RANDOM_SEED)
+    s = (
+        rng.normal(loc=0.0, scale=0.032, size=(nfreq, nports, nports))
+        + 1j * rng.normal(loc=0.0, scale=0.032, size=(nfreq, nports, nports))
+    ).astype(np.complex128)
+    _assert_non_symmetric(np, s, name="renormalization S input")
+    _assert_s_conditioning(s)
+
+    # Keep both reference-impedance arrays explicit and frequency-major.  All
+    # entries have positive real parts and non-zero imaginary parts; each set
+    # varies by both frequency and port, and target values are materially
+    # different from source values.
+    source_z0 = np.array(
+        [
+            [42.0 + 1.25j, 49.5 - 2.0j, 63.0 + 3.25j, 78.0 - 1.5j],
+            [44.0 + 1.6j, 52.0 - 1.7j, 66.5 + 3.6j, 80.5 - 1.1j],
+            [46.0 + 1.95j, 54.5 - 1.4j, 70.0 + 3.95j, 83.0 - 0.7j],
+        ],
+        dtype=np.complex128,
+    )
+    target_z0 = np.array(
+        [
+            [58.5 - 2.75j, 43.0 + 1.45j, 72.5 - 3.8j, 91.0 + 2.25j],
+            [61.0 - 2.35j, 46.0 + 1.85j, 76.0 - 3.35j, 95.0 + 2.7j],
+            [63.5 - 1.95j, 49.0 + 2.25j, 79.5 - 2.9j, 99.0 + 3.15j],
+        ],
+        dtype=np.complex128,
+    )
+    _assert_renormalization_z0(
+        np,
+        source_z0,
+        target_z0,
+        expected_shape=(nfreq, nports),
+    )
+    return frequency_hz, s, source_z0, target_z0
 
 
 def _matrix_z_inputs(
@@ -795,6 +898,81 @@ def _matrix_z_to_s_fixture(
     }
 
 
+def _renormalize_fixture(np: Any, skrf: Any) -> dict[str, Any]:
+    """Build the S renormalization fixture through public scikit-rf APIs."""
+
+    case_id = "power_wave_renormalize_four_port_complex_per_port_frequency_dependent_z0"
+    frequency_hz, source_s, source_z0, target_z0 = _renormalize_inputs(np)
+    network = skrf.Network(
+        f=frequency_hz,
+        s=source_s,
+        z0=source_z0,
+        s_def="power",
+        name=case_id,
+    )
+
+    # Read the constructor inputs back through the public Network object so
+    # the fixture records scikit-rf's canonical representations.  The output
+    # is obtained only through the public in-place renormalize operation and
+    # public Network.s/Network.z0 properties; no conversion formula is used
+    # by this oracle generator.
+    frequency = np.asarray(network.f, dtype=np.float64)
+    network_s_input = np.asarray(network.s, dtype=np.complex128)
+    network_z0_source = np.asarray(network.z0, dtype=np.complex128)
+    network.renormalize(target_z0, s_def="power")
+    network_s_renormalized = np.asarray(network.s, dtype=np.complex128)
+    network_z0_target = np.asarray(network.z0, dtype=np.complex128)
+
+    shape = {
+        "frequency": list(frequency.shape),
+        "s_input": list(network_s_input.shape),
+        "s_renormalized": list(network_s_renormalized.shape),
+        "z0_source": list(network_z0_source.shape),
+        "z0_target": list(network_z0_target.shape),
+    }
+
+    reference_impedance_flags = {
+        "complex": True,
+        "frequency_dependent": True,
+        "per_port": True,
+        "unit": "ohm",
+    }
+    return {
+        "metadata": {
+            "case_id": case_id,
+            "numpy_version": np.__version__,
+            "operation": "renormalize_s",
+            "random_seed": RENORMALIZE_RANDOM_SEED,
+            "reference_impedance": {
+                "source": dict(reference_impedance_flags),
+                "target": dict(reference_impedance_flags),
+            },
+            "schema": "rfkit-rs.oracle.fixture",
+            "schema_version": SCHEMA_VERSION,
+            "scikit_rf_version": skrf.__version__,
+            "shape": shape,
+            "tolerance_policy": {
+                "atol": RENORMALIZE_ATOL,
+                "comparison": "abs(actual-expected) <= atol + rtol*abs(expected)",
+                "justification": RENORMALIZE_TOLERANCE_JUSTIFICATION,
+                "regeneration": (
+                    "canonical UTF-8 JSON serialization; s_renormalized is checked "
+                    "with the recorded numeric tolerance"
+                ),
+                "rtol": RENORMALIZE_RTOL,
+            },
+            "wave_definition": network.s_def,
+        },
+        "data": {
+            "frequency_hz": [float(value) for value in frequency],
+            "s_input": _complex_array(network_s_input),
+            "s_renormalized": _complex_array(network_s_renormalized),
+            "z0_source_ohm": _complex_array(network_z0_source),
+            "z0_target_ohm": _complex_array(network_z0_target),
+        },
+    }
+
+
 def _s_to_z_one_port_real_scalar_z0_fixture(np: Any, skrf: Any) -> dict[str, Any]:
     return _matrix_s_to_z_fixture(
         np,
@@ -979,6 +1157,13 @@ _CASES = (
         _z_to_s_eight_port_complex_per_port_frequency_dependent_z0_fixture,
         "numeric_output",
         "s",
+    ),
+    _OracleCase(
+        "power_wave_renormalize_four_port_complex_per_port_frequency_dependent_z0",
+        RENORMALIZE_FIXTURE,
+        _renormalize_fixture,
+        "numeric_output",
+        "s_renormalized",
     ),
 )
 _CASES_BY_ID = {case.case_id: case for case in _CASES}

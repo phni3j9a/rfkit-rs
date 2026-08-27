@@ -199,6 +199,16 @@ MATRIX_CASE_SPECS = {
     },
 }
 
+RENORMALIZATION_CASE_ID = (
+    "power_wave_renormalize_four_port_complex_per_port_frequency_dependent_z0"
+)
+RENORMALIZATION_REFERENCE_FLAGS = {
+    "complex": True,
+    "frequency_dependent": True,
+    "per_port": True,
+    "unit": "ohm",
+}
+
 
 class MatrixRegistrationAndCheckerTests(unittest.TestCase):
     """Protect registration, z0-pattern, and output-only checker semantics."""
@@ -209,7 +219,7 @@ class MatrixRegistrationAndCheckerTests(unittest.TestCase):
 
     def test_all_matrix_cases_are_registered_individually(self) -> None:
         registered = {case.case_id: case for case in oracle._CASES}
-        self.assertEqual(len(registered), 11)
+        self.assertEqual(len(registered), 12)
         self.assertTrue(set(MATRIX_CASE_SPECS).issubset(registered))
         for case_id, spec in MATRIX_CASE_SPECS.items():
             case = registered[case_id]
@@ -298,6 +308,120 @@ class MatrixRegistrationAndCheckerTests(unittest.TestCase):
                     self.assertEqual(
                         oracle._check_numeric_fixture(path, fixture, output_key), 1
                     )
+
+
+class RenormalizationRegistrationAndCheckerTests(unittest.TestCase):
+    """Protect the renormalization fixture contract and output-only checks."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.case = next(
+            case for case in oracle._CASES if case.case_id == RENORMALIZATION_CASE_ID
+        )
+        cls.fixture = oracle._read_canonical_json(cls.case.path)
+
+    @staticmethod
+    def _complex(value: dict[str, float]) -> complex:
+        return complex(value["real"], value["imag"])
+
+    def _check_document(self, document: dict[str, object]) -> int:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / self.case.path.name
+            path.write_bytes(oracle._canonical_bytes(document))
+            return oracle._check_numeric_fixture(
+                path,
+                self.fixture,
+                "s_renormalized",
+            )
+
+    def test_case_is_registered_as_renormalization_numeric_output(self) -> None:
+        registered = {case.case_id: case for case in oracle._CASES}
+        self.assertIn(RENORMALIZATION_CASE_ID, registered)
+        case = registered[RENORMALIZATION_CASE_ID]
+        self.assertEqual(case.path, oracle.RENORMALIZE_FIXTURE)
+        self.assertEqual(case.path.stem, RENORMALIZATION_CASE_ID)
+        self.assertEqual(case.comparison, "numeric_output")
+        self.assertEqual(case.numeric_output_key, "s_renormalized")
+
+    def test_fixture_schema_and_reference_impedance_profiles(self) -> None:
+        metadata = self.fixture["metadata"]
+        data = self.fixture["data"]
+        self.assertEqual(metadata["case_id"], RENORMALIZATION_CASE_ID)
+        self.assertEqual(metadata["operation"], "renormalize_s")
+        self.assertEqual(metadata["numpy_version"], "2.5.1")
+        self.assertEqual(metadata["scikit_rf_version"], "2.0.1")
+        self.assertEqual(metadata["wave_definition"], "power")
+        self.assertGreater(metadata["random_seed"], 0)
+        self.assertEqual(
+            metadata["reference_impedance"]["source"],
+            RENORMALIZATION_REFERENCE_FLAGS,
+        )
+        self.assertEqual(
+            metadata["reference_impedance"]["target"],
+            RENORMALIZATION_REFERENCE_FLAGS,
+        )
+        self.assertEqual(
+            metadata["shape"],
+            {
+                "frequency": [3],
+                "s_input": [3, 4, 4],
+                "s_renormalized": [3, 4, 4],
+                "z0_source": [3, 4],
+                "z0_target": [3, 4],
+            },
+        )
+        self.assertEqual(metadata["tolerance_policy"]["rtol"], 1e-12)
+        self.assertEqual(metadata["tolerance_policy"]["atol"], 1e-12)
+        self.assertIn("binary64", metadata["tolerance_policy"]["justification"])
+
+        self.assertEqual(len(data["frequency_hz"]), 3)
+        self.assertEqual(len(data["s_input"]), 3)
+        self.assertEqual(len(data["s_renormalized"]), 3)
+        for key in ("s_input", "s_renormalized"):
+            self.assertTrue(all(len(matrix) == 4 for matrix in data[key]))
+            self.assertTrue(
+                all(
+                    all(len(row) == 4 for row in matrix)
+                    for matrix in data[key]
+                )
+            )
+
+        source_z0 = [
+            [self._complex(value) for value in row]
+            for row in data["z0_source_ohm"]
+        ]
+        target_z0 = [
+            [self._complex(value) for value in row]
+            for row in data["z0_target_ohm"]
+        ]
+        for z0 in (source_z0, target_z0):
+            self.assertEqual(len(z0), 3)
+            self.assertTrue(all(len(row) == 4 for row in z0))
+            self.assertTrue(all(value.real > 0.0 for row in z0 for value in row))
+            self.assertTrue(all(value.imag != 0.0 for row in z0 for value in row))
+            self.assertNotEqual(z0[0], z0[1])
+            self.assertNotEqual(z0[1], z0[2])
+            self.assertTrue(any(row[0] != row[1] for row in z0))
+        self.assertTrue(
+            all(
+                abs(source_z0[frequency][port] - target_z0[frequency][port]) > 1.0
+                for frequency in range(3)
+                for port in range(4)
+            )
+        )
+
+    def test_checker_tolerates_only_computed_renormalized_output(self) -> None:
+        adjusted = copy.deepcopy(self.fixture)
+        adjusted["data"]["s_renormalized"][0][0][0]["real"] += 1e-13
+        self.assertEqual(self._check_document(adjusted), 0)
+
+        drifted = copy.deepcopy(self.fixture)
+        drifted["data"]["z0_target_ohm"][0][0]["real"] += 1.0
+        self.assertEqual(self._check_document(drifted), 1)
+
+        drifted_output = copy.deepcopy(self.fixture)
+        drifted_output["data"]["s_input"][0][0][0]["real"] += 1e-3
+        self.assertEqual(self._check_document(drifted_output), 1)
 
 
 if __name__ == "__main__":
