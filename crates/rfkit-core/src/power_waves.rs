@@ -327,6 +327,33 @@ pub(crate) fn z_to_s_power(
     Ok(s)
 }
 
+/// Renormalize frequency-major power-wave S-parameters between two explicit
+/// reference-impedance arrays without changing the underlying impedance
+/// network.
+///
+/// This is Kurokawa's power-wave renormalization: Eq. (19) first obtains the
+/// network impedance matrix from the source-referenced S matrix, and Eq. (18)
+/// then expresses that same matrix as a target-referenced S matrix.  Both
+/// reference arrays are `(nfreq, nport)` and may vary by frequency and port;
+/// complex reference impedances are accepted when their real parts are
+/// non-zero.
+///
+/// The operation intentionally delegates to the existing conversion kernels
+/// rather than taking an identity shortcut or introducing a separate matrix
+/// formula.  Consequently it preserves their exact validation and failure
+/// policy: malformed shapes, non-finite values, and zero-real reference
+/// impedances are rejected, and only an exactly-zero selected pivot is
+/// considered singular (no near-singular tolerance, pivot nudge, or fallback).
+#[allow(dead_code)] // Internal kernel is staged for future Network conversion call sites; unit tests exercise it now.
+pub(crate) fn renormalize_s_power(
+    s: &Array3<Complex64>,
+    source_z0: &Array2<Complex64>,
+    target_z0: &Array2<Complex64>,
+) -> Result<Array3<Complex64>, PowerWaveError> {
+    let z = s_to_z_power(s, source_z0)?;
+    z_to_s_power(&z, target_z0)
+}
+
 /// Solve `A X = B` in place for a square `A` and multiple right-hand sides.
 ///
 /// The only singularity criterion is an exactly-zero selected pivot.  This is
@@ -473,6 +500,9 @@ mod tests {
         include_str!("../../../tools/oracle/fixtures/power_wave_s_to_z_three_port_complex_z0.json");
     const Z_TO_S_FIXTURE_JSON: &str =
         include_str!("../../../tools/oracle/fixtures/power_wave_z_to_s_three_port_complex_z0.json");
+    const RENORMALIZE_FIXTURE_JSON: &str = include_str!(
+        "../../../tools/oracle/fixtures/power_wave_renormalize_four_port_complex_per_port_frequency_dependent_z0.json"
+    );
     const MATRIX_S_TO_Z_FIXTURES: &[(&str, &str)] = &[
         (
             "power_wave_s_to_z_one_port_real_scalar_z0",
@@ -700,6 +730,66 @@ mod tests {
         atol: Option<f64>,
         #[serde(default)]
         atol_ohm: Option<f64>,
+        comparison: String,
+        justification: String,
+        regeneration: String,
+        rtol: f64,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct RenormalizationFixtureDocument {
+        data: RenormalizationFixtureData,
+        metadata: RenormalizationFixtureMetadata,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct RenormalizationFixtureData {
+        frequency_hz: Vec<f64>,
+        s_input: Vec<Vec<Vec<ComplexValue>>>,
+        s_renormalized: Vec<Vec<Vec<ComplexValue>>>,
+        z0_source_ohm: Vec<Vec<ComplexValue>>,
+        z0_target_ohm: Vec<Vec<ComplexValue>>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct RenormalizationFixtureMetadata {
+        case_id: String,
+        numpy_version: String,
+        operation: String,
+        random_seed: u64,
+        reference_impedance: RenormalizationReferenceImpedanceMetadata,
+        schema: String,
+        schema_version: u32,
+        scikit_rf_version: String,
+        shape: RenormalizationFixtureShape,
+        tolerance_policy: RenormalizationTolerancePolicy,
+        wave_definition: String,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct RenormalizationReferenceImpedanceMetadata {
+        source: ReferenceImpedanceMetadata,
+        target: ReferenceImpedanceMetadata,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct RenormalizationFixtureShape {
+        frequency: Vec<usize>,
+        s_input: Vec<usize>,
+        s_renormalized: Vec<usize>,
+        z0_source: Vec<usize>,
+        z0_target: Vec<usize>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct RenormalizationTolerancePolicy {
+        atol: f64,
         comparison: String,
         justification: String,
         regeneration: String,
@@ -1033,6 +1123,241 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Fixed, modest-magnitude three-port data for renormalization invariants.
+    /// Every frequency and port has a distinct complex reference impedance so
+    /// the test cannot accidentally exercise only scalar or real-z0 behavior.
+    fn renormalization_test_case() -> (Array3<Complex64>, Array2<Complex64>, Array2<Complex64>) {
+        let s = Array3::from_shape_vec(
+            (2, 3, 3),
+            vec![
+                Complex64::new(0.10, 0.02),
+                Complex64::new(-0.04, 0.01),
+                Complex64::new(0.025, -0.03),
+                Complex64::new(0.06, -0.02),
+                Complex64::new(-0.08, 0.03),
+                Complex64::new(0.035, 0.015),
+                Complex64::new(-0.02, 0.04),
+                Complex64::new(0.05, -0.01),
+                Complex64::new(0.07, -0.025),
+                Complex64::new(-0.06, 0.015),
+                Complex64::new(0.03, -0.02),
+                Complex64::new(0.045, 0.025),
+                Complex64::new(0.02, 0.035),
+                Complex64::new(-0.055, 0.01),
+                Complex64::new(0.04, -0.015),
+                Complex64::new(0.015, -0.025),
+                Complex64::new(0.065, 0.02),
+                Complex64::new(-0.09, 0.035),
+            ],
+        )
+        .expect("fixed S shape must be valid");
+        let source_z0 = Array2::from_shape_vec(
+            (2, 3),
+            vec![
+                Complex64::new(50.0, 2.0),
+                Complex64::new(63.0, -1.0),
+                Complex64::new(71.0, 3.0),
+                Complex64::new(52.0, 2.5),
+                Complex64::new(66.0, -1.5),
+                Complex64::new(74.0, 3.5),
+            ],
+        )
+        .expect("fixed source z0 shape must be valid");
+        let target_z0 = Array2::from_shape_vec(
+            (2, 3),
+            vec![
+                Complex64::new(41.0, -1.5),
+                Complex64::new(79.0, 2.0),
+                Complex64::new(58.0, -2.5),
+                Complex64::new(44.0, -1.0),
+                Complex64::new(83.0, 1.5),
+                Complex64::new(61.0, -2.0),
+            ],
+        )
+        .expect("fixed target z0 shape must be valid");
+
+        (s, source_z0, target_z0)
+    }
+
+    fn assert_array3_close(
+        actual: &Array3<Complex64>,
+        expected: &Array3<Complex64>,
+        rtol: f64,
+        atol: f64,
+    ) {
+        assert_eq!(actual.dim(), expected.dim());
+        for frequency in 0..actual.dim().0 {
+            for row in 0..actual.dim().1 {
+                for column in 0..actual.dim().2 {
+                    let actual_value = actual[[frequency, row, column]];
+                    let expected_value = expected[[frequency, row, column]];
+                    let difference = (actual_value - expected_value).norm();
+                    let tolerance = atol + rtol * expected_value.norm();
+                    assert!(
+                        difference <= tolerance,
+                        "output[{frequency},{row},{column}] differs: actual={actual_value:?}, expected={expected_value:?}, difference={difference:e}, tolerance={tolerance:e}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn renormalization_preserves_s_for_identity_reference_change() {
+        let (source_s, source_z0, _target_z0) = renormalization_test_case();
+
+        let actual = renormalize_s_power(&source_s, &source_z0, &source_z0)
+            .expect("identity reference change must use the valid conversion path");
+
+        // The fixed, well-conditioned matrices leave substantially more than
+        // this 1e-13 mixed bound above binary64 round-off accumulated across
+        // the two exact-pivot conversion stages.
+        assert_array3_close(&actual, &source_s, 1e-13, 1e-13);
+    }
+
+    #[test]
+    fn renormalization_round_trip_a_to_b_to_a_preserves_s() {
+        let (source_s, source_z0, target_z0) = renormalization_test_case();
+
+        let target_s = renormalize_s_power(&source_s, &source_z0, &target_z0)
+            .expect("source-to-target renormalization must succeed");
+        let round_trip_s = renormalize_s_power(&target_s, &target_z0, &source_z0)
+            .expect("target-to-source renormalization must succeed");
+
+        // This is a well-conditioned, modest-magnitude N-port case; 1e-13 is
+        // a strict mixed tolerance that allows only accumulated binary64
+        // round-off from the two composed conversions.
+        assert_array3_close(&round_trip_s, &source_s, 1e-13, 1e-13);
+    }
+
+    #[test]
+    fn renormalization_rejects_invalid_s_source_and_target_shapes() {
+        let valid_s = Array3::from_elem((1, 2, 2), ZERO);
+        let valid_z0 = Array2::from_elem((1, 2), Complex64::new(50.0, 0.0));
+
+        let invalid_s = Array3::from_elem((1, 2, 3), ZERO);
+        let error = renormalize_s_power(&invalid_s, &valid_z0, &valid_z0)
+            .expect_err("non-square S must be rejected");
+        assert_eq!(error, PowerWaveError::InvalidSShape { shape: (1, 2, 3) });
+
+        let invalid_source_z0 = Array2::from_elem((1, 1), Complex64::new(50.0, 0.0));
+        let error = renormalize_s_power(&valid_s, &invalid_source_z0, &valid_z0)
+            .expect_err("invalid source z0 shape must be rejected");
+        assert_eq!(error, PowerWaveError::InvalidZ0Shape { shape: (1, 1) });
+
+        let invalid_target_z0 = Array2::from_elem((1, 1), Complex64::new(50.0, 0.0));
+        let error = renormalize_s_power(&valid_s, &valid_z0, &invalid_target_z0)
+            .expect_err("invalid target z0 shape must be rejected");
+        assert_eq!(error, PowerWaveError::InvalidZ0Shape { shape: (1, 1) });
+    }
+
+    #[test]
+    fn renormalization_rejects_non_finite_s_source_and_target_values() {
+        let source_z0 = Array2::from_elem((1, 1), Complex64::new(50.0, 0.0));
+        let target_z0 = Array2::from_elem((1, 1), Complex64::new(75.0, 0.0));
+
+        let mut non_finite_s = Array3::from_elem((1, 1, 1), ZERO);
+        non_finite_s[[0, 0, 0]] = Complex64::new(f64::NAN, 0.0);
+        let error = renormalize_s_power(&non_finite_s, &source_z0, &target_z0)
+            .expect_err("non-finite S must be rejected");
+        assert_eq!(
+            error,
+            PowerWaveError::NonFiniteS {
+                frequency: 0,
+                row: 0,
+                column: 0,
+            }
+        );
+
+        let mut non_finite_source_z0 = source_z0.clone();
+        non_finite_source_z0[[0, 0]] = Complex64::new(f64::INFINITY, 0.0);
+        let valid_s = Array3::from_elem((1, 1, 1), ZERO);
+        let error = renormalize_s_power(&valid_s, &non_finite_source_z0, &target_z0)
+            .expect_err("non-finite source z0 must be rejected");
+        assert_eq!(
+            error,
+            PowerWaveError::NonFiniteZ0 {
+                frequency: 0,
+                port: 0,
+            }
+        );
+
+        let mut non_finite_target_z0 = target_z0.clone();
+        non_finite_target_z0[[0, 0]] = Complex64::new(75.0, f64::NEG_INFINITY);
+        let error = renormalize_s_power(&valid_s, &source_z0, &non_finite_target_z0)
+            .expect_err("non-finite target z0 must be rejected");
+        assert_eq!(
+            error,
+            PowerWaveError::NonFiniteZ0 {
+                frequency: 0,
+                port: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn renormalization_rejects_zero_real_source_and_target_z0() {
+        let valid_s = Array3::from_elem((1, 1, 1), ZERO);
+        let valid_z0 = Array2::from_elem((1, 1), Complex64::new(50.0, 0.0));
+        let zero_real_source = Array2::from_elem((1, 1), Complex64::new(0.0, 50.0));
+        let error = renormalize_s_power(&valid_s, &zero_real_source, &valid_z0)
+            .expect_err("zero-real source z0 must be rejected");
+        assert_eq!(
+            error,
+            PowerWaveError::ZeroRealReferenceImpedance {
+                frequency: 0,
+                port: 0,
+            }
+        );
+
+        let zero_real_target = Array2::from_elem((1, 1), Complex64::new(0.0, -50.0));
+        let error = renormalize_s_power(&valid_s, &valid_z0, &zero_real_target)
+            .expect_err("zero-real target z0 must be rejected");
+        assert_eq!(
+            error,
+            PowerWaveError::ZeroRealReferenceImpedance {
+                frequency: 0,
+                port: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn renormalization_propagates_exact_source_stage_singularity() {
+        let source_s = Array3::from_elem((1, 1, 1), Complex64::new(1.0, 0.0));
+        let source_z0 = Array2::from_elem((1, 1), Complex64::new(50.0, 0.0));
+        let target_z0 = Array2::from_elem((1, 1), Complex64::new(75.0, 0.0));
+
+        let error = renormalize_s_power(&source_s, &source_z0, &target_z0)
+            .expect_err("I-S must remain exactly singular in the source stage");
+        assert_eq!(
+            error,
+            PowerWaveError::Singular {
+                frequency: 0,
+                pivot: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn renormalization_propagates_exact_target_stage_singularity() {
+        // For real source z0=50 and S=-3, Eq. (19) gives Z=-25 exactly.
+        // Target z0=25 then makes Z+G exactly zero in Eq. (18).
+        let source_s = Array3::from_elem((1, 1, 1), Complex64::new(-3.0, 0.0));
+        let source_z0 = Array2::from_elem((1, 1), Complex64::new(50.0, 0.0));
+        let target_z0 = Array2::from_elem((1, 1), Complex64::new(25.0, 0.0));
+
+        let error = renormalize_s_power(&source_s, &source_z0, &target_z0)
+            .expect_err("Z+G must remain exactly singular in the target stage");
+        assert_eq!(
+            error,
+            PowerWaveError::Singular {
+                frequency: 0,
+                pivot: 0,
+            }
+        );
     }
 
     #[test]
@@ -1445,5 +1770,103 @@ mod tests {
             let actual = z_to_s_power(&z, &z0).expect("matrix Z-to-S conversion must succeed");
             assert_matrix_output_matches(case_id, &actual, &fixture.data.s, rtol, atol);
         }
+    }
+
+    #[test]
+    fn matches_power_wave_renormalization_conformance_fixture() {
+        let fixture: RenormalizationFixtureDocument =
+            serde_json::from_str(RENORMALIZE_FIXTURE_JSON)
+                .expect("checked-in renormalization fixture must parse");
+
+        let expected_case_id =
+            "power_wave_renormalize_four_port_complex_per_port_frequency_dependent_z0";
+        let metadata = &fixture.metadata;
+        let data = &fixture.data;
+        assert_eq!(metadata.case_id, expected_case_id);
+        assert_eq!(metadata.operation, "renormalize_s");
+        assert_eq!(metadata.wave_definition, "power");
+        assert_eq!(metadata.schema, "rfkit-rs.oracle.fixture");
+        assert_eq!(metadata.schema_version, 1);
+        assert_eq!(metadata.numpy_version, "2.5.1");
+        assert_eq!(metadata.scikit_rf_version, "2.0.1");
+        assert!(metadata.random_seed > 0);
+
+        for reference_impedance in [
+            &metadata.reference_impedance.source,
+            &metadata.reference_impedance.target,
+        ] {
+            assert!(reference_impedance.complex);
+            assert!(reference_impedance.frequency_dependent);
+            assert!(reference_impedance.per_port);
+            assert_eq!(reference_impedance.unit, "ohm");
+        }
+
+        assert_eq!(metadata.shape.frequency, vec![3]);
+        assert_eq!(metadata.shape.s_input, vec![3, 4, 4]);
+        assert_eq!(metadata.shape.s_renormalized, vec![3, 4, 4]);
+        assert_eq!(metadata.shape.z0_source, vec![3, 4]);
+        assert_eq!(metadata.shape.z0_target, vec![3, 4]);
+
+        assert_eq!(metadata.tolerance_policy.rtol, 1e-12);
+        assert_eq!(metadata.tolerance_policy.atol, 1e-12);
+        assert_eq!(
+            metadata.tolerance_policy.comparison,
+            "abs(actual-expected) <= atol + rtol*abs(expected)"
+        );
+        assert!(!metadata.tolerance_policy.justification.is_empty());
+        assert!(!metadata.tolerance_policy.regeneration.is_empty());
+
+        assert_eq!(data.frequency_hz.len(), 3);
+        assert!(data.frequency_hz.iter().all(|value| value.is_finite()));
+        for matrix in [&data.s_input, &data.s_renormalized] {
+            assert_eq!(matrix.len(), 3);
+            for frequency_matrix in matrix.iter() {
+                assert_eq!(frequency_matrix.len(), 4);
+                assert!(frequency_matrix.iter().all(|row| row.len() == 4));
+                assert!(
+                    frequency_matrix
+                        .iter()
+                        .flatten()
+                        .all(|value| { value.real.is_finite() && value.imag.is_finite() })
+                );
+            }
+        }
+        for z0 in [&data.z0_source_ohm, &data.z0_target_ohm] {
+            assert_eq!(z0.len(), 3);
+            assert!(z0.iter().all(|row| row.len() == 4));
+            assert!(
+                z0.iter()
+                    .flatten()
+                    .all(|value| { value.real.is_finite() && value.imag.is_finite() })
+            );
+        }
+
+        // Assert that the fixture exercises both independent reference
+        // profiles, rather than silently becoming an identity/scalar case.
+        let source_z0 = matrix_z0_array(&data.z0_source_ohm, 3, 4);
+        let target_z0 = matrix_z0_array(&data.z0_target_ohm, 3, 4);
+        assert!(source_z0.iter().any(|value| value.im != 0.0));
+        assert!(target_z0.iter().any(|value| value.im != 0.0));
+        assert_ne!(source_z0[[0, 0]], source_z0[[1, 0]]);
+        assert_ne!(target_z0[[0, 0]], target_z0[[1, 0]]);
+        assert_ne!(source_z0[[0, 0]], source_z0[[0, 1]]);
+        assert_ne!(target_z0[[0, 0]], target_z0[[0, 1]]);
+        assert!(
+            source_z0
+                .iter()
+                .zip(target_z0.iter())
+                .all(|(source, target)| source != target)
+        );
+
+        let s_input = matrix_parameter_array(&data.s_input, 3, 4);
+        let actual = renormalize_s_power(&s_input, &source_z0, &target_z0)
+            .expect("renormalization fixture conversion must succeed");
+        assert_matrix_output_matches(
+            expected_case_id,
+            &actual,
+            &data.s_renormalized,
+            metadata.tolerance_policy.rtol,
+            metadata.tolerance_policy.atol,
+        );
     }
 }
