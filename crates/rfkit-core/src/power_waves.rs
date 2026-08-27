@@ -473,6 +473,58 @@ mod tests {
         include_str!("../../../tools/oracle/fixtures/power_wave_s_to_z_three_port_complex_z0.json");
     const Z_TO_S_FIXTURE_JSON: &str =
         include_str!("../../../tools/oracle/fixtures/power_wave_z_to_s_three_port_complex_z0.json");
+    const MATRIX_S_TO_Z_FIXTURES: &[(&str, &str)] = &[
+        (
+            "power_wave_s_to_z_one_port_real_scalar_z0",
+            include_str!(
+                "../../../tools/oracle/fixtures/power_wave_s_to_z_one_port_real_scalar_z0.json"
+            ),
+        ),
+        (
+            "power_wave_s_to_z_two_port_complex_per_port_constant_z0",
+            include_str!(
+                "../../../tools/oracle/fixtures/power_wave_s_to_z_two_port_complex_per_port_constant_z0.json"
+            ),
+        ),
+        (
+            "power_wave_s_to_z_four_port_real_frequency_dependent_z0",
+            include_str!(
+                "../../../tools/oracle/fixtures/power_wave_s_to_z_four_port_real_frequency_dependent_z0.json"
+            ),
+        ),
+        (
+            "power_wave_s_to_z_eight_port_complex_per_port_frequency_dependent_z0",
+            include_str!(
+                "../../../tools/oracle/fixtures/power_wave_s_to_z_eight_port_complex_per_port_frequency_dependent_z0.json"
+            ),
+        ),
+    ];
+    const MATRIX_Z_TO_S_FIXTURES: &[(&str, &str)] = &[
+        (
+            "power_wave_z_to_s_one_port_real_scalar_z0",
+            include_str!(
+                "../../../tools/oracle/fixtures/power_wave_z_to_s_one_port_real_scalar_z0.json"
+            ),
+        ),
+        (
+            "power_wave_z_to_s_two_port_complex_per_port_constant_z0",
+            include_str!(
+                "../../../tools/oracle/fixtures/power_wave_z_to_s_two_port_complex_per_port_constant_z0.json"
+            ),
+        ),
+        (
+            "power_wave_z_to_s_four_port_real_frequency_dependent_z0",
+            include_str!(
+                "../../../tools/oracle/fixtures/power_wave_z_to_s_four_port_real_frequency_dependent_z0.json"
+            ),
+        ),
+        (
+            "power_wave_z_to_s_eight_port_complex_per_port_frequency_dependent_z0",
+            include_str!(
+                "../../../tools/oracle/fixtures/power_wave_z_to_s_eight_port_complex_per_port_frequency_dependent_z0.json"
+            ),
+        ),
+    ];
 
     #[derive(Debug, Deserialize)]
     #[serde(deny_unknown_fields)]
@@ -593,6 +645,67 @@ mod tests {
         rtol: f64,
     }
 
+    #[derive(Debug, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct MatrixFixtureDocument {
+        data: MatrixFixtureData,
+        metadata: MatrixFixtureMetadata,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct MatrixFixtureData {
+        frequency_hz: Vec<f64>,
+        s: Vec<Vec<Vec<ComplexValue>>>,
+        z0_ohm: Vec<Vec<ComplexValue>>,
+        z_ohm: Vec<Vec<Vec<ComplexValue>>>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct MatrixFixtureMetadata {
+        case_id: String,
+        numpy_version: String,
+        operation: String,
+        random_seed: u64,
+        reference_impedance: ReferenceImpedanceMetadata,
+        schema: String,
+        schema_version: u32,
+        scikit_rf_version: String,
+        shape: MatrixFixtureShape,
+        tolerance_policy: MatrixTolerancePolicy,
+        wave_definition: String,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct MatrixFixtureShape {
+        frequency: Vec<usize>,
+        #[serde(default)]
+        input_s: Option<Vec<usize>>,
+        #[serde(default)]
+        input_z: Option<Vec<usize>>,
+        #[serde(default)]
+        input_z0: Option<Vec<usize>>,
+        #[serde(default)]
+        output_s: Option<Vec<usize>>,
+        #[serde(default)]
+        output_z: Option<Vec<usize>>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct MatrixTolerancePolicy {
+        #[serde(default)]
+        atol: Option<f64>,
+        #[serde(default)]
+        atol_ohm: Option<f64>,
+        comparison: String,
+        justification: String,
+        regeneration: String,
+        rtol: f64,
+    }
+
     type Matrix2 = [[Complex64; 2]; 2];
 
     /// Multiply two 2x2 matrices for the Eq. (18) invariant test.
@@ -663,6 +776,263 @@ mod tests {
 
         let middle = multiply_2x2(z_minus_g_conjugate, inverse_2x2(z_plus_g));
         multiply_2x2(multiply_2x2(f, middle), f_inverse)
+    }
+
+    fn matrix_complex(value: &ComplexValue) -> Complex64 {
+        Complex64::new(value.real, value.imag)
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    struct MatrixCaseSpec {
+        nfreq: usize,
+        nport: usize,
+        complex_z0: bool,
+        frequency_dependent_z0: bool,
+        per_port_z0: bool,
+    }
+
+    fn matrix_case_spec(case_id: &str) -> MatrixCaseSpec {
+        match case_id {
+            "power_wave_s_to_z_one_port_real_scalar_z0"
+            | "power_wave_z_to_s_one_port_real_scalar_z0" => MatrixCaseSpec {
+                nfreq: 3,
+                nport: 1,
+                complex_z0: false,
+                frequency_dependent_z0: false,
+                per_port_z0: false,
+            },
+            "power_wave_s_to_z_two_port_complex_per_port_constant_z0"
+            | "power_wave_z_to_s_two_port_complex_per_port_constant_z0" => MatrixCaseSpec {
+                nfreq: 4,
+                nport: 2,
+                complex_z0: true,
+                frequency_dependent_z0: false,
+                per_port_z0: true,
+            },
+            "power_wave_s_to_z_four_port_real_frequency_dependent_z0"
+            | "power_wave_z_to_s_four_port_real_frequency_dependent_z0" => MatrixCaseSpec {
+                nfreq: 3,
+                nport: 4,
+                complex_z0: false,
+                frequency_dependent_z0: true,
+                per_port_z0: false,
+            },
+            "power_wave_s_to_z_eight_port_complex_per_port_frequency_dependent_z0"
+            | "power_wave_z_to_s_eight_port_complex_per_port_frequency_dependent_z0" => {
+                MatrixCaseSpec {
+                    nfreq: 3,
+                    nport: 8,
+                    complex_z0: true,
+                    frequency_dependent_z0: true,
+                    per_port_z0: true,
+                }
+            }
+            _ => panic!("unexpected power-wave matrix case id: {case_id}"),
+        }
+    }
+
+    fn matrix_parameter_array(
+        values: &[Vec<Vec<ComplexValue>>],
+        nfreq: usize,
+        nport: usize,
+    ) -> Array3<Complex64> {
+        Array3::from_shape_fn((nfreq, nport, nport), |(frequency, row, column)| {
+            matrix_complex(&values[frequency][row][column])
+        })
+    }
+
+    fn matrix_z0_array(
+        values: &[Vec<ComplexValue>],
+        nfreq: usize,
+        nport: usize,
+    ) -> Array2<Complex64> {
+        Array2::from_shape_fn((nfreq, nport), |(frequency, port)| {
+            matrix_complex(&values[frequency][port])
+        })
+    }
+
+    fn validate_matrix_fixture_contract(
+        fixture: &MatrixFixtureDocument,
+        expected_case_id: &str,
+        expected_operation: &str,
+        spec: MatrixCaseSpec,
+    ) -> (f64, f64) {
+        let MatrixCaseSpec {
+            nfreq: expected_nfreq,
+            nport: expected_nport,
+            complex_z0: expected_complex_z0,
+            frequency_dependent_z0: expected_frequency_dependent_z0,
+            per_port_z0: expected_per_port_z0,
+        } = spec;
+        let metadata = &fixture.metadata;
+        let data = &fixture.data;
+        assert_eq!(metadata.case_id, expected_case_id);
+        assert_eq!(metadata.operation, expected_operation);
+        assert_eq!(metadata.wave_definition, "power");
+        assert_eq!(metadata.schema, "rfkit-rs.oracle.fixture");
+        assert_eq!(metadata.schema_version, 1);
+        assert_eq!(metadata.numpy_version, "2.5.1");
+        assert_eq!(metadata.scikit_rf_version, "2.0.1");
+        assert!(metadata.random_seed > 0);
+        assert_eq!(metadata.reference_impedance.complex, expected_complex_z0);
+        assert_eq!(
+            metadata.reference_impedance.frequency_dependent,
+            expected_frequency_dependent_z0
+        );
+        assert_eq!(metadata.reference_impedance.per_port, expected_per_port_z0);
+        assert_eq!(metadata.reference_impedance.unit, "ohm");
+
+        assert_eq!(metadata.shape.frequency, vec![expected_nfreq]);
+        assert_eq!(
+            metadata.shape.input_z0,
+            Some(vec![expected_nfreq, expected_nport])
+        );
+        match expected_operation {
+            "s_to_z" => {
+                assert_eq!(
+                    metadata.shape.input_s,
+                    Some(vec![expected_nfreq, expected_nport, expected_nport])
+                );
+                assert!(metadata.shape.input_z.is_none());
+                assert!(metadata.shape.output_s.is_none());
+                assert_eq!(
+                    metadata.shape.output_z,
+                    Some(vec![expected_nfreq, expected_nport, expected_nport])
+                );
+            }
+            "z_to_s" => {
+                assert!(metadata.shape.input_s.is_none());
+                assert_eq!(
+                    metadata.shape.input_z,
+                    Some(vec![expected_nfreq, expected_nport, expected_nport])
+                );
+                assert_eq!(
+                    metadata.shape.output_s,
+                    Some(vec![expected_nfreq, expected_nport, expected_nport])
+                );
+                assert!(metadata.shape.output_z.is_none());
+            }
+            _ => panic!("unexpected power-wave operation: {expected_operation}"),
+        }
+
+        assert_eq!(data.frequency_hz.len(), expected_nfreq);
+        assert!(data.frequency_hz.iter().all(|value| value.is_finite()));
+        for matrix in [&data.s, &data.z_ohm] {
+            assert_eq!(matrix.len(), expected_nfreq);
+            for frequency_matrix in matrix.iter() {
+                assert_eq!(frequency_matrix.len(), expected_nport);
+                assert!(
+                    frequency_matrix
+                        .iter()
+                        .all(|row| row.len() == expected_nport)
+                );
+            }
+        }
+        assert_eq!(data.z0_ohm.len(), expected_nfreq);
+        assert!(data.z0_ohm.iter().all(|row| row.len() == expected_nport));
+
+        let z0 = data
+            .z0_ohm
+            .iter()
+            .map(|row| row.iter().map(matrix_complex).collect::<Vec<_>>())
+            .collect::<Vec<_>>();
+        let has_imaginary = z0.iter().flatten().any(|value| value.im != 0.0);
+        assert_eq!(has_imaginary, expected_complex_z0);
+        assert!(
+            z0.iter()
+                .flatten()
+                .any(|value| *value != Complex64::new(50.0, 0.0)),
+            "matrix fixtures must not collapse to an implicit 50-ohm assumption"
+        );
+
+        let rows_differ = z0.windows(2).any(|rows| rows[0] != rows[1]);
+        assert_eq!(rows_differ, expected_frequency_dependent_z0);
+        if !expected_frequency_dependent_z0 {
+            assert!(z0.iter().all(|row| row == &z0[0]));
+        }
+        let ports_differ = z0
+            .iter()
+            .any(|row| row.windows(2).any(|ports| ports[0] != ports[1]));
+        assert_eq!(ports_differ, expected_per_port_z0);
+        if !expected_per_port_z0 {
+            assert!(
+                z0.iter()
+                    .all(|row| { row.iter().all(|value| *value == row[0]) })
+            );
+        }
+
+        let input = if expected_operation == "s_to_z" {
+            &data.s
+        } else {
+            &data.z_ohm
+        };
+        if expected_nport > 1 {
+            for (frequency, matrix) in input.iter().enumerate() {
+                let values = matrix
+                    .iter()
+                    .map(|row| row.iter().map(matrix_complex).collect::<Vec<_>>())
+                    .collect::<Vec<_>>();
+                assert!(
+                    (0..expected_nport).any(|row| {
+                        ((row + 1)..expected_nport)
+                            .any(|column| values[row][column] != values[column][row])
+                    }),
+                    "{expected_case_id} input matrix is symmetric at frequency {frequency}"
+                );
+            }
+        }
+
+        let policy = &metadata.tolerance_policy;
+        assert_eq!(policy.rtol, 1e-12);
+        assert_eq!(
+            policy.comparison,
+            if expected_operation == "s_to_z" {
+                "abs(actual-expected) <= atol_ohm + rtol*abs(expected)"
+            } else {
+                "abs(actual-expected) <= atol + rtol*abs(expected)"
+            }
+        );
+        assert!(!policy.justification.is_empty());
+        assert!(!policy.regeneration.is_empty());
+        match expected_operation {
+            "s_to_z" => {
+                assert!(policy.atol.is_none());
+                assert_eq!(policy.atol_ohm, Some(1e-12));
+                (policy.rtol, policy.atol_ohm.expect("S-to-Z atol_ohm"))
+            }
+            "z_to_s" => {
+                assert_eq!(policy.atol, Some(1e-12));
+                assert!(policy.atol_ohm.is_none());
+                (policy.rtol, policy.atol.expect("Z-to-S atol"))
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn assert_matrix_output_matches(
+        case_id: &str,
+        actual: &Array3<Complex64>,
+        expected: &[Vec<Vec<ComplexValue>>],
+        rtol: f64,
+        atol: f64,
+    ) {
+        let nfreq = expected.len();
+        let nport = expected[0].len();
+        assert_eq!(actual.dim(), (nfreq, nport, nport));
+        for frequency in 0..nfreq {
+            for row in 0..nport {
+                for column in 0..nport {
+                    let expected_value = matrix_complex(&expected[frequency][row][column]);
+                    let actual_value = actual[[frequency, row, column]];
+                    let difference = (actual_value - expected_value).norm();
+                    let tolerance = atol + rtol * expected_value.norm();
+                    assert!(
+                        difference <= tolerance,
+                        "{case_id} output[{frequency},{row},{column}] differs: actual={actual_value:?}, expected={expected_value:?}, difference={difference:e}, tolerance={tolerance:e}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
@@ -1045,6 +1415,35 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    #[test]
+    fn matches_power_wave_s_to_z_conformance_matrix() {
+        for &(case_id, json) in MATRIX_S_TO_Z_FIXTURES {
+            let spec = matrix_case_spec(case_id);
+            let fixture: MatrixFixtureDocument =
+                serde_json::from_str(json).expect("checked-in matrix fixture must parse");
+            let (rtol, atol_ohm) =
+                validate_matrix_fixture_contract(&fixture, case_id, "s_to_z", spec);
+            let s = matrix_parameter_array(&fixture.data.s, spec.nfreq, spec.nport);
+            let z0 = matrix_z0_array(&fixture.data.z0_ohm, spec.nfreq, spec.nport);
+            let actual = s_to_z_power(&s, &z0).expect("matrix S-to-Z conversion must succeed");
+            assert_matrix_output_matches(case_id, &actual, &fixture.data.z_ohm, rtol, atol_ohm);
+        }
+    }
+
+    #[test]
+    fn matches_power_wave_z_to_s_conformance_matrix() {
+        for &(case_id, json) in MATRIX_Z_TO_S_FIXTURES {
+            let spec = matrix_case_spec(case_id);
+            let fixture: MatrixFixtureDocument =
+                serde_json::from_str(json).expect("checked-in matrix fixture must parse");
+            let (rtol, atol) = validate_matrix_fixture_contract(&fixture, case_id, "z_to_s", spec);
+            let z = matrix_parameter_array(&fixture.data.z_ohm, spec.nfreq, spec.nport);
+            let z0 = matrix_z0_array(&fixture.data.z0_ohm, spec.nfreq, spec.nport);
+            let actual = z_to_s_power(&z, &z0).expect("matrix Z-to-S conversion must succeed");
+            assert_matrix_output_matches(case_id, &actual, &fixture.data.s, rtol, atol);
         }
     }
 }

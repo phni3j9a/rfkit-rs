@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Generate and check the checked-in scikit-rf oracle fixture.
+"""Generate and check the checked-in scikit-rf oracle fixtures.
 
-The fixture is intentionally small, but exercises a frequency-dependent
-three-port Network with complex, per-port reference impedances.  This module
-is kept independent of the Rust implementation so it can serve as a stable
-reference when the Rust fixture reader and numerical operations are added.
+The original three-port Network fixture is retained as a stable input
+contract.  The power-wave operation fixtures additionally form a small
+conformance matrix over port count and reference-impedance structure.  This
+module is kept independent of the Rust implementation so it can serve as a
+stable numerical reference for the internal conversion kernels.
 """
 
 from __future__ import annotations
@@ -36,6 +37,50 @@ Z_TO_S_FIXTURE = (
     / "power_wave_z_to_s_three_port_complex_z0.json"
 )
 
+# The matrix cases intentionally use descriptive, stable ids and one fixture
+# per operation/profile.  Keep these paths explicit so registration remains
+# visible in reviews and the default harness checks every case.
+S_TO_Z_ONE_PORT_FIXTURE = (
+    Path(__file__).resolve().parent
+    / "fixtures"
+    / "power_wave_s_to_z_one_port_real_scalar_z0.json"
+)
+S_TO_Z_TWO_PORT_FIXTURE = (
+    Path(__file__).resolve().parent
+    / "fixtures"
+    / "power_wave_s_to_z_two_port_complex_per_port_constant_z0.json"
+)
+S_TO_Z_FOUR_PORT_FIXTURE = (
+    Path(__file__).resolve().parent
+    / "fixtures"
+    / "power_wave_s_to_z_four_port_real_frequency_dependent_z0.json"
+)
+S_TO_Z_EIGHT_PORT_FIXTURE = (
+    Path(__file__).resolve().parent
+    / "fixtures"
+    / "power_wave_s_to_z_eight_port_complex_per_port_frequency_dependent_z0.json"
+)
+Z_TO_S_ONE_PORT_FIXTURE = (
+    Path(__file__).resolve().parent
+    / "fixtures"
+    / "power_wave_z_to_s_one_port_real_scalar_z0.json"
+)
+Z_TO_S_TWO_PORT_FIXTURE = (
+    Path(__file__).resolve().parent
+    / "fixtures"
+    / "power_wave_z_to_s_two_port_complex_per_port_constant_z0.json"
+)
+Z_TO_S_FOUR_PORT_FIXTURE = (
+    Path(__file__).resolve().parent
+    / "fixtures"
+    / "power_wave_z_to_s_four_port_real_frequency_dependent_z0.json"
+)
+Z_TO_S_EIGHT_PORT_FIXTURE = (
+    Path(__file__).resolve().parent
+    / "fixtures"
+    / "power_wave_z_to_s_eight_port_complex_per_port_frequency_dependent_z0.json"
+)
+
 S_TO_Z_RTOL = 1e-12
 S_TO_Z_ATOL_OHM = 1e-12
 S_TO_Z_TOLERANCE_JUSTIFICATION = (
@@ -50,6 +95,16 @@ Z_TO_S_TOLERANCE_JUSTIFICATION = (
     "Strict binary64 tolerance for this well-conditioned, modest-magnitude, "
     "dimensionless deterministic case; it allows normal cross-language "
     "linear-algebra rounding while catching material disagreement."
+)
+MATRIX_S_TO_Z_TOLERANCE_JUSTIFICATION = (
+    "Strict binary64 tolerance for a well-conditioned, modest-magnitude "
+    "deterministic matrix case; diagonal-dominance checks keep I-S away from "
+    "singularity while allowing normal cross-language linear-algebra rounding."
+)
+MATRIX_Z_TO_S_TOLERANCE_JUSTIFICATION = (
+    "Strict binary64 tolerance for a well-conditioned, modest-magnitude "
+    "deterministic matrix case; diagonal-dominance checks keep Z+G away from "
+    "singularity while allowing normal cross-language linear-algebra rounding."
 )
 
 
@@ -145,6 +200,189 @@ def _complex_array(values: Any) -> Any:
     if values.ndim == 1:
         return [_complex_value(complex(item)) for item in values]
     return [_complex_array(row) for row in values]
+
+
+def _assert_non_symmetric(np: Any, matrix: Any, *, name: str) -> None:
+    """Require every multiport input matrix to be non-symmetric.
+
+    The operation fixtures are intended to exercise genuine N-port behavior,
+    not a reciprocal/symmetric shortcut.  A one-port matrix is necessarily
+    symmetric and is therefore exempt from this assertion.
+    """
+
+    if matrix.shape[1] <= 1:
+        return
+    for frequency in range(matrix.shape[0]):
+        if np.array_equal(matrix[frequency], matrix[frequency].T):
+            raise ValueError(
+                f"{name} must be non-symmetric at frequency index {frequency}"
+            )
+
+
+def _assert_s_conditioning(s: Any) -> None:
+    """Check a conservative diagonal-dominance bound for ``I-S``.
+
+    The bound is deliberately used only as a generation-time guard.  No
+    platform-sensitive condition-number estimate is written into a fixture.
+    Strict row diagonal dominance with a comfortable margin is enough to keep
+    the conversion solve away from the exact-singular edge case.
+    """
+
+    for frequency in range(s.shape[0]):
+        for row in range(s.shape[1]):
+            diagonal = abs(1.0 - s[frequency, row, row])
+            off_diagonal = sum(
+                abs(s[frequency, row, column])
+                for column in range(s.shape[2])
+                if column != row
+            )
+            if diagonal <= off_diagonal + 0.5:
+                raise ValueError(
+                    "S input failed the conservative diagonal-dominance "
+                    f"bound at frequency {frequency}, row {row}"
+                )
+
+
+def _assert_z_conditioning(z: Any, z0: Any) -> None:
+    """Check a conservative diagonal-dominance bound for ``Z+G``.
+
+    As with :func:`_assert_s_conditioning`, this validates a generous margin
+    without recording condition values that could vary across linear-algebra
+    implementations or platforms.
+    """
+
+    for frequency in range(z.shape[0]):
+        for row in range(z.shape[1]):
+            diagonal = abs(z[frequency, row, row] + z0[frequency, row])
+            off_diagonal = sum(
+                abs(z[frequency, row, column])
+                for column in range(z.shape[2])
+                if column != row
+            )
+            if diagonal <= off_diagonal + 10.0:
+                raise ValueError(
+                    "Z input failed the conservative diagonal-dominance "
+                    f"bound at frequency {frequency}, row {row}"
+                )
+
+
+def _matrix_frequency_and_z0(
+    np: Any,
+    *,
+    nfreq: int,
+    nports: int,
+    z0_profile: str,
+) -> tuple[Any, Any, Any]:
+    """Return frequency samples, constructor z0, and expanded z0 values.
+
+    ``constructor_z0`` intentionally preserves scalar and per-port forms where
+    those forms are part of the profile.  ``expanded_z0`` is the normalized
+    frequency-major array used for validation and direct-Z generation.
+    """
+
+    frequency_hz = np.array(
+        [0.85e9 + 0.37e9 * index for index in range(nfreq)], dtype=np.float64
+    )
+    frequency_index = np.arange(nfreq, dtype=np.float64)[:, None]
+    port_index = np.arange(nports, dtype=np.float64)[None, :]
+
+    if z0_profile == "real_scalar":
+        scalar = 43.75
+        expanded_z0 = np.full((nfreq, nports), scalar, dtype=np.complex128)
+        return frequency_hz, scalar, expanded_z0
+
+    if z0_profile == "complex_per_port_constant":
+        values = (
+            41.0
+            + 4.5 * np.arange(nports, dtype=np.float64)
+            + 1j * (1.75 - 0.3 * np.arange(nports, dtype=np.float64))
+        ).astype(np.complex128)
+        expanded_z0 = np.broadcast_to(values[None, :], (nfreq, nports)).copy()
+        return frequency_hz, values, expanded_z0
+
+    if z0_profile == "real_frequency_dependent":
+        values = 46.5 + 2.75 * frequency_index
+        constructor_z0 = np.broadcast_to(values, (nfreq, nports)).copy()
+        expanded_z0 = constructor_z0.astype(np.complex128)
+        return frequency_hz, constructor_z0, expanded_z0
+
+    if z0_profile == "complex_per_port_frequency_dependent":
+        expanded_z0 = (
+            39.0
+            + 3.75 * port_index
+            + 1.9 * frequency_index
+            + 1j
+            * (
+                0.8
+                + 0.22 * port_index
+                + 0.17 * frequency_index
+            )
+        ).astype(np.complex128)
+        return frequency_hz, expanded_z0, expanded_z0
+
+    raise ValueError(f"unknown z0 profile: {z0_profile!r}")
+
+
+def _matrix_s_inputs(
+    np: Any,
+    *,
+    nfreq: int,
+    nports: int,
+    seed: int,
+    z0_profile: str,
+) -> tuple[Any, Any, Any, Any]:
+    """Build deterministic S, z0, and frequency arrays for a matrix case."""
+
+    frequency_hz, constructor_z0, expanded_z0 = _matrix_frequency_and_z0(
+        np,
+        nfreq=nfreq,
+        nports=nports,
+        z0_profile=z0_profile,
+    )
+    rng = np.random.default_rng(seed)
+    scale = 0.018 if nports >= 8 else 0.028
+    s = (
+        rng.normal(loc=0.0, scale=scale, size=(nfreq, nports, nports))
+        + 1j * rng.normal(loc=0.0, scale=scale, size=(nfreq, nports, nports))
+    ).astype(np.complex128)
+    _assert_non_symmetric(np, s, name="S input")
+    _assert_s_conditioning(s)
+    return frequency_hz, s, constructor_z0, expanded_z0
+
+
+def _matrix_z_inputs(
+    np: Any,
+    *,
+    nfreq: int,
+    nports: int,
+    seed: int,
+    z0_profile: str,
+) -> tuple[Any, Any, Any, Any]:
+    """Build deterministic diagonally dominant direct-Z operation inputs."""
+
+    frequency_hz, constructor_z0, expanded_z0 = _matrix_frequency_and_z0(
+        np,
+        nfreq=nfreq,
+        nports=nports,
+        z0_profile=z0_profile,
+    )
+    rng = np.random.default_rng(seed)
+    scale = 0.18 if nports >= 8 else 0.25
+    z = (
+        rng.normal(loc=0.0, scale=scale, size=(nfreq, nports, nports))
+        + 1j * rng.normal(loc=0.0, scale=scale, size=(nfreq, nports, nports))
+    ).astype(np.complex128)
+    for frequency in range(nfreq):
+        for port in range(nports):
+            z[frequency, port, port] += (
+                68.0
+                + 2.5 * frequency
+                + 1.8 * port
+                + 1j * (2.0 + 0.13 * frequency - 0.08 * port)
+            )
+    _assert_non_symmetric(np, z, name="Z input")
+    _assert_z_conditioning(z, expanded_z0)
+    return frequency_hz, z, constructor_z0, expanded_z0
 
 
 def _network_inputs(np: Any) -> tuple[Any, Any, Any]:
@@ -381,6 +619,290 @@ def _z_to_s_fixture(np: Any, skrf: Any) -> dict[str, Any]:
     }
 
 
+def _matrix_reference_impedance_flags(z0_profile: str) -> dict[str, Any]:
+    """Return the contract flags for one matrix-case z0 profile."""
+
+    profiles = {
+        "real_scalar": {
+            "complex": False,
+            "frequency_dependent": False,
+            "per_port": False,
+        },
+        "complex_per_port_constant": {
+            "complex": True,
+            "frequency_dependent": False,
+            "per_port": True,
+        },
+        "real_frequency_dependent": {
+            "complex": False,
+            "frequency_dependent": True,
+            "per_port": False,
+        },
+        "complex_per_port_frequency_dependent": {
+            "complex": True,
+            "frequency_dependent": True,
+            "per_port": True,
+        },
+    }
+    try:
+        flags = dict(profiles[z0_profile])
+    except KeyError as error:
+        raise ValueError(f"unknown z0 profile: {z0_profile!r}") from error
+    flags["unit"] = "ohm"
+    return flags
+
+
+def _matrix_s_to_z_fixture(
+    np: Any,
+    skrf: Any,
+    *,
+    case_id: str,
+    nfreq: int,
+    nports: int,
+    seed: int,
+    z0_profile: str,
+) -> dict[str, Any]:
+    """Build one matrix-case S-to-Z fixture through public scikit-rf APIs."""
+
+    frequency_hz, source_s, constructor_z0, _expanded_z0 = _matrix_s_inputs(
+        np,
+        nfreq=nfreq,
+        nports=nports,
+        seed=seed,
+        z0_profile=z0_profile,
+    )
+    network = skrf.Network(
+        f=frequency_hz,
+        s=source_s,
+        z0=constructor_z0,
+        s_def="power",
+        name=case_id,
+    )
+
+    # Read both inputs and the expected output back through the public Network
+    # object.  The expected operation result is intentionally not computed by
+    # this module's local equations.
+    frequency = np.asarray(network.f, dtype=np.float64)
+    network_s = np.asarray(network.s, dtype=np.complex128)
+    network_z0 = np.asarray(network.z0, dtype=np.complex128)
+    network_z = np.asarray(network.z, dtype=np.complex128)
+    shape = {
+        "frequency": list(frequency.shape),
+        "input_s": list(network_s.shape),
+        "input_z0": list(network_z0.shape),
+        "output_z": list(network_z.shape),
+    }
+
+    return {
+        "metadata": {
+            "case_id": case_id,
+            "numpy_version": np.__version__,
+            "operation": "s_to_z",
+            "random_seed": seed,
+            "reference_impedance": _matrix_reference_impedance_flags(z0_profile),
+            "schema": "rfkit-rs.oracle.fixture",
+            "schema_version": SCHEMA_VERSION,
+            "scikit_rf_version": skrf.__version__,
+            "shape": shape,
+            "tolerance_policy": {
+                "atol_ohm": S_TO_Z_ATOL_OHM,
+                "comparison": (
+                    "abs(actual-expected) <= "
+                    "atol_ohm + rtol*abs(expected)"
+                ),
+                "justification": MATRIX_S_TO_Z_TOLERANCE_JUSTIFICATION,
+                "regeneration": (
+                    "canonical UTF-8 JSON serialization; z_ohm is checked "
+                    "with the recorded numeric tolerance"
+                ),
+                "rtol": S_TO_Z_RTOL,
+            },
+            "wave_definition": network.s_def,
+        },
+        "data": {
+            "frequency_hz": [float(value) for value in frequency],
+            "s": _complex_array(network_s),
+            "z0_ohm": _complex_array(network_z0),
+            "z_ohm": _complex_array(network_z),
+        },
+    }
+
+
+def _matrix_z_to_s_fixture(
+    np: Any,
+    skrf: Any,
+    *,
+    case_id: str,
+    nfreq: int,
+    nports: int,
+    seed: int,
+    z0_profile: str,
+) -> dict[str, Any]:
+    """Build one matrix-case Z-to-S fixture through public scikit-rf APIs."""
+
+    frequency_hz, source_z, constructor_z0, _expanded_z0 = _matrix_z_inputs(
+        np,
+        nfreq=nfreq,
+        nports=nports,
+        seed=seed,
+        z0_profile=z0_profile,
+    )
+    converted = skrf.Network.from_z(
+        source_z,
+        f=frequency_hz,
+        z0=constructor_z0,
+        s_def="power",
+        name=case_id,
+    )
+    converted_s = np.asarray(converted.s, dtype=np.complex128)
+    network_z0 = np.asarray(converted.z0, dtype=np.complex128)
+    shape = {
+        "frequency": list(frequency_hz.shape),
+        "input_z": list(source_z.shape),
+        "input_z0": list(network_z0.shape),
+        "output_s": list(converted_s.shape),
+    }
+
+    return {
+        "metadata": {
+            "case_id": case_id,
+            "numpy_version": np.__version__,
+            "operation": "z_to_s",
+            "random_seed": seed,
+            "reference_impedance": _matrix_reference_impedance_flags(z0_profile),
+            "schema": "rfkit-rs.oracle.fixture",
+            "schema_version": SCHEMA_VERSION,
+            "scikit_rf_version": skrf.__version__,
+            "shape": shape,
+            "tolerance_policy": {
+                "atol": Z_TO_S_ATOL,
+                "comparison": "abs(actual-expected) <= atol + rtol*abs(expected)",
+                "justification": MATRIX_Z_TO_S_TOLERANCE_JUSTIFICATION,
+                "regeneration": (
+                    "canonical UTF-8 JSON serialization; s is checked with the "
+                    "recorded numeric tolerance"
+                ),
+                "rtol": Z_TO_S_RTOL,
+            },
+            "wave_definition": converted.s_def,
+        },
+        "data": {
+            "frequency_hz": [float(value) for value in frequency_hz],
+            "s": _complex_array(converted_s),
+            "z0_ohm": _complex_array(network_z0),
+            "z_ohm": _complex_array(source_z),
+        },
+    }
+
+
+def _s_to_z_one_port_real_scalar_z0_fixture(np: Any, skrf: Any) -> dict[str, Any]:
+    return _matrix_s_to_z_fixture(
+        np,
+        skrf,
+        case_id="power_wave_s_to_z_one_port_real_scalar_z0",
+        nfreq=3,
+        nports=1,
+        seed=20_260_901,
+        z0_profile="real_scalar",
+    )
+
+
+def _s_to_z_two_port_complex_per_port_constant_z0_fixture(
+    np: Any, skrf: Any
+) -> dict[str, Any]:
+    return _matrix_s_to_z_fixture(
+        np,
+        skrf,
+        case_id="power_wave_s_to_z_two_port_complex_per_port_constant_z0",
+        nfreq=4,
+        nports=2,
+        seed=20_260_902,
+        z0_profile="complex_per_port_constant",
+    )
+
+
+def _s_to_z_four_port_real_frequency_dependent_z0_fixture(
+    np: Any, skrf: Any
+) -> dict[str, Any]:
+    return _matrix_s_to_z_fixture(
+        np,
+        skrf,
+        case_id="power_wave_s_to_z_four_port_real_frequency_dependent_z0",
+        nfreq=3,
+        nports=4,
+        seed=20_260_903,
+        z0_profile="real_frequency_dependent",
+    )
+
+
+def _s_to_z_eight_port_complex_per_port_frequency_dependent_z0_fixture(
+    np: Any, skrf: Any
+) -> dict[str, Any]:
+    return _matrix_s_to_z_fixture(
+        np,
+        skrf,
+        case_id="power_wave_s_to_z_eight_port_complex_per_port_frequency_dependent_z0",
+        nfreq=3,
+        nports=8,
+        seed=20_260_904,
+        z0_profile="complex_per_port_frequency_dependent",
+    )
+
+
+def _z_to_s_one_port_real_scalar_z0_fixture(np: Any, skrf: Any) -> dict[str, Any]:
+    return _matrix_z_to_s_fixture(
+        np,
+        skrf,
+        case_id="power_wave_z_to_s_one_port_real_scalar_z0",
+        nfreq=3,
+        nports=1,
+        seed=20_260_911,
+        z0_profile="real_scalar",
+    )
+
+
+def _z_to_s_two_port_complex_per_port_constant_z0_fixture(
+    np: Any, skrf: Any
+) -> dict[str, Any]:
+    return _matrix_z_to_s_fixture(
+        np,
+        skrf,
+        case_id="power_wave_z_to_s_two_port_complex_per_port_constant_z0",
+        nfreq=4,
+        nports=2,
+        seed=20_260_912,
+        z0_profile="complex_per_port_constant",
+    )
+
+
+def _z_to_s_four_port_real_frequency_dependent_z0_fixture(
+    np: Any, skrf: Any
+) -> dict[str, Any]:
+    return _matrix_z_to_s_fixture(
+        np,
+        skrf,
+        case_id="power_wave_z_to_s_four_port_real_frequency_dependent_z0",
+        nfreq=3,
+        nports=4,
+        seed=20_260_913,
+        z0_profile="real_frequency_dependent",
+    )
+
+
+def _z_to_s_eight_port_complex_per_port_frequency_dependent_z0_fixture(
+    np: Any, skrf: Any
+) -> dict[str, Any]:
+    return _matrix_z_to_s_fixture(
+        np,
+        skrf,
+        case_id="power_wave_z_to_s_eight_port_complex_per_port_frequency_dependent_z0",
+        nfreq=3,
+        nports=8,
+        seed=20_260_914,
+        z0_profile="complex_per_port_frequency_dependent",
+    )
+
+
 _CASES = (
     _OracleCase(
         "three_port_complex_z0",
@@ -399,6 +921,62 @@ _CASES = (
         "power_wave_z_to_s_three_port_complex_z0",
         Z_TO_S_FIXTURE,
         _z_to_s_fixture,
+        "numeric_output",
+        "s",
+    ),
+    _OracleCase(
+        "power_wave_s_to_z_one_port_real_scalar_z0",
+        S_TO_Z_ONE_PORT_FIXTURE,
+        _s_to_z_one_port_real_scalar_z0_fixture,
+        "numeric_output",
+        "z_ohm",
+    ),
+    _OracleCase(
+        "power_wave_s_to_z_two_port_complex_per_port_constant_z0",
+        S_TO_Z_TWO_PORT_FIXTURE,
+        _s_to_z_two_port_complex_per_port_constant_z0_fixture,
+        "numeric_output",
+        "z_ohm",
+    ),
+    _OracleCase(
+        "power_wave_s_to_z_four_port_real_frequency_dependent_z0",
+        S_TO_Z_FOUR_PORT_FIXTURE,
+        _s_to_z_four_port_real_frequency_dependent_z0_fixture,
+        "numeric_output",
+        "z_ohm",
+    ),
+    _OracleCase(
+        "power_wave_s_to_z_eight_port_complex_per_port_frequency_dependent_z0",
+        S_TO_Z_EIGHT_PORT_FIXTURE,
+        _s_to_z_eight_port_complex_per_port_frequency_dependent_z0_fixture,
+        "numeric_output",
+        "z_ohm",
+    ),
+    _OracleCase(
+        "power_wave_z_to_s_one_port_real_scalar_z0",
+        Z_TO_S_ONE_PORT_FIXTURE,
+        _z_to_s_one_port_real_scalar_z0_fixture,
+        "numeric_output",
+        "s",
+    ),
+    _OracleCase(
+        "power_wave_z_to_s_two_port_complex_per_port_constant_z0",
+        Z_TO_S_TWO_PORT_FIXTURE,
+        _z_to_s_two_port_complex_per_port_constant_z0_fixture,
+        "numeric_output",
+        "s",
+    ),
+    _OracleCase(
+        "power_wave_z_to_s_four_port_real_frequency_dependent_z0",
+        Z_TO_S_FOUR_PORT_FIXTURE,
+        _z_to_s_four_port_real_frequency_dependent_z0_fixture,
+        "numeric_output",
+        "s",
+    ),
+    _OracleCase(
+        "power_wave_z_to_s_eight_port_complex_per_port_frequency_dependent_z0",
+        Z_TO_S_EIGHT_PORT_FIXTURE,
+        _z_to_s_eight_port_complex_per_port_frequency_dependent_z0_fixture,
         "numeric_output",
         "s",
     ),

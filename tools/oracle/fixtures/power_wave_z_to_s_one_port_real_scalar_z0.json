@@ -1,0 +1,123 @@
+{
+  "data": {
+    "frequency_hz": [
+      850000000.0,
+      1220000000.0,
+      1590000000.0
+    ],
+    "s": [
+      [
+        [
+          {
+            "imag": 0.012812472129450896,
+            "real": 0.2161147106416982
+          }
+        ]
+      ],
+      [
+        [
+          {
+            "imag": 0.013090906940783575,
+            "real": 0.23572436457988946
+          }
+        ]
+      ],
+      [
+        [
+          {
+            "imag": 0.015173596567503517,
+            "real": 0.2491086960937375
+          }
+        ]
+      ]
+    ],
+    "z0_ohm": [
+      [
+        {
+          "imag": 0.0,
+          "real": 43.75
+        }
+      ],
+      [
+        {
+          "imag": 0.0,
+          "real": 43.75
+        }
+      ],
+      [
+        {
+          "imag": 0.0,
+          "real": 43.75
+        }
+      ]
+    ],
+    "z_ohm": [
+      [
+        [
+          {
+            "imag": 1.8239794881812779,
+            "real": 67.84366236513054
+          }
+        ]
+      ],
+      [
+        [
+          {
+            "imag": 1.9604255851946255,
+            "real": 70.70391190969549
+          }
+        ]
+      ],
+      [
+        [
+          {
+            "imag": 2.353776011333396,
+            "real": 72.73062016085402
+          }
+        ]
+      ]
+    ]
+  },
+  "metadata": {
+    "case_id": "power_wave_z_to_s_one_port_real_scalar_z0",
+    "numpy_version": "2.5.1",
+    "operation": "z_to_s",
+    "random_seed": 20260911,
+    "reference_impedance": {
+      "complex": false,
+      "frequency_dependent": false,
+      "per_port": false,
+      "unit": "ohm"
+    },
+    "schema": "rfkit-rs.oracle.fixture",
+    "schema_version": 1,
+    "scikit_rf_version": "2.0.1",
+    "shape": {
+      "frequency": [
+        3
+      ],
+      "input_z": [
+        3,
+        1,
+        1
+      ],
+      "input_z0": [
+        3,
+        1
+      ],
+      "output_s": [
+        3,
+        1,
+        1
+      ]
+    },
+    "tolerance_policy": {
+      "atol": 1e-12,
+      "comparison": "abs(actual-expected) <= atol + rtol*abs(expected)",
+      "justification": "Strict binary64 tolerance for a well-conditioned, modest-magnitude deterministic matrix case; diagonal-dominance checks keep Z+G away from singularity while allowing normal cross-language linear-algebra rounding.",
+      "regeneration": "canonical UTF-8 JSON serialization; s is checked with the recorded numeric tolerance",
+      "rtol": 1e-12
+    },
+    "wave_definition": "power"
+  }
+}
