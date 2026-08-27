@@ -1,0 +1,123 @@
+{
+  "data": {
+    "frequency_hz": [
+      850000000.0,
+      1220000000.0,
+      1590000000.0
+    ],
+    "s": [
+      [
+        [
+          {
+            "imag": 0.018425352763931795,
+            "real": -0.001016600481465785
+          }
+        ]
+      ],
+      [
+        [
+          {
+            "imag": -0.0068856442016791775,
+            "real": 0.012198212371785543
+          }
+        ]
+      ],
+      [
+        [
+          {
+            "imag": 0.0018123204174856885,
+            "real": 0.02186183400466716
+          }
+        ]
+      ]
+    ],
+    "z0_ohm": [
+      [
+        {
+          "imag": 0.0,
+          "real": 43.75
+        }
+      ],
+      [
+        {
+          "imag": 0.0,
+          "real": 43.75
+        }
+      ],
+      [
+        {
+          "imag": 0.0,
+          "real": 43.75
+        }
+      ]
+    ],
+    "z_ohm": [
+      [
+        [
+          {
+            "imag": 1.6084004615304337,
+            "real": 43.63153254605309
+          }
+        ]
+      ],
+      [
+        [
+          {
+            "imag": -0.6174359511940236,
+            "real": 44.826220099587545
+          }
+        ]
+      ],
+      [
+        [
+          {
+            "imag": 0.16574526690569047,
+            "real": 45.70535779950968
+          }
+        ]
+      ]
+    ]
+  },
+  "metadata": {
+    "case_id": "power_wave_s_to_z_one_port_real_scalar_z0",
+    "numpy_version": "2.5.1",
+    "operation": "s_to_z",
+    "random_seed": 20260901,
+    "reference_impedance": {
+      "complex": false,
+      "frequency_dependent": false,
+      "per_port": false,
+      "unit": "ohm"
+    },
+    "schema": "rfkit-rs.oracle.fixture",
+    "schema_version": 1,
+    "scikit_rf_version": "2.0.1",
+    "shape": {
+      "frequency": [
+        3
+      ],
+      "input_s": [
+        3,
+        1,
+        1
+      ],
+      "input_z0": [
+        3,
+        1
+      ],
+      "output_z": [
+        3,
+        1,
+        1
+      ]
+    },
+    "tolerance_policy": {
+      "atol_ohm": 1e-12,
+      "comparison": "abs(actual-expected) <= atol_ohm + rtol*abs(expected)",
+      "justification": "Strict binary64 tolerance for a well-conditioned, modest-magnitude deterministic matrix case; diagonal-dominance checks keep I-S away from singularity while allowing normal cross-language linear-algebra rounding.",
+      "regeneration": "canonical UTF-8 JSON serialization; z_ohm is checked with the recorded numeric tolerance",
+      "rtol": 1e-12
+    },
+    "wave_definition": "power"
+  }
+}

@@ -3,7 +3,9 @@
 This directory contains the reproducible Python oracle harness for `rfkit-rs`.
 It generates checked-in JSON fixtures through `scikit-rf==2.0.1`, with
 `numpy==2.5.1` pinned directly. scikit-rf is an oracle for numerical behavior
-here, not the public API specification for the Rust library.
+here, not the public API specification for the Rust library. The harness keeps
+the original three-port fixture and registers an additional eight-case
+S↔Z power-wave conformance matrix.
 
 ## Clean-checkout setup
 
@@ -23,7 +25,8 @@ fails clearly instead of silently regenerating a fixture with another version.
 
 ## Generate and verify
 
-The harness has three registered canonical cases:
+The harness has eleven registered canonical cases. The original three cases
+remain unchanged:
 
 - `three_port_complex_z0` — the representative four-frequency, three-port
   Network input with frequency-dependent, per-port complex reference
@@ -36,8 +39,27 @@ The harness has three registered canonical cases:
   per-port `z0`; the complete expected power-wave Z-to-S result is obtained
   from public `Network.from_z(..., s_def="power").s`.
 
-All three registered cases are checked by default against a fresh scikit-rf run;
-the default command checks every case:
+The additional operation cases are registered individually as follows. Each
+row has multiple frequency samples, and every multiport input matrix is
+non-symmetric/non-reciprocal.
+
+| Direction | Ports | Reference-impedance profile | Case-id suffix |
+| --- | ---: | --- | --- |
+| S→Z | 1 | real scalar, constant-equivalent | `one_port_real_scalar_z0` |
+| S→Z | 2 | complex, per-port, constant over frequency | `two_port_complex_per_port_constant_z0` |
+| S→Z | 4 | real, frequency-dependent, same across ports | `four_port_real_frequency_dependent_z0` |
+| S→Z | 8 | complex, per-port, frequency-dependent | `eight_port_complex_per_port_frequency_dependent_z0` |
+| Z→S | 1 | real scalar, constant-equivalent | `one_port_real_scalar_z0` |
+| Z→S | 2 | complex, per-port, constant over frequency | `two_port_complex_per_port_constant_z0` |
+| Z→S | 4 | real, frequency-dependent, same across ports | `four_port_real_frequency_dependent_z0` |
+| Z→S | 8 | complex, per-port, frequency-dependent | `eight_port_complex_per_port_frequency_dependent_z0` |
+
+The full case ids are prefixed with `power_wave_s_to_z_` or
+`power_wave_z_to_s_`, and the fixture filenames use the same id with a
+`.json` suffix.
+
+All registered cases are checked by default against a fresh scikit-rf run; the
+default command checks every case:
 
 ```bash
 python generate_oracle.py check
@@ -72,14 +94,22 @@ always selects all registered cases.
 
 ## Fixture contents and canonicalization
 
-The input case is a four-frequency, three-port `Network` with a non-symmetric
-complex S matrix and frequency-dependent, per-port complex `z0`. The S and
-`z0` values are read back from the scikit-rf `Network` object. A local NumPy
-`default_rng` uses the recorded seed `20250308`; no process-global random state
-is changed. The S-to-Z operation case obtains its expected values through the
-public `Network.z` property. The Z-to-S operation case uses a dedicated local
+The original input case is a four-frequency, three-port `Network` with a
+non-symmetric complex S matrix and frequency-dependent, per-port complex `z0`.
+The S and `z0` values are read back from the scikit-rf `Network` object. A
+local NumPy `default_rng` uses the recorded seed `20250308`; no process-global
+random state is changed. Its S-to-Z output is obtained through the public
+`Network.z` property. The original Z-to-S case uses a dedicated local
 `default_rng` seed (`20260826`) to construct its input Z directly, then obtains
 expected S values only through public `Network.from_z` and `Network.s`.
+
+The eight matrix cases use dedicated local RNG seeds recorded in each
+fixture's metadata. Their S inputs are modest and pass a conservative strict
+row diagonal-dominance bound for `I-S`; their direct Z inputs are diagonally
+dominant and pass the corresponding bound for `Z+G`. These checks are
+generation-time guards only: platform-sensitive condition-number values are
+not recorded in the schema. Matrix outputs are likewise obtained only from
+public scikit-rf `Network.z` or `Network.from_z(..., s_def="power").s`.
 
 The JSON representation is deliberately machine-readable and byte-stable:
 
@@ -91,24 +121,21 @@ The JSON representation is deliberately machine-readable and byte-stable:
   characteristics; operation cases may additionally link a shared input case;
 - The `three_port_complex_z0` network case retains an exact canonical UTF-8
   byte comparison.
-- The `power_wave_s_to_z_three_port_complex_z0` case requires strict JSON
-  parsing (including finite numbers), canonical encoding of the actual
-  document, and exact canonical equality for metadata, schema, dependency
-  versions, shapes, frequency, S, z0, and every other field except `z_ohm`.
-  Its recursively validated `z_ohm` complex array is compared with the
-  recorded `abs(actual-expected) <= atol_ohm + rtol*abs(expected)` policy,
-  currently `rtol=1e-12` and `atol_ohm=1e-12`. This is a strict binary64
-  tolerance for this well-conditioned, modest-magnitude deterministic case:
-  it allows normal cross-language linear-algebra rounding while catching
-  material disagreement.
-- The `power_wave_z_to_s_three_port_complex_z0` case uses the same strict
-  contract checks and compares its dimensionless `s` output with the recorded
-  `rtol=1e-12` and `atol=1e-12` policy. Its direct Z input is generated with
-  the recorded dedicated seed, so it remains an exact contract even when
-  linear-algebra implementation details vary. The checker accepts the
-  case-specific absolute-tolerance key (`atol` for dimensionless output,
-  `atol_ohm` for the existing impedance output) without weakening either
-  contract.
+- Every operation case requires strict JSON parsing (including finite
+  numbers), canonical encoding of the actual document, and exact canonical
+  equality for metadata, schema, dependency versions, shapes, frequency,
+  inputs, z0, and every other field except the computed output (`z_ohm` for
+  S→Z or `s` for Z→S). The output's recursively validated complex array is
+  compared with the recorded
+  `abs(actual-expected) <= atol + rtol*abs(expected)` policy. S→Z uses
+  `rtol=1e-12` and `atol_ohm=1e-12`; Z→S uses `rtol=1e-12` and `atol=1e-12`.
+  These are strict binary64 tolerances for the well-conditioned,
+  modest-magnitude deterministic cases: they allow normal cross-language
+  linear-algebra rounding while catching material disagreement.
+- The checker removes exactly one computed output field for the contract
+  projection. It never tolerates drift in inputs, z0, dimensions, metadata,
+  or any unknown/missing complex field, and it never widens a recorded
+  tolerance.
 
 ## Adding a future case
 
