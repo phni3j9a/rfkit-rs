@@ -3,9 +3,10 @@
 
 The original three-port Network fixture is retained as a stable input
 contract.  The power-wave operation fixtures additionally form a small
-conformance matrix over port count and reference-impedance structure.  This
-module is kept independent of the Rust implementation so it can serve as a
-stable numerical reference for the internal conversion kernels.
+conformance matrix over port count and reference-impedance structure, with
+dedicated reciprocal three-port cases for each existing kernel.  This module
+is kept independent of the Rust implementation so it can serve as a stable
+numerical reference for the internal conversion kernels.
 """
 
 from __future__ import annotations
@@ -145,6 +146,34 @@ RENORMALIZE_TOLERANCE_JUSTIFICATION = (
     "linear-algebra rounding."
 )
 
+RECIPROCAL_S_TO_Z_FIXTURE = (
+    Path(__file__).resolve().parent
+    / "fixtures"
+    / "power_wave_s_to_z_three_port_reciprocal_real_equal_z0.json"
+)
+RECIPROCAL_Z_TO_S_FIXTURE = (
+    Path(__file__).resolve().parent
+    / "fixtures"
+    / "power_wave_z_to_s_three_port_reciprocal_real_equal_z0.json"
+)
+RECIPROCAL_RENORMALIZE_FIXTURE = (
+    Path(__file__).resolve().parent
+    / "fixtures"
+    / "power_wave_renormalize_three_port_reciprocal_real_equal_z0.json"
+)
+RECIPROCAL_S_TO_Z_RANDOM_SEED = 20_260_921
+RECIPROCAL_Z_TO_S_RANDOM_SEED = 20_260_922
+RECIPROCAL_RENORMALIZE_RANDOM_SEED = 20_260_923
+RECIPROCAL_S_TO_Z_Z0_OHM = 61.25
+RECIPROCAL_RENORMALIZE_SOURCE_Z0_OHM = 42.75
+RECIPROCAL_RENORMALIZE_TARGET_Z0_OHM = 86.5
+RECIPROCAL_TOLERANCE_JUSTIFICATION = (
+    "Strict binary64 tolerance for a well-conditioned, modest-magnitude, "
+    "deterministic reciprocal three-port case; generation-time diagonal-"
+    "dominance checks keep the conversion systems away from exact singularity "
+    "while allowing normal cross-language linear-algebra rounding."
+)
+
 
 class _OracleCase(NamedTuple):
     """A registered fixture, builder, and case-specific check strategy."""
@@ -255,6 +284,47 @@ def _assert_non_symmetric(np: Any, matrix: Any, *, name: str) -> None:
             raise ValueError(
                 f"{name} must be non-symmetric at frequency index {frequency}"
             )
+
+
+def _assert_exact_symmetric(np: Any, matrix: Any, *, name: str) -> None:
+    """Require every frequency slice to be exactly transpose-symmetric.
+
+    Reciprocal fixtures mirror one generated triangle without conjugation.
+    Keeping this assertion separate from the non-reciprocal guard makes that
+    construction contract explicit and catches accidental Hermitian mirroring.
+    """
+
+    if matrix.ndim != 3 or matrix.shape[1] != matrix.shape[2]:
+        raise ValueError(f"{name} must be a stack of square matrices")
+    if not np.array_equal(matrix, np.swapaxes(matrix, 1, 2)):
+        raise ValueError(f"{name} must be exactly transpose-symmetric")
+
+
+def _assert_output_symmetric(
+    np: Any,
+    matrix: Any,
+    *,
+    name: str,
+    rtol: float,
+    atol: float,
+) -> None:
+    """Check reciprocal output symmetry with the recorded mixed tolerance."""
+
+    if matrix.ndim != 3 or matrix.shape[1] != matrix.shape[2]:
+        raise ValueError(f"{name} must be a stack of square matrices")
+    for frequency in range(matrix.shape[0]):
+        for row in range(matrix.shape[1]):
+            for column in range(row + 1, matrix.shape[2]):
+                lhs = complex(matrix[frequency, row, column])
+                rhs = complex(matrix[frequency, column, row])
+                difference = abs(lhs - rhs)
+                bound = atol + rtol * max(abs(lhs), abs(rhs))
+                if not np.isfinite(difference) or difference > bound:
+                    raise ValueError(
+                        f"{name} is not reciprocal at frequency {frequency}, "
+                        f"ports ({row}, {column}): difference={difference:.17g}, "
+                        f"bound={bound:.17g}"
+                    )
 
 
 def _assert_s_conditioning(s: Any) -> None:
@@ -607,6 +677,98 @@ def _matrix_z_inputs(
                 + 1j * (2.0 + 0.13 * frequency - 0.08 * port)
             )
     _assert_non_symmetric(np, z, name="Z input")
+    _assert_z_conditioning(z, expanded_z0)
+    return frequency_hz, z, constructor_z0, expanded_z0
+
+
+def _reciprocal_frequency_and_z0(
+    np: Any,
+    *,
+    nfreq: int,
+    nports: int,
+    z0_ohm: float,
+) -> tuple[Any, float, Any]:
+    """Build the shared frequency and scalar real reference impedance data."""
+
+    frequency_hz = np.array(
+        [0.95e9 + 0.41e9 * index for index in range(nfreq)], dtype=np.float64
+    )
+    expanded_z0 = np.full((nfreq, nports), z0_ohm, dtype=np.complex128)
+    return frequency_hz, z0_ohm, expanded_z0
+
+
+def _reciprocal_s_inputs(
+    np: Any,
+    *,
+    nfreq: int,
+    nports: int,
+    seed: int,
+    z0_ohm: float,
+) -> tuple[Any, Any, float, Any]:
+    """Build a deterministic complex S stack by mirroring one triangle.
+
+    The assignment to both matrix locations is deliberately a plain copy, not
+    a conjugate.  This records transpose reciprocity rather than Hermitian
+    symmetry and keeps the fixture independent of any conversion formula.
+    """
+
+    frequency_hz, constructor_z0, expanded_z0 = _reciprocal_frequency_and_z0(
+        np,
+        nfreq=nfreq,
+        nports=nports,
+        z0_ohm=z0_ohm,
+    )
+    rng = np.random.default_rng(seed)
+    s = np.empty((nfreq, nports, nports), dtype=np.complex128)
+    for frequency in range(nfreq):
+        for row in range(nports):
+            for column in range(row, nports):
+                value = complex(
+                    rng.normal(loc=0.0, scale=0.04),
+                    rng.normal(loc=0.0, scale=0.04),
+                )
+                s[frequency, row, column] = value
+                s[frequency, column, row] = value
+
+    _assert_exact_symmetric(np, s, name="reciprocal S input")
+    _assert_s_conditioning(s)
+    return frequency_hz, s, constructor_z0, expanded_z0
+
+
+def _reciprocal_z_inputs(
+    np: Any,
+    *,
+    nfreq: int,
+    nports: int,
+    seed: int,
+    z0_ohm: float,
+) -> tuple[Any, Any, float, Any]:
+    """Build a deterministic complex Z stack by mirroring one triangle."""
+
+    frequency_hz, constructor_z0, expanded_z0 = _reciprocal_frequency_and_z0(
+        np,
+        nfreq=nfreq,
+        nports=nports,
+        z0_ohm=z0_ohm,
+    )
+    rng = np.random.default_rng(seed)
+    z = np.empty((nfreq, nports, nports), dtype=np.complex128)
+    for frequency in range(nfreq):
+        for row in range(nports):
+            for column in range(row, nports):
+                value = complex(
+                    rng.normal(loc=0.0, scale=0.35),
+                    rng.normal(loc=0.0, scale=0.35),
+                )
+                if row == column:
+                    value += complex(
+                        73.0 + 2.75 * frequency + 3.5 * row,
+                        2.5 + 0.2 * frequency - 0.15 * row,
+                    )
+                z[frequency, row, column] = value
+                z[frequency, column, row] = value
+
+    _assert_exact_symmetric(np, z, name="reciprocal Z input")
     _assert_z_conditioning(z, expanded_z0)
     return frequency_hz, z, constructor_z0, expanded_z0
 
@@ -1021,6 +1183,251 @@ def _matrix_z_to_s_fixture(
     }
 
 
+def _reciprocal_s_to_z_fixture(np: Any, skrf: Any) -> dict[str, Any]:
+    """Build the deterministic reciprocal S-to-Z three-port fixture."""
+
+    case_id = "power_wave_s_to_z_three_port_reciprocal_real_equal_z0"
+    nfreq = 3
+    nports = 3
+    frequency_hz, source_s, constructor_z0, _expanded_z0 = _reciprocal_s_inputs(
+        np,
+        nfreq=nfreq,
+        nports=nports,
+        seed=RECIPROCAL_S_TO_Z_RANDOM_SEED,
+        z0_ohm=RECIPROCAL_S_TO_Z_Z0_OHM,
+    )
+    network = skrf.Network(
+        f=frequency_hz,
+        s=source_s,
+        z0=constructor_z0,
+        s_def="power",
+        name=case_id,
+    )
+
+    # Read inputs and the expected result through public Network properties;
+    # no local conversion equation is used to produce the oracle output.
+    frequency = np.asarray(network.f, dtype=np.float64)
+    network_s = np.asarray(network.s, dtype=np.complex128)
+    network_z0 = np.asarray(network.z0, dtype=np.complex128)
+    network_z = np.asarray(network.z, dtype=np.complex128)
+    _assert_exact_symmetric(np, network_s, name="reciprocal S input")
+    _assert_output_symmetric(
+        np,
+        network_z,
+        name="reciprocal S-to-Z output",
+        rtol=S_TO_Z_RTOL,
+        atol=S_TO_Z_ATOL_OHM,
+    )
+
+    return {
+        "metadata": {
+            "case_id": case_id,
+            "numpy_version": np.__version__,
+            "operation": "s_to_z",
+            "random_seed": RECIPROCAL_S_TO_Z_RANDOM_SEED,
+            "reference_impedance": {
+                "complex": False,
+                "frequency_dependent": False,
+                "per_port": False,
+                "unit": "ohm",
+            },
+            "schema": "rfkit-rs.oracle.fixture",
+            "schema_version": SCHEMA_VERSION,
+            "scikit_rf_version": skrf.__version__,
+            "shape": {
+                "frequency": list(frequency.shape),
+                "input_s": list(network_s.shape),
+                "input_z0": list(network_z0.shape),
+                "output_z": list(network_z.shape),
+            },
+            "tolerance_policy": {
+                "atol_ohm": S_TO_Z_ATOL_OHM,
+                "comparison": (
+                    "abs(actual-expected) <= "
+                    "atol_ohm + rtol*abs(expected)"
+                ),
+                "justification": RECIPROCAL_TOLERANCE_JUSTIFICATION,
+                "regeneration": (
+                    "canonical UTF-8 JSON serialization; z_ohm is checked "
+                    "with the recorded numeric tolerance"
+                ),
+                "rtol": S_TO_Z_RTOL,
+            },
+            "wave_definition": network.s_def,
+        },
+        "data": {
+            "frequency_hz": [float(value) for value in frequency],
+            "s": _complex_array(network_s),
+            "z0_ohm": _complex_array(network_z0),
+            "z_ohm": _complex_array(network_z),
+        },
+    }
+
+
+def _reciprocal_z_to_s_fixture(np: Any, skrf: Any) -> dict[str, Any]:
+    """Build the deterministic reciprocal Z-to-S three-port fixture."""
+
+    case_id = "power_wave_z_to_s_three_port_reciprocal_real_equal_z0"
+    nfreq = 3
+    nports = 3
+    frequency_hz, source_z, constructor_z0, _expanded_z0 = _reciprocal_z_inputs(
+        np,
+        nfreq=nfreq,
+        nports=nports,
+        seed=RECIPROCAL_Z_TO_S_RANDOM_SEED,
+        z0_ohm=RECIPROCAL_S_TO_Z_Z0_OHM,
+    )
+
+    # The expected output is obtained exclusively through public
+    # Network.from_z(..., s_def="power") and the public Network.s property.
+    converted = skrf.Network.from_z(
+        source_z,
+        f=frequency_hz,
+        z0=constructor_z0,
+        s_def="power",
+        name=case_id,
+    )
+    frequency = np.asarray(converted.f, dtype=np.float64)
+    converted_s = np.asarray(converted.s, dtype=np.complex128)
+    network_z0 = np.asarray(converted.z0, dtype=np.complex128)
+    _assert_exact_symmetric(np, source_z, name="reciprocal Z input")
+    _assert_output_symmetric(
+        np,
+        converted_s,
+        name="reciprocal Z-to-S output",
+        rtol=Z_TO_S_RTOL,
+        atol=Z_TO_S_ATOL,
+    )
+
+    return {
+        "metadata": {
+            "case_id": case_id,
+            "numpy_version": np.__version__,
+            "operation": "z_to_s",
+            "random_seed": RECIPROCAL_Z_TO_S_RANDOM_SEED,
+            "reference_impedance": {
+                "complex": False,
+                "frequency_dependent": False,
+                "per_port": False,
+                "unit": "ohm",
+            },
+            "schema": "rfkit-rs.oracle.fixture",
+            "schema_version": SCHEMA_VERSION,
+            "scikit_rf_version": skrf.__version__,
+            "shape": {
+                "frequency": list(frequency.shape),
+                "input_z": list(source_z.shape),
+                "input_z0": list(network_z0.shape),
+                "output_s": list(converted_s.shape),
+            },
+            "tolerance_policy": {
+                "atol": Z_TO_S_ATOL,
+                "comparison": "abs(actual-expected) <= atol + rtol*abs(expected)",
+                "justification": RECIPROCAL_TOLERANCE_JUSTIFICATION,
+                "regeneration": (
+                    "canonical UTF-8 JSON serialization; s is checked with the "
+                    "recorded numeric tolerance"
+                ),
+                "rtol": Z_TO_S_RTOL,
+            },
+            "wave_definition": converted.s_def,
+        },
+        "data": {
+            "frequency_hz": [float(value) for value in frequency],
+            "s": _complex_array(converted_s),
+            "z0_ohm": _complex_array(network_z0),
+            "z_ohm": _complex_array(source_z),
+        },
+    }
+
+
+def _reciprocal_renormalize_fixture(np: Any, skrf: Any) -> dict[str, Any]:
+    """Build the deterministic reciprocal S-renormalization fixture."""
+
+    case_id = "power_wave_renormalize_three_port_reciprocal_real_equal_z0"
+    nfreq = 3
+    nports = 3
+    frequency_hz, source_s, source_constructor_z0, _expanded_z0 = _reciprocal_s_inputs(
+        np,
+        nfreq=nfreq,
+        nports=nports,
+        seed=RECIPROCAL_RENORMALIZE_RANDOM_SEED,
+        z0_ohm=RECIPROCAL_RENORMALIZE_SOURCE_Z0_OHM,
+    )
+    network = skrf.Network(
+        f=frequency_hz,
+        s=source_s,
+        z0=source_constructor_z0,
+        s_def="power",
+        name=case_id,
+    )
+
+    # Read source values back, then use only the public in-place renormalize
+    # operation and read-back properties for the expected output and target
+    # reference impedance.
+    frequency = np.asarray(network.f, dtype=np.float64)
+    network_s_input = np.asarray(network.s, dtype=np.complex128)
+    network_z0_source = np.asarray(network.z0, dtype=np.complex128)
+    network.renormalize(RECIPROCAL_RENORMALIZE_TARGET_Z0_OHM, s_def="power")
+    network_s_renormalized = np.asarray(network.s, dtype=np.complex128)
+    network_z0_target = np.asarray(network.z0, dtype=np.complex128)
+    _assert_exact_symmetric(np, network_s_input, name="reciprocal S input")
+    _assert_output_symmetric(
+        np,
+        network_s_renormalized,
+        name="reciprocal renormalized-S output",
+        rtol=RENORMALIZE_RTOL,
+        atol=RENORMALIZE_ATOL,
+    )
+
+    flags = {
+        "complex": False,
+        "frequency_dependent": False,
+        "per_port": False,
+        "unit": "ohm",
+    }
+    return {
+        "metadata": {
+            "case_id": case_id,
+            "numpy_version": np.__version__,
+            "operation": "renormalize_s",
+            "random_seed": RECIPROCAL_RENORMALIZE_RANDOM_SEED,
+            "reference_impedance": {
+                "source": dict(flags),
+                "target": dict(flags),
+            },
+            "schema": "rfkit-rs.oracle.fixture",
+            "schema_version": SCHEMA_VERSION,
+            "scikit_rf_version": skrf.__version__,
+            "shape": {
+                "frequency": list(frequency.shape),
+                "s_input": list(network_s_input.shape),
+                "s_renormalized": list(network_s_renormalized.shape),
+                "z0_source": list(network_z0_source.shape),
+                "z0_target": list(network_z0_target.shape),
+            },
+            "tolerance_policy": {
+                "atol": RENORMALIZE_ATOL,
+                "comparison": "abs(actual-expected) <= atol + rtol*abs(expected)",
+                "justification": RECIPROCAL_TOLERANCE_JUSTIFICATION,
+                "regeneration": (
+                    "canonical UTF-8 JSON serialization; s_renormalized is checked "
+                    "with the recorded numeric tolerance"
+                ),
+                "rtol": RENORMALIZE_RTOL,
+            },
+            "wave_definition": network.s_def,
+        },
+        "data": {
+            "frequency_hz": [float(value) for value in frequency],
+            "s_input": _complex_array(network_s_input),
+            "s_renormalized": _complex_array(network_s_renormalized),
+            "z0_source_ohm": _complex_array(network_z0_source),
+            "z0_target_ohm": _complex_array(network_z0_target),
+        },
+    }
+
+
 def _renormalize_fixture(
     np: Any,
     skrf: Any,
@@ -1358,6 +1765,20 @@ _CASES = (
         "s",
     ),
     _OracleCase(
+        "power_wave_s_to_z_three_port_reciprocal_real_equal_z0",
+        RECIPROCAL_S_TO_Z_FIXTURE,
+        _reciprocal_s_to_z_fixture,
+        "numeric_output",
+        "z_ohm",
+    ),
+    _OracleCase(
+        "power_wave_z_to_s_three_port_reciprocal_real_equal_z0",
+        RECIPROCAL_Z_TO_S_FIXTURE,
+        _reciprocal_z_to_s_fixture,
+        "numeric_output",
+        "s",
+    ),
+    _OracleCase(
         "power_wave_renormalize_one_port_real_scalar_z0",
         RENORMALIZE_ONE_PORT_FIXTURE,
         _renormalize_one_port_real_scalar_z0_fixture,
@@ -1382,6 +1803,13 @@ _CASES = (
         "power_wave_renormalize_eight_port_real_frequency_dependent_z0",
         RENORMALIZE_EIGHT_PORT_FIXTURE,
         _renormalize_eight_port_real_frequency_dependent_z0_fixture,
+        "numeric_output",
+        "s_renormalized",
+    ),
+    _OracleCase(
+        "power_wave_renormalize_three_port_reciprocal_real_equal_z0",
+        RECIPROCAL_RENORMALIZE_FIXTURE,
+        _reciprocal_renormalize_fixture,
         "numeric_output",
         "s_renormalized",
     ),

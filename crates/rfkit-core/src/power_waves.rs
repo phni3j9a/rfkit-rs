@@ -525,6 +525,12 @@ mod tests {
                 "../../../tools/oracle/fixtures/power_wave_renormalize_eight_port_real_frequency_dependent_z0.json"
             ),
         ),
+        (
+            "power_wave_renormalize_three_port_reciprocal_real_equal_z0",
+            include_str!(
+                "../../../tools/oracle/fixtures/power_wave_renormalize_three_port_reciprocal_real_equal_z0.json"
+            ),
+        ),
     ];
     const MATRIX_S_TO_Z_FIXTURES: &[(&str, &str)] = &[
         (
@@ -551,6 +557,12 @@ mod tests {
                 "../../../tools/oracle/fixtures/power_wave_s_to_z_eight_port_complex_per_port_frequency_dependent_z0.json"
             ),
         ),
+        (
+            "power_wave_s_to_z_three_port_reciprocal_real_equal_z0",
+            include_str!(
+                "../../../tools/oracle/fixtures/power_wave_s_to_z_three_port_reciprocal_real_equal_z0.json"
+            ),
+        ),
     ];
     const MATRIX_Z_TO_S_FIXTURES: &[(&str, &str)] = &[
         (
@@ -575,6 +587,12 @@ mod tests {
             "power_wave_z_to_s_eight_port_complex_per_port_frequency_dependent_z0",
             include_str!(
                 "../../../tools/oracle/fixtures/power_wave_z_to_s_eight_port_complex_per_port_frequency_dependent_z0.json"
+            ),
+        ),
+        (
+            "power_wave_z_to_s_three_port_reciprocal_real_equal_z0",
+            include_str!(
+                "../../../tools/oracle/fixtures/power_wave_z_to_s_three_port_reciprocal_real_equal_z0.json"
             ),
         ),
     ];
@@ -902,6 +920,7 @@ mod tests {
         complex_z0: bool,
         frequency_dependent_z0: bool,
         per_port_z0: bool,
+        reciprocal: bool,
     }
 
     fn matrix_case_spec(case_id: &str) -> MatrixCaseSpec {
@@ -913,6 +932,7 @@ mod tests {
                 complex_z0: false,
                 frequency_dependent_z0: false,
                 per_port_z0: false,
+                reciprocal: false,
             },
             "power_wave_s_to_z_two_port_complex_per_port_constant_z0"
             | "power_wave_z_to_s_two_port_complex_per_port_constant_z0" => MatrixCaseSpec {
@@ -921,6 +941,7 @@ mod tests {
                 complex_z0: true,
                 frequency_dependent_z0: false,
                 per_port_z0: true,
+                reciprocal: false,
             },
             "power_wave_s_to_z_four_port_real_frequency_dependent_z0"
             | "power_wave_z_to_s_four_port_real_frequency_dependent_z0" => MatrixCaseSpec {
@@ -929,6 +950,7 @@ mod tests {
                 complex_z0: false,
                 frequency_dependent_z0: true,
                 per_port_z0: false,
+                reciprocal: false,
             },
             "power_wave_s_to_z_eight_port_complex_per_port_frequency_dependent_z0"
             | "power_wave_z_to_s_eight_port_complex_per_port_frequency_dependent_z0" => {
@@ -938,8 +960,18 @@ mod tests {
                     complex_z0: true,
                     frequency_dependent_z0: true,
                     per_port_z0: true,
+                    reciprocal: false,
                 }
             }
+            "power_wave_s_to_z_three_port_reciprocal_real_equal_z0"
+            | "power_wave_z_to_s_three_port_reciprocal_real_equal_z0" => MatrixCaseSpec {
+                nfreq: 3,
+                nport: 3,
+                complex_z0: false,
+                frequency_dependent_z0: false,
+                per_port_z0: false,
+                reciprocal: true,
+            },
             _ => panic!("unexpected power-wave matrix case id: {case_id}"),
         }
     }
@@ -951,6 +983,7 @@ mod tests {
         complex_z0: bool,
         frequency_dependent_z0: bool,
         per_port_z0: bool,
+        reciprocal: bool,
     }
 
     fn renormalization_case_spec(case_id: &str) -> RenormalizationCaseSpec {
@@ -961,6 +994,7 @@ mod tests {
                 complex_z0: false,
                 frequency_dependent_z0: false,
                 per_port_z0: false,
+                reciprocal: false,
             },
             "power_wave_renormalize_two_port_complex_per_port_constant_z0" => {
                 RenormalizationCaseSpec {
@@ -969,6 +1003,7 @@ mod tests {
                     complex_z0: true,
                     frequency_dependent_z0: false,
                     per_port_z0: true,
+                    reciprocal: false,
                 }
             }
             "power_wave_renormalize_four_port_complex_per_port_frequency_dependent_z0" => {
@@ -978,6 +1013,7 @@ mod tests {
                     complex_z0: true,
                     frequency_dependent_z0: true,
                     per_port_z0: true,
+                    reciprocal: false,
                 }
             }
             "power_wave_renormalize_eight_port_real_frequency_dependent_z0" => {
@@ -987,6 +1023,17 @@ mod tests {
                     complex_z0: false,
                     frequency_dependent_z0: true,
                     per_port_z0: false,
+                    reciprocal: false,
+                }
+            }
+            "power_wave_renormalize_three_port_reciprocal_real_equal_z0" => {
+                RenormalizationCaseSpec {
+                    nfreq: 3,
+                    nport: 3,
+                    complex_z0: false,
+                    frequency_dependent_z0: false,
+                    per_port_z0: false,
+                    reciprocal: true,
                 }
             }
             _ => panic!("unexpected power-wave renormalization case id: {case_id}"),
@@ -1020,6 +1067,7 @@ mod tests {
     ) -> (f64, f64) {
         let metadata = &fixture.metadata;
         let data = &fixture.data;
+        let expected_reciprocal = spec.reciprocal;
         assert_eq!(metadata.case_id, expected_case_id);
         assert_eq!(metadata.operation, "renormalize_s");
         assert_eq!(metadata.wave_definition, "power");
@@ -1115,16 +1163,48 @@ mod tests {
         );
 
         if spec.nport > 1 {
-            for (frequency, matrix) in data.s_input.iter().enumerate() {
+            if expected_reciprocal {
+                let has_complex_off_diagonal = data.s_input.iter().any(|matrix| {
+                    matrix.iter().enumerate().any(|(row, row_values)| {
+                        row_values
+                            .iter()
+                            .enumerate()
+                            .skip(row + 1)
+                            .any(|(_, value)| value.imag != 0.0)
+                    })
+                });
                 assert!(
-                    (0..spec.nport).any(|row| {
-                        ((row + 1)..spec.nport).any(|column| {
-                            matrix[row][column].real != matrix[column][row].real
-                                || matrix[row][column].imag != matrix[column][row].imag
-                        })
-                    }),
-                    "{expected_case_id} S input is symmetric at frequency {frequency}"
+                    has_complex_off_diagonal,
+                    "{expected_case_id} reciprocal input must exercise complex transpose symmetry"
                 );
+            }
+            for (frequency, matrix) in data.s_input.iter().enumerate() {
+                if expected_reciprocal {
+                    for (row, row_values) in matrix.iter().enumerate().take(spec.nport) {
+                        for (column, column_values) in
+                            matrix.iter().enumerate().skip(row + 1).take(spec.nport)
+                        {
+                            assert_eq!(
+                                row_values[column].real, column_values[row].real,
+                                "{expected_case_id} reciprocal S input real part differs at frequency {frequency}, ports ({row}, {column})"
+                            );
+                            assert_eq!(
+                                row_values[column].imag, column_values[row].imag,
+                                "{expected_case_id} reciprocal S input imaginary part differs at frequency {frequency}, ports ({row}, {column})"
+                            );
+                        }
+                    }
+                } else {
+                    assert!(
+                        (0..spec.nport).any(|row| {
+                            ((row + 1)..spec.nport).any(|column| {
+                                matrix[row][column].real != matrix[column][row].real
+                                    || matrix[row][column].imag != matrix[column][row].imag
+                            })
+                        }),
+                        "{expected_case_id} S input is symmetric at frequency {frequency}"
+                    );
+                }
             }
         }
 
@@ -1143,6 +1223,7 @@ mod tests {
             complex_z0: expected_complex_z0,
             frequency_dependent_z0: expected_frequency_dependent_z0,
             per_port_z0: expected_per_port_z0,
+            reciprocal: expected_reciprocal,
         } = spec;
         let metadata = &fixture.metadata;
         let data = &fixture.data;
@@ -1247,18 +1328,46 @@ mod tests {
             &data.z_ohm
         };
         if expected_nport > 1 {
+            if expected_reciprocal {
+                let has_complex_off_diagonal = input.iter().any(|matrix| {
+                    matrix.iter().enumerate().any(|(row, row_values)| {
+                        row_values
+                            .iter()
+                            .enumerate()
+                            .skip(row + 1)
+                            .any(|(_, value)| matrix_complex(value).im != 0.0)
+                    })
+                });
+                assert!(
+                    has_complex_off_diagonal,
+                    "{expected_case_id} reciprocal input must exercise complex transpose symmetry"
+                );
+            }
             for (frequency, matrix) in input.iter().enumerate() {
                 let values = matrix
                     .iter()
                     .map(|row| row.iter().map(matrix_complex).collect::<Vec<_>>())
                     .collect::<Vec<_>>();
-                assert!(
-                    (0..expected_nport).any(|row| {
-                        ((row + 1)..expected_nport)
-                            .any(|column| values[row][column] != values[column][row])
-                    }),
-                    "{expected_case_id} input matrix is symmetric at frequency {frequency}"
-                );
+                if expected_reciprocal {
+                    for (row, row_values) in values.iter().enumerate().take(expected_nport) {
+                        for (column, column_values) in
+                            values.iter().enumerate().skip(row + 1).take(expected_nport)
+                        {
+                            assert_eq!(
+                                row_values[column], column_values[row],
+                                "{expected_case_id} reciprocal input differs at frequency {frequency}, ports ({row}, {column})"
+                            );
+                        }
+                    }
+                } else {
+                    assert!(
+                        (0..expected_nport).any(|row| {
+                            ((row + 1)..expected_nport)
+                                .any(|column| values[row][column] != values[column][row])
+                        }),
+                        "{expected_case_id} input matrix is symmetric at frequency {frequency}"
+                    );
+                }
             }
         }
 
@@ -1309,6 +1418,41 @@ mod tests {
                     assert!(
                         difference <= tolerance,
                         "{case_id} output[{frequency},{row},{column}] differs: actual={actual_value:?}, expected={expected_value:?}, difference={difference:e}, tolerance={tolerance:e}"
+                    );
+                }
+            }
+        }
+    }
+
+    fn assert_matrix_output_preserves_symmetry(
+        case_id: &str,
+        actual: &Array3<Complex64>,
+        expected: &[Vec<Vec<ComplexValue>>],
+        rtol: f64,
+        atol: f64,
+    ) {
+        let nfreq = expected.len();
+        let nport = expected[0].len();
+        assert_eq!(actual.dim(), (nfreq, nport, nport));
+        for frequency in 0..nfreq {
+            for row in 0..nport {
+                for column in (row + 1)..nport {
+                    let expected_value = matrix_complex(&expected[frequency][row][column]);
+                    let expected_transpose = matrix_complex(&expected[frequency][column][row]);
+                    let tolerance =
+                        atol + rtol * expected_value.norm().max(expected_transpose.norm());
+                    let expected_difference = (expected_value - expected_transpose).norm();
+                    assert!(
+                        expected_difference <= tolerance,
+                        "{case_id} oracle output[{frequency},{row},{column}] is not symmetric: difference={expected_difference:e}, tolerance={tolerance:e}"
+                    );
+
+                    let actual_value = actual[[frequency, row, column]];
+                    let actual_transpose = actual[[frequency, column, row]];
+                    let actual_difference = (actual_value - actual_transpose).norm();
+                    assert!(
+                        actual_difference <= tolerance,
+                        "{case_id} computed output[{frequency},{row},{column}] is not symmetric: difference={actual_difference:e}, tolerance={tolerance:e}"
                     );
                 }
             }
@@ -1945,6 +2089,15 @@ mod tests {
             let z0 = matrix_z0_array(&fixture.data.z0_ohm, spec.nfreq, spec.nport);
             let actual = s_to_z_power(&s, &z0).expect("matrix S-to-Z conversion must succeed");
             assert_matrix_output_matches(case_id, &actual, &fixture.data.z_ohm, rtol, atol_ohm);
+            if spec.reciprocal {
+                assert_matrix_output_preserves_symmetry(
+                    case_id,
+                    &actual,
+                    &fixture.data.z_ohm,
+                    rtol,
+                    atol_ohm,
+                );
+            }
         }
     }
 
@@ -1959,6 +2112,15 @@ mod tests {
             let z0 = matrix_z0_array(&fixture.data.z0_ohm, spec.nfreq, spec.nport);
             let actual = z_to_s_power(&z, &z0).expect("matrix Z-to-S conversion must succeed");
             assert_matrix_output_matches(case_id, &actual, &fixture.data.s, rtol, atol);
+            if spec.reciprocal {
+                assert_matrix_output_preserves_symmetry(
+                    case_id,
+                    &actual,
+                    &fixture.data.s,
+                    rtol,
+                    atol,
+                );
+            }
         }
     }
 
@@ -1981,6 +2143,15 @@ mod tests {
                 rtol,
                 atol,
             );
+            if spec.reciprocal {
+                assert_matrix_output_preserves_symmetry(
+                    case_id,
+                    &actual,
+                    &fixture.data.s_renormalized,
+                    rtol,
+                    atol,
+                );
+            }
         }
     }
 }

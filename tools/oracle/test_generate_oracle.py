@@ -200,6 +200,40 @@ MATRIX_CASE_SPECS = {
     },
 }
 
+RECIPROCAL_CASE_SPECS = {
+    "power_wave_s_to_z_three_port_reciprocal_real_equal_z0": {
+        "operation": "s_to_z",
+        "ports": 3,
+        "frequencies": 3,
+        "input": "s",
+        "output": "z_ohm",
+        "seed": 20_260_921,
+        "z0": 61.25,
+        "absolute_tolerance": "atol_ohm",
+    },
+    "power_wave_z_to_s_three_port_reciprocal_real_equal_z0": {
+        "operation": "z_to_s",
+        "ports": 3,
+        "frequencies": 3,
+        "input": "z_ohm",
+        "output": "s",
+        "seed": 20_260_922,
+        "z0": 61.25,
+        "absolute_tolerance": "atol",
+    },
+    "power_wave_renormalize_three_port_reciprocal_real_equal_z0": {
+        "operation": "renormalize_s",
+        "ports": 3,
+        "frequencies": 3,
+        "input": "s_input",
+        "output": "s_renormalized",
+        "seed": 20_260_923,
+        "z0_source": 42.75,
+        "z0_target": 86.5,
+        "absolute_tolerance": "atol",
+    },
+}
+
 RENORMALIZATION_CASE_SPECS = {
     "power_wave_renormalize_one_port_real_scalar_z0": {
         "ports": 1,
@@ -254,7 +288,11 @@ class MatrixRegistrationAndCheckerTests(unittest.TestCase):
     def test_all_matrix_cases_are_registered_individually(self) -> None:
         registered = {case.case_id: case for case in oracle._CASES}
         self.assertEqual(
-            len(registered), 3 + len(MATRIX_CASE_SPECS) + len(RENORMALIZATION_CASE_SPECS)
+            len(registered),
+            3
+            + len(MATRIX_CASE_SPECS)
+            + len(RENORMALIZATION_CASE_SPECS)
+            + len(RECIPROCAL_CASE_SPECS),
         )
         self.assertTrue(set(MATRIX_CASE_SPECS).issubset(registered))
         for case_id, spec in MATRIX_CASE_SPECS.items():
@@ -262,6 +300,227 @@ class MatrixRegistrationAndCheckerTests(unittest.TestCase):
             self.assertEqual(case.comparison, "numeric_output")
             self.assertEqual(case.numeric_output_key, spec["output"])
             self.assertEqual(case.path.stem, case_id)
+
+
+class ReciprocalRegistrationAndCheckerTests(unittest.TestCase):
+    """Protect the three reciprocal fixture contracts and symmetry checks."""
+
+    @staticmethod
+    def _complex(value: dict[str, float]) -> complex:
+        return complex(value["real"], value["imag"])
+
+    @staticmethod
+    def _assert_symmetric(
+        testcase: unittest.TestCase,
+        matrices: list[list[list[dict[str, float]]]],
+        *,
+        exact: bool,
+        rtol: float = 0.0,
+        atol: float = 0.0,
+    ) -> None:
+        for frequency, matrix in enumerate(matrices):
+            ports = len(matrix)
+            for row in range(ports):
+                for column in range(row + 1, ports):
+                    lhs = ReciprocalRegistrationAndCheckerTests._complex(
+                        matrix[row][column]
+                    )
+                    rhs = ReciprocalRegistrationAndCheckerTests._complex(
+                        matrix[column][row]
+                    )
+                    if exact:
+                        testcase.assertEqual(
+                            lhs,
+                            rhs,
+                            f"input is not exactly symmetric at frequency {frequency}, "
+                            f"ports ({row}, {column})",
+                        )
+                    else:
+                        difference = abs(lhs - rhs)
+                        bound = atol + rtol * max(abs(lhs), abs(rhs))
+                        testcase.assertLessEqual(
+                            difference,
+                            bound,
+                            f"output is not symmetric at frequency {frequency}, "
+                            f"ports ({row}, {column}): difference={difference:e}, "
+                            f"bound={bound:e}",
+                        )
+
+    def test_all_reciprocal_cases_are_registered_with_contracts(self) -> None:
+        registered = {case.case_id: case for case in oracle._CASES}
+        expected_paths = {
+            "power_wave_s_to_z_three_port_reciprocal_real_equal_z0": oracle.RECIPROCAL_S_TO_Z_FIXTURE,
+            "power_wave_z_to_s_three_port_reciprocal_real_equal_z0": oracle.RECIPROCAL_Z_TO_S_FIXTURE,
+            "power_wave_renormalize_three_port_reciprocal_real_equal_z0": oracle.RECIPROCAL_RENORMALIZE_FIXTURE,
+        }
+        self.assertEqual(set(RECIPROCAL_CASE_SPECS), set(expected_paths))
+        self.assertEqual(
+            len({RECIPROCAL_CASE_SPECS[case_id]["seed"] for case_id in RECIPROCAL_CASE_SPECS}),
+            3,
+        )
+        for case_id, spec in RECIPROCAL_CASE_SPECS.items():
+            with self.subTest(case_id=case_id):
+                case = registered[case_id]
+                self.assertEqual(case.path, expected_paths[case_id])
+                self.assertEqual(case.path.stem, case_id)
+                self.assertEqual(case.comparison, "numeric_output")
+                self.assertEqual(case.numeric_output_key, spec["output"])
+
+    def test_reciprocal_fixtures_are_symmetric_real_equal_and_deterministic(self) -> None:
+        registered = {case.case_id: case for case in oracle._CASES}
+        for case_id, spec in RECIPROCAL_CASE_SPECS.items():
+            with self.subTest(case_id=case_id):
+                fixture = oracle._read_canonical_json(registered[case_id].path)
+                metadata = fixture["metadata"]
+                data = fixture["data"]
+                self.assertEqual(metadata["case_id"], case_id)
+                self.assertEqual(metadata["operation"], spec["operation"])
+                self.assertEqual(metadata["numpy_version"], "2.5.1")
+                self.assertEqual(metadata["scikit_rf_version"], "2.0.1")
+                self.assertEqual(metadata["wave_definition"], "power")
+                self.assertEqual(metadata["random_seed"], spec["seed"])
+                self.assertEqual(metadata["shape"]["frequency"], [3])
+
+                if spec["operation"] == "renormalize_s":
+                    flags = {
+                        "complex": False,
+                        "frequency_dependent": False,
+                        "per_port": False,
+                        "unit": "ohm",
+                    }
+                    self.assertEqual(metadata["reference_impedance"]["source"], flags)
+                    self.assertEqual(metadata["reference_impedance"]["target"], flags)
+                    self.assertEqual(
+                        metadata["shape"],
+                        {
+                            "frequency": [3],
+                            "s_input": [3, 3, 3],
+                            "s_renormalized": [3, 3, 3],
+                            "z0_source": [3, 3],
+                            "z0_target": [3, 3],
+                        },
+                    )
+                    input_matrices = data[spec["input"]]
+                    output_matrices = data[spec["output"]]
+                    source_z0 = data["z0_source_ohm"]
+                    target_z0 = data["z0_target_ohm"]
+                    for z0_values, expected in (
+                        (source_z0, spec["z0_source"]),
+                        (target_z0, spec["z0_target"]),
+                    ):
+                        values = [
+                            [self._complex(value) for value in row]
+                            for row in z0_values
+                        ]
+                        self.assertTrue(
+                            all(
+                                value == complex(expected, 0.0)
+                                for row in values
+                                for value in row
+                            )
+                        )
+                    self.assertNotEqual(spec["z0_source"], 50.0)
+                    self.assertNotEqual(spec["z0_target"], 50.0)
+                    self.assertGreater(
+                        abs(spec["z0_source"] - spec["z0_target"]), 1.0
+                    )
+                    tolerance = metadata["tolerance_policy"]["atol"]
+                    rtol = metadata["tolerance_policy"]["rtol"]
+                else:
+                    flags = {
+                        "complex": False,
+                        "frequency_dependent": False,
+                        "per_port": False,
+                        "unit": "ohm",
+                    }
+                    self.assertEqual(metadata["reference_impedance"], flags)
+                    shape_key = "input_s" if spec["operation"] == "s_to_z" else "input_z"
+                    output_shape_key = "output_z" if spec["operation"] == "s_to_z" else "output_s"
+                    self.assertEqual(metadata["shape"][shape_key], [3, 3, 3])
+                    self.assertEqual(metadata["shape"]["input_z0"], [3, 3])
+                    self.assertEqual(metadata["shape"][output_shape_key], [3, 3, 3])
+                    input_matrices = data[spec["input"]]
+                    output_matrices = data[spec["output"]]
+                    z0_values = [
+                        [self._complex(value) for value in row]
+                        for row in data["z0_ohm"]
+                    ]
+                    self.assertTrue(
+                        all(
+                            value == complex(spec["z0"], 0.0)
+                            for row in z0_values
+                            for value in row
+                        )
+                    )
+                    self.assertNotEqual(spec["z0"], 50.0)
+                    tolerance = metadata["tolerance_policy"][spec["absolute_tolerance"]]
+                    rtol = metadata["tolerance_policy"]["rtol"]
+                self.assertEqual(metadata["tolerance_policy"]["rtol"], 1e-12)
+                self.assertEqual(
+                    metadata["tolerance_policy"][spec["absolute_tolerance"]],
+                    1e-12,
+                )
+                self.assertIn("binary64", metadata["tolerance_policy"]["justification"])
+                self.assertEqual(len(input_matrices), 3)
+                self.assertEqual(len(output_matrices), 3)
+                for matrix in input_matrices:
+                    self.assertEqual(len(matrix), 3)
+                    self.assertTrue(all(len(row) == 3 for row in matrix))
+                for matrix in output_matrices:
+                    self.assertEqual(len(matrix), 3)
+                    self.assertTrue(all(len(row) == 3 for row in matrix))
+                self._assert_symmetric(self, input_matrices, exact=True)
+                self.assertTrue(
+                    any(
+                        self._complex(matrix[row][column]).imag != 0.0
+                        for matrix in input_matrices
+                        for row in range(3)
+                        for column in range(row + 1, 3)
+                    ),
+                    "reciprocal inputs must exercise complex transpose symmetry, "
+                    "not only real symmetry",
+                )
+                self._assert_symmetric(
+                    self,
+                    output_matrices,
+                    exact=False,
+                    rtol=rtol,
+                    atol=tolerance,
+                )
+
+    def test_reciprocal_checker_tolerates_only_computed_output(self) -> None:
+        registered = {case.case_id: case for case in oracle._CASES}
+        for case_id, spec in RECIPROCAL_CASE_SPECS.items():
+            with self.subTest(case_id=case_id):
+                case = registered[case_id]
+                fixture = oracle._read_canonical_json(case.path)
+                adjusted = copy.deepcopy(fixture)
+                adjusted["data"][spec["output"]][0][0][0]["real"] += 1e-13
+                with tempfile.TemporaryDirectory() as directory:
+                    path = Path(directory) / case.path.name
+                    path.write_bytes(oracle._canonical_bytes(adjusted))
+                    self.assertEqual(
+                        oracle._check_numeric_fixture(path, fixture, spec["output"]),
+                        0,
+                    )
+
+                drifted = copy.deepcopy(fixture)
+                input_key = spec["input"]
+                drifted["data"][input_key][0][0][0]["real"] += 1e-3
+                with tempfile.TemporaryDirectory() as directory:
+                    path = Path(directory) / case.path.name
+                    path.write_bytes(oracle._canonical_bytes(drifted))
+                    self.assertEqual(
+                        oracle._check_numeric_fixture(path, fixture, spec["output"]),
+                        1,
+                    )
+
+class MatrixFixtureCheckerTests(unittest.TestCase):
+    """Protect the existing non-reciprocal matrix fixture contracts."""
+
+    @staticmethod
+    def _complex(value: dict[str, float]) -> complex:
+        return complex(value["real"], value["imag"])
 
     def test_matrix_fixtures_match_declared_dimensions_and_z0_profiles(self) -> None:
         registered = {case.case_id: case for case in oracle._CASES}
