@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 import tempfile
 import unittest
 from pathlib import Path
@@ -199,6 +200,39 @@ MATRIX_CASE_SPECS = {
     },
 }
 
+RENORMALIZATION_CASE_SPECS = {
+    "power_wave_renormalize_one_port_real_scalar_z0": {
+        "ports": 1,
+        "frequencies": 3,
+        "complex": False,
+        "frequency_dependent": False,
+        "per_port": False,
+    },
+    "power_wave_renormalize_two_port_complex_per_port_constant_z0": {
+        "ports": 2,
+        "frequencies": 4,
+        "complex": True,
+        "frequency_dependent": False,
+        "per_port": True,
+    },
+    "power_wave_renormalize_four_port_complex_per_port_frequency_dependent_z0": {
+        "ports": 4,
+        "frequencies": 3,
+        "complex": True,
+        "frequency_dependent": True,
+        "per_port": True,
+    },
+    "power_wave_renormalize_eight_port_real_frequency_dependent_z0": {
+        "ports": 8,
+        "frequencies": 3,
+        "complex": False,
+        "frequency_dependent": True,
+        "per_port": False,
+    },
+}
+RENORMALIZATION_CASE_IDS = tuple(RENORMALIZATION_CASE_SPECS)
+# Retain the original single-case name for the focused legacy assertions
+# below; the table-driven assertions exercise every renormalization case.
 RENORMALIZATION_CASE_ID = (
     "power_wave_renormalize_four_port_complex_per_port_frequency_dependent_z0"
 )
@@ -219,7 +253,9 @@ class MatrixRegistrationAndCheckerTests(unittest.TestCase):
 
     def test_all_matrix_cases_are_registered_individually(self) -> None:
         registered = {case.case_id: case for case in oracle._CASES}
-        self.assertEqual(len(registered), 12)
+        self.assertEqual(
+            len(registered), 3 + len(MATRIX_CASE_SPECS) + len(RENORMALIZATION_CASE_SPECS)
+        )
         self.assertTrue(set(MATRIX_CASE_SPECS).issubset(registered))
         for case_id, spec in MATRIX_CASE_SPECS.items():
             case = registered[case_id]
@@ -343,6 +379,135 @@ class RenormalizationRegistrationAndCheckerTests(unittest.TestCase):
         self.assertEqual(case.comparison, "numeric_output")
         self.assertEqual(case.numeric_output_key, "s_renormalized")
 
+    def test_all_renormalization_cases_are_registered_with_profiles(self) -> None:
+        registered = {case.case_id: case for case in oracle._CASES}
+        expected_paths = {
+            "power_wave_renormalize_one_port_real_scalar_z0": oracle.RENORMALIZE_ONE_PORT_FIXTURE,
+            "power_wave_renormalize_two_port_complex_per_port_constant_z0": oracle.RENORMALIZE_TWO_PORT_FIXTURE,
+            "power_wave_renormalize_four_port_complex_per_port_frequency_dependent_z0": oracle.RENORMALIZE_FOUR_PORT_FIXTURE,
+            "power_wave_renormalize_eight_port_real_frequency_dependent_z0": oracle.RENORMALIZE_EIGHT_PORT_FIXTURE,
+        }
+        self.assertEqual(set(RENORMALIZATION_CASE_SPECS), set(expected_paths))
+        for case_id, spec in RENORMALIZATION_CASE_SPECS.items():
+            with self.subTest(case_id=case_id):
+                case = registered[case_id]
+                self.assertEqual(case.path, expected_paths[case_id])
+                self.assertEqual(case.path.stem, case_id)
+                self.assertEqual(case.comparison, "numeric_output")
+                self.assertEqual(case.numeric_output_key, "s_renormalized")
+
+                fixture = oracle._read_canonical_json(case.path)
+                metadata = fixture["metadata"]
+                data = fixture["data"]
+                self.assertEqual(metadata["case_id"], case_id)
+                self.assertEqual(metadata["operation"], "renormalize_s")
+                self.assertEqual(metadata["numpy_version"], "2.5.1")
+                self.assertEqual(metadata["scikit_rf_version"], "2.0.1")
+                self.assertEqual(metadata["wave_definition"], "power")
+                self.assertGreater(metadata["random_seed"], 0)
+                expected_flags = {
+                    "complex": spec["complex"],
+                    "frequency_dependent": spec["frequency_dependent"],
+                    "per_port": spec["per_port"],
+                    "unit": "ohm",
+                }
+                self.assertEqual(
+                    metadata["reference_impedance"]["source"], expected_flags
+                )
+                self.assertEqual(
+                    metadata["reference_impedance"]["target"], expected_flags
+                )
+                expected_shape = {
+                    "frequency": [spec["frequencies"]],
+                    "s_input": [spec["frequencies"], spec["ports"], spec["ports"]],
+                    "s_renormalized": [
+                        spec["frequencies"],
+                        spec["ports"],
+                        spec["ports"],
+                    ],
+                    "z0_source": [spec["frequencies"], spec["ports"]],
+                    "z0_target": [spec["frequencies"], spec["ports"]],
+                }
+                self.assertEqual(metadata["shape"], expected_shape)
+                self.assertEqual(metadata["tolerance_policy"]["rtol"], 1e-12)
+                self.assertEqual(metadata["tolerance_policy"]["atol"], 1e-12)
+                self.assertIn("binary64", metadata["tolerance_policy"]["justification"])
+
+                frequencies = spec["frequencies"]
+                ports = spec["ports"]
+                self.assertEqual(len(data["frequency_hz"]), frequencies)
+                self.assertEqual(len(data["s_input"]), frequencies)
+                self.assertEqual(len(data["s_renormalized"]), frequencies)
+                self.assertEqual(len(data["z0_source_ohm"]), frequencies)
+                self.assertEqual(len(data["z0_target_ohm"]), frequencies)
+                for key in ("s_input", "s_renormalized"):
+                    self.assertTrue(all(len(matrix) == ports for matrix in data[key]))
+                    self.assertTrue(
+                        all(
+                            all(len(row) == ports for row in matrix)
+                            for matrix in data[key]
+                        )
+                    )
+
+                source_z0 = [
+                    [self._complex(value) for value in row]
+                    for row in data["z0_source_ohm"]
+                ]
+                target_z0 = [
+                    [self._complex(value) for value in row]
+                    for row in data["z0_target_ohm"]
+                ]
+                for z0 in (source_z0, target_z0):
+                    self.assertTrue(all(len(row) == ports for row in z0))
+                    self.assertTrue(
+                        all(
+                            value.real > 0.0
+                            and math.isfinite(value.real)
+                            and math.isfinite(value.imag)
+                            for row in z0
+                            for value in row
+                        )
+                    )
+                    has_imaginary = any(
+                        value.imag != 0.0 for row in z0 for value in row
+                    )
+                    self.assertEqual(has_imaginary, spec["complex"])
+                    if spec["complex"]:
+                        self.assertTrue(
+                            all(
+                                value.imag != 0.0
+                                for row in z0
+                                for value in row
+                            )
+                        )
+                    rows_differ = any(row != z0[0] for row in z0[1:])
+                    self.assertEqual(rows_differ, spec["frequency_dependent"])
+                    ports_differ = any(
+                        value != row[0] for row in z0 for value in row[1:]
+                    )
+                    self.assertEqual(ports_differ, spec["per_port"])
+                self.assertTrue(
+                    all(
+                        abs(source_z0[frequency][port] - target_z0[frequency][port])
+                        > 1.0
+                        for frequency in range(frequencies)
+                        for port in range(ports)
+                    )
+                )
+
+                if ports > 1:
+                    for matrix in data["s_input"]:
+                        values = [
+                            [self._complex(value) for value in row] for row in matrix
+                        ]
+                        self.assertTrue(
+                            any(
+                                values[row][column] != values[column][row]
+                                for row in range(ports)
+                                for column in range(row + 1, ports)
+                            )
+                        )
+
     def test_fixture_schema_and_reference_impedance_profiles(self) -> None:
         metadata = self.fixture["metadata"]
         data = self.fixture["data"]
@@ -422,6 +587,36 @@ class RenormalizationRegistrationAndCheckerTests(unittest.TestCase):
         drifted_output = copy.deepcopy(self.fixture)
         drifted_output["data"]["s_input"][0][0][0]["real"] += 1e-3
         self.assertEqual(self._check_document(drifted_output), 1)
+
+    def test_checker_tolerates_only_computed_output_for_all_cases(self) -> None:
+        registered = {case.case_id: case for case in oracle._CASES}
+        for case_id in RENORMALIZATION_CASE_IDS:
+            with self.subTest(case_id=case_id):
+                case = registered[case_id]
+                fixture = oracle._read_canonical_json(case.path)
+                adjusted = copy.deepcopy(fixture)
+                adjusted["data"]["s_renormalized"][0][0][0]["real"] += 1e-13
+                with tempfile.TemporaryDirectory() as directory:
+                    path = Path(directory) / case.path.name
+                    path.write_bytes(oracle._canonical_bytes(adjusted))
+                    self.assertEqual(
+                        oracle._check_numeric_fixture(
+                            path, fixture, "s_renormalized"
+                        ),
+                        0,
+                    )
+
+                drifted = copy.deepcopy(fixture)
+                drifted["data"]["z0_target_ohm"][0][0]["real"] += 1.0
+                with tempfile.TemporaryDirectory() as directory:
+                    path = Path(directory) / case.path.name
+                    path.write_bytes(oracle._canonical_bytes(drifted))
+                    self.assertEqual(
+                        oracle._check_numeric_fixture(
+                            path, fixture, "s_renormalized"
+                        ),
+                        1,
+                    )
 
 
 if __name__ == "__main__":
