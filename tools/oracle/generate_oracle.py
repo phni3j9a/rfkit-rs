@@ -80,11 +80,29 @@ Z_TO_S_EIGHT_PORT_FIXTURE = (
     / "fixtures"
     / "power_wave_z_to_s_eight_port_complex_per_port_frequency_dependent_z0.json"
 )
-RENORMALIZE_FIXTURE = (
+RENORMALIZE_ONE_PORT_FIXTURE = (
+    Path(__file__).resolve().parent
+    / "fixtures"
+    / "power_wave_renormalize_one_port_real_scalar_z0.json"
+)
+RENORMALIZE_TWO_PORT_FIXTURE = (
+    Path(__file__).resolve().parent
+    / "fixtures"
+    / "power_wave_renormalize_two_port_complex_per_port_constant_z0.json"
+)
+RENORMALIZE_FOUR_PORT_FIXTURE = (
     Path(__file__).resolve().parent
     / "fixtures"
     / "power_wave_renormalize_four_port_complex_per_port_frequency_dependent_z0.json"
 )
+RENORMALIZE_EIGHT_PORT_FIXTURE = (
+    Path(__file__).resolve().parent
+    / "fixtures"
+    / "power_wave_renormalize_eight_port_real_frequency_dependent_z0.json"
+)
+# Keep the original constant as a compatibility alias for callers of the
+# pre-matrix harness.  New registrations use the descriptive per-case names.
+RENORMALIZE_FIXTURE = RENORMALIZE_FOUR_PORT_FIXTURE
 
 S_TO_Z_RTOL = 1e-12
 S_TO_Z_ATOL_OHM = 1e-12
@@ -111,7 +129,13 @@ MATRIX_Z_TO_S_TOLERANCE_JUSTIFICATION = (
     "deterministic matrix case; diagonal-dominance checks keep Z+G away from "
     "singularity while allowing normal cross-language linear-algebra rounding."
 )
-RENORMALIZE_RANDOM_SEED = 20_260_915
+RENORMALIZE_FOUR_PORT_RANDOM_SEED = 20_260_915
+RENORMALIZE_ONE_PORT_RANDOM_SEED = 20_260_916
+RENORMALIZE_TWO_PORT_RANDOM_SEED = 20_260_917
+RENORMALIZE_EIGHT_PORT_RANDOM_SEED = 20_260_918
+# Preserve the old name for code that imported the original single-case
+# generator constant.  The four-port case remains the existing fixture.
+RENORMALIZE_RANDOM_SEED = RENORMALIZE_FOUR_PORT_RANDOM_SEED
 RENORMALIZE_RTOL = 1e-12
 RENORMALIZE_ATOL = 1e-12
 RENORMALIZE_TOLERANCE_JUSTIFICATION = (
@@ -370,6 +394,7 @@ def _assert_renormalization_z0(
     target_z0: Any,
     *,
     expected_shape: tuple[int, int],
+    z0_profile: str,
 ) -> None:
     """Validate the explicit source/target z0 contract for renormalization."""
 
@@ -379,6 +404,7 @@ def _assert_renormalization_z0(
             f"{expected_shape}; got {source_z0.shape} and {target_z0.shape}"
         )
 
+    profile = _matrix_reference_impedance_flags(z0_profile)
     for name, z0 in (("source", source_z0), ("target", target_z0)):
         if not np.isfinite(z0).all():
             raise ValueError(f"renormalization {name} z0 must be finite")
@@ -386,16 +412,29 @@ def _assert_renormalization_z0(
             raise ValueError(
                 f"renormalization {name} z0 must have positive real parts"
             )
-        if (z0.imag == 0.0).any():
+
+        has_imaginary = (z0.imag != 0.0).any()
+        if has_imaginary != profile["complex"]:
+            raise ValueError(
+                f"renormalization {name} z0 complex flag does not match data"
+            )
+        if profile["complex"] and (z0.imag == 0.0).any():
             raise ValueError(
                 f"renormalization {name} z0 must have non-zero imaginary parts"
             )
-        if np.all(z0[1:] == z0[0]):
+
+        rows_differ = not np.all(z0[1:] == z0[0])
+        if rows_differ != profile["frequency_dependent"]:
             raise ValueError(
-                f"renormalization {name} z0 must vary by frequency"
+                f"renormalization {name} z0 frequency-dependence flag does not "
+                "match data"
             )
-        if np.all(z0[:, 1:] == z0[:, :1]):
-            raise ValueError(f"renormalization {name} z0 must vary by port")
+
+        ports_differ = not np.all(z0[:, 1:] == z0[:, :1])
+        if ports_differ != profile["per_port"]:
+            raise ValueError(
+                f"renormalization {name} z0 per-port flag does not match data"
+            )
 
     # Keep the two reference-impedance sets materially separated at every
     # frequency/port so this is a genuine renormalization rather than an
@@ -407,50 +446,134 @@ def _assert_renormalization_z0(
         )
 
 
-def _renormalize_inputs(np: Any) -> tuple[Any, Any, Any, Any]:
-    """Build the deterministic S/source-z0/target-z0 renormalization input."""
+def _renormalize_inputs(
+    np: Any,
+    *,
+    nfreq: int,
+    nports: int,
+    seed: int,
+    z0_profile: str,
+) -> tuple[Any, Any, Any, Any, Any, Any]:
+    """Build one deterministic S/source-z0/target-z0 renormalization case.
 
-    nfreq = 3
-    nports = 4
-    frequency_hz = np.array([0.91e9, 1.37e9, 2.11e9], dtype=np.float64)
+    The first four returned values are the frequency, S matrix, and the
+    constructor values for source and target ``z0``.  The last two values are
+    their normalized frequency-major arrays used by the generation-time
+    contract checks.  Keeping the constructor values separate lets the scalar
+    and per-port profiles exercise the corresponding public Network input
+    forms while retaining one stable fixture shape after read-back.
+    """
 
-    # Use a local Generator so this case's recorded seed is independent of
+    if nfreq == 3:
+        # Keep the original four-port fixture's frequency samples byte-for-byte
+        # stable while using the same deterministic samples for the 8-port
+        # profile.  Other cases use the same progression with their own count.
+        frequency_hz = np.array([0.91e9, 1.37e9, 2.11e9], dtype=np.float64)
+    else:
+        frequency_hz = np.array(
+            [0.91e9 + 0.46e9 * index for index in range(nfreq)],
+            dtype=np.float64,
+        )
+
+    # Use a local Generator so each case's recorded seed is independent of
     # every other fixture and does not mutate NumPy's process-global RNG.
-    rng = np.random.default_rng(RENORMALIZE_RANDOM_SEED)
+    rng = np.random.default_rng(seed)
+    scale = 0.018 if nports >= 8 else 0.032
     s = (
-        rng.normal(loc=0.0, scale=0.032, size=(nfreq, nports, nports))
-        + 1j * rng.normal(loc=0.0, scale=0.032, size=(nfreq, nports, nports))
+        rng.normal(loc=0.0, scale=scale, size=(nfreq, nports, nports))
+        + 1j * rng.normal(loc=0.0, scale=scale, size=(nfreq, nports, nports))
     ).astype(np.complex128)
     _assert_non_symmetric(np, s, name="renormalization S input")
     _assert_s_conditioning(s)
 
-    # Keep both reference-impedance arrays explicit and frequency-major.  All
-    # entries have positive real parts and non-zero imaginary parts; each set
-    # varies by both frequency and port, and target values are materially
-    # different from source values.
-    source_z0 = np.array(
-        [
-            [42.0 + 1.25j, 49.5 - 2.0j, 63.0 + 3.25j, 78.0 - 1.5j],
-            [44.0 + 1.6j, 52.0 - 1.7j, 66.5 + 3.6j, 80.5 - 1.1j],
-            [46.0 + 1.95j, 54.5 - 1.4j, 70.0 + 3.95j, 83.0 - 0.7j],
-        ],
-        dtype=np.complex128,
-    )
-    target_z0 = np.array(
-        [
-            [58.5 - 2.75j, 43.0 + 1.45j, 72.5 - 3.8j, 91.0 + 2.25j],
-            [61.0 - 2.35j, 46.0 + 1.85j, 76.0 - 3.35j, 95.0 + 2.7j],
-            [63.5 - 1.95j, 49.0 + 2.25j, 79.5 - 2.9j, 99.0 + 3.15j],
-        ],
-        dtype=np.complex128,
-    )
+    frequency_index = np.arange(nfreq, dtype=np.float64)[:, None]
+    port_index = np.arange(nports, dtype=np.float64)[None, :]
+    if z0_profile == "real_scalar":
+        source_constructor_z0 = 47.25
+        target_constructor_z0 = 86.5
+        source_z0 = np.full((nfreq, nports), source_constructor_z0, dtype=np.complex128)
+        target_z0 = np.full((nfreq, nports), target_constructor_z0, dtype=np.complex128)
+    elif z0_profile == "complex_per_port_constant":
+        source_constructor_z0 = (
+            42.0
+            + 4.5 * np.arange(nports, dtype=np.float64)
+            + 1j * (1.2 + 0.2 * np.arange(nports, dtype=np.float64))
+        ).astype(np.complex128)
+        target_constructor_z0 = (
+            65.0
+            + 3.0 * np.arange(nports, dtype=np.float64)
+            + 1j * (-2.5 + 0.4 * np.arange(nports, dtype=np.float64))
+        ).astype(np.complex128)
+        source_z0 = np.broadcast_to(
+            source_constructor_z0[None, :], (nfreq, nports)
+        ).copy()
+        target_z0 = np.broadcast_to(
+            target_constructor_z0[None, :], (nfreq, nports)
+        ).copy()
+    elif z0_profile == "real_frequency_dependent":
+        source_frequency_z0 = 44.5 + 2.2 * frequency_index[:, 0]
+        target_frequency_z0 = 72.0 + 2.7 * frequency_index[:, 0]
+        source_constructor_z0 = np.broadcast_to(
+            source_frequency_z0[:, None], (nfreq, nports)
+        ).copy()
+        target_constructor_z0 = np.broadcast_to(
+            target_frequency_z0[:, None], (nfreq, nports)
+        ).copy()
+        source_z0 = source_constructor_z0.astype(np.complex128)
+        target_z0 = target_constructor_z0.astype(np.complex128)
+    elif z0_profile == "complex_per_port_frequency_dependent":
+        if (nfreq, nports) == (3, 4):
+            # Preserve the original Issue #20 fixture's source and target
+            # arrays exactly; this remains the canonical 4-port case.
+            source_z0 = np.array(
+                [
+                    [42.0 + 1.25j, 49.5 - 2.0j, 63.0 + 3.25j, 78.0 - 1.5j],
+                    [44.0 + 1.6j, 52.0 - 1.7j, 66.5 + 3.6j, 80.5 - 1.1j],
+                    [46.0 + 1.95j, 54.5 - 1.4j, 70.0 + 3.95j, 83.0 - 0.7j],
+                ],
+                dtype=np.complex128,
+            )
+            target_z0 = np.array(
+                [
+                    [58.5 - 2.75j, 43.0 + 1.45j, 72.5 - 3.8j, 91.0 + 2.25j],
+                    [61.0 - 2.35j, 46.0 + 1.85j, 76.0 - 3.35j, 95.0 + 2.7j],
+                    [63.5 - 1.95j, 49.0 + 2.25j, 79.5 - 2.9j, 99.0 + 3.15j],
+                ],
+                dtype=np.complex128,
+            )
+        else:
+            source_z0 = (
+                40.0
+                + 3.25 * port_index
+                + 1.5 * frequency_index
+                + 1j * (1.0 + 0.2 * port_index + 0.1 * frequency_index)
+            ).astype(np.complex128)
+            target_z0 = (
+                68.0
+                + 2.25 * port_index
+                + 1.7 * frequency_index
+                + 1j * (-2.0 + 0.15 * port_index + 0.2 * frequency_index)
+            ).astype(np.complex128)
+        source_constructor_z0 = source_z0
+        target_constructor_z0 = target_z0
+    else:
+        raise ValueError(f"unknown z0 profile: {z0_profile!r}")
+
     _assert_renormalization_z0(
         np,
         source_z0,
         target_z0,
         expected_shape=(nfreq, nports),
+        z0_profile=z0_profile,
     )
-    return frequency_hz, s, source_z0, target_z0
+    return (
+        frequency_hz,
+        s,
+        source_constructor_z0,
+        target_constructor_z0,
+        source_z0,
+        target_z0,
+    )
 
 
 def _matrix_z_inputs(
@@ -898,15 +1021,38 @@ def _matrix_z_to_s_fixture(
     }
 
 
-def _renormalize_fixture(np: Any, skrf: Any) -> dict[str, Any]:
-    """Build the S renormalization fixture through public scikit-rf APIs."""
+def _renormalize_fixture(
+    np: Any,
+    skrf: Any,
+    *,
+    case_id: str = (
+        "power_wave_renormalize_four_port_complex_per_port_frequency_dependent_z0"
+    ),
+    nfreq: int = 3,
+    nports: int = 4,
+    seed: int = RENORMALIZE_FOUR_PORT_RANDOM_SEED,
+    z0_profile: str = "complex_per_port_frequency_dependent",
+) -> dict[str, Any]:
+    """Build one S-renormalization fixture through public scikit-rf APIs."""
 
-    case_id = "power_wave_renormalize_four_port_complex_per_port_frequency_dependent_z0"
-    frequency_hz, source_s, source_z0, target_z0 = _renormalize_inputs(np)
+    (
+        frequency_hz,
+        source_s,
+        source_constructor_z0,
+        target_constructor_z0,
+        _source_z0,
+        _target_z0,
+    ) = _renormalize_inputs(
+        np,
+        nfreq=nfreq,
+        nports=nports,
+        seed=seed,
+        z0_profile=z0_profile,
+    )
     network = skrf.Network(
         f=frequency_hz,
         s=source_s,
-        z0=source_z0,
+        z0=source_constructor_z0,
         s_def="power",
         name=case_id,
     )
@@ -919,7 +1065,7 @@ def _renormalize_fixture(np: Any, skrf: Any) -> dict[str, Any]:
     frequency = np.asarray(network.f, dtype=np.float64)
     network_s_input = np.asarray(network.s, dtype=np.complex128)
     network_z0_source = np.asarray(network.z0, dtype=np.complex128)
-    network.renormalize(target_z0, s_def="power")
+    network.renormalize(target_constructor_z0, s_def="power")
     network_s_renormalized = np.asarray(network.s, dtype=np.complex128)
     network_z0_target = np.asarray(network.z0, dtype=np.complex128)
 
@@ -931,18 +1077,13 @@ def _renormalize_fixture(np: Any, skrf: Any) -> dict[str, Any]:
         "z0_target": list(network_z0_target.shape),
     }
 
-    reference_impedance_flags = {
-        "complex": True,
-        "frequency_dependent": True,
-        "per_port": True,
-        "unit": "ohm",
-    }
+    reference_impedance_flags = _matrix_reference_impedance_flags(z0_profile)
     return {
         "metadata": {
             "case_id": case_id,
             "numpy_version": np.__version__,
             "operation": "renormalize_s",
-            "random_seed": RENORMALIZE_RANDOM_SEED,
+            "random_seed": seed,
             "reference_impedance": {
                 "source": dict(reference_impedance_flags),
                 "target": dict(reference_impedance_flags),
@@ -971,6 +1112,64 @@ def _renormalize_fixture(np: Any, skrf: Any) -> dict[str, Any]:
             "z0_target_ohm": _complex_array(network_z0_target),
         },
     }
+
+
+def _renormalize_one_port_real_scalar_z0_fixture(
+    np: Any, skrf: Any
+) -> dict[str, Any]:
+    return _renormalize_fixture(
+        np,
+        skrf,
+        case_id="power_wave_renormalize_one_port_real_scalar_z0",
+        nfreq=3,
+        nports=1,
+        seed=RENORMALIZE_ONE_PORT_RANDOM_SEED,
+        z0_profile="real_scalar",
+    )
+
+
+def _renormalize_two_port_complex_per_port_constant_z0_fixture(
+    np: Any, skrf: Any
+) -> dict[str, Any]:
+    return _renormalize_fixture(
+        np,
+        skrf,
+        case_id="power_wave_renormalize_two_port_complex_per_port_constant_z0",
+        nfreq=4,
+        nports=2,
+        seed=RENORMALIZE_TWO_PORT_RANDOM_SEED,
+        z0_profile="complex_per_port_constant",
+    )
+
+
+def _renormalize_four_port_complex_per_port_frequency_dependent_z0_fixture(
+    np: Any, skrf: Any
+) -> dict[str, Any]:
+    return _renormalize_fixture(
+        np,
+        skrf,
+        case_id=(
+            "power_wave_renormalize_four_port_complex_per_port_frequency_dependent_z0"
+        ),
+        nfreq=3,
+        nports=4,
+        seed=RENORMALIZE_FOUR_PORT_RANDOM_SEED,
+        z0_profile="complex_per_port_frequency_dependent",
+    )
+
+
+def _renormalize_eight_port_real_frequency_dependent_z0_fixture(
+    np: Any, skrf: Any
+) -> dict[str, Any]:
+    return _renormalize_fixture(
+        np,
+        skrf,
+        case_id="power_wave_renormalize_eight_port_real_frequency_dependent_z0",
+        nfreq=3,
+        nports=8,
+        seed=RENORMALIZE_EIGHT_PORT_RANDOM_SEED,
+        z0_profile="real_frequency_dependent",
+    )
 
 
 def _s_to_z_one_port_real_scalar_z0_fixture(np: Any, skrf: Any) -> dict[str, Any]:
@@ -1159,9 +1358,30 @@ _CASES = (
         "s",
     ),
     _OracleCase(
+        "power_wave_renormalize_one_port_real_scalar_z0",
+        RENORMALIZE_ONE_PORT_FIXTURE,
+        _renormalize_one_port_real_scalar_z0_fixture,
+        "numeric_output",
+        "s_renormalized",
+    ),
+    _OracleCase(
+        "power_wave_renormalize_two_port_complex_per_port_constant_z0",
+        RENORMALIZE_TWO_PORT_FIXTURE,
+        _renormalize_two_port_complex_per_port_constant_z0_fixture,
+        "numeric_output",
+        "s_renormalized",
+    ),
+    _OracleCase(
         "power_wave_renormalize_four_port_complex_per_port_frequency_dependent_z0",
-        RENORMALIZE_FIXTURE,
-        _renormalize_fixture,
+        RENORMALIZE_FOUR_PORT_FIXTURE,
+        _renormalize_four_port_complex_per_port_frequency_dependent_z0_fixture,
+        "numeric_output",
+        "s_renormalized",
+    ),
+    _OracleCase(
+        "power_wave_renormalize_eight_port_real_frequency_dependent_z0",
+        RENORMALIZE_EIGHT_PORT_FIXTURE,
+        _renormalize_eight_port_real_frequency_dependent_z0_fixture,
         "numeric_output",
         "s_renormalized",
     ),

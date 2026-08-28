@@ -5,7 +5,7 @@ It generates checked-in JSON fixtures through `scikit-rf==2.0.1`, with
 `numpy==2.5.1` pinned directly. scikit-rf is an oracle for numerical behavior
 here, not the public API specification for the Rust library. The harness keeps
 the original three-port fixture and registers an additional eight-case
-S↔Z power-wave conformance matrix plus one S renormalization case.
+S↔Z power-wave conformance matrix plus a four-case S renormalization matrix.
 
 ## Clean-checkout setup
 
@@ -25,7 +25,7 @@ fails clearly instead of silently regenerating a fixture with another version.
 
 ## Generate and verify
 
-The harness has twelve registered canonical cases. The original three cases
+The harness has fifteen registered canonical cases. The original three cases
 remain unchanged:
 
 - `three_port_complex_z0` — the representative four-frequency, three-port
@@ -58,17 +58,21 @@ The full case ids are prefixed with `power_wave_s_to_z_` or
 `power_wave_z_to_s_`, and the fixture filenames use the same id with a
 `.json` suffix.
 
-The S renormalization case is registered separately:
+The S renormalization cases are registered separately:
 
 | Operation | Ports | Reference-impedance profile | Case id |
 | --- | ---: | --- | --- |
+| S renormalization | 1 | real, scalar/constant-equivalent source and target z0 | `power_wave_renormalize_one_port_real_scalar_z0` |
+| S renormalization | 2 | complex, per-port, constant-over-frequency source and target z0 | `power_wave_renormalize_two_port_complex_per_port_constant_z0` |
 | S renormalization | 4 | complex, per-port, frequency-dependent source and target z0 | `power_wave_renormalize_four_port_complex_per_port_frequency_dependent_z0` |
+| S renormalization | 8 | real, frequency-dependent, same across ports source and target z0 | `power_wave_renormalize_eight_port_real_frequency_dependent_z0` |
 
-Its source and target reference impedances are explicit `(frequency, port)`
-arrays, and the target values are materially different from the source values.
-The expected `s_renormalized` output is obtained through the public
+Each case records explicit source and target reference impedances in the
+frequency-major `(frequency, port)` representation after Network read-back.
+The source and target values are materially different at every frequency and
+port. The expected `s_renormalized` output is obtained through the public
 `Network.renormalize(..., s_def="power")` operation followed by the public
-`Network.s` property; the target z0 is read back through `Network.z0`.
+`Network.s` property; source and target z0 are read back through `Network.z0`.
 
 All registered cases are checked by default against a fresh scikit-rf run; the
 default command checks every case:
@@ -122,10 +126,11 @@ dominant and pass the corresponding bound for `Z+G`. These checks are
 generation-time guards only: platform-sensitive condition-number values are
 not recorded in the schema. Matrix outputs are likewise obtained only from
 public scikit-rf `Network.z` or `Network.from_z(..., s_def="power").s`.
-The renormalization case uses its own recorded local RNG seed for a modest,
-non-symmetric S input and applies the same `I-S` guard. Both source and target
-z0 arrays are checked for finite positive real parts, non-zero imaginary parts,
-frequency variation, port variation, and material separation.
+Each renormalization case uses its own recorded local RNG seed for a modest
+S input (non-symmetric for multiport cases) and applies the same `I-S` guard.
+Both source and target z0 values are checked for finite positive real parts,
+and their complex/frequency-dependent/per-port metadata flags are checked
+against the generated data. Every source/target pair is materially separated.
 
 The JSON representation is deliberately machine-readable and byte-stable:
 

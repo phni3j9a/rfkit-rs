@@ -1,0 +1,155 @@
+{
+  "data": {
+    "frequency_hz": [
+      910000000.0,
+      1370000000.0,
+      2110000000.0
+    ],
+    "s_input": [
+      [
+        [
+          {
+            "imag": -0.017687491429371507,
+            "real": 0.009403939175622534
+          }
+        ]
+      ],
+      [
+        [
+          {
+            "imag": 0.003203245094750026,
+            "real": -0.04100831758947305
+          }
+        ]
+      ],
+      [
+        [
+          {
+            "imag": 0.023977815763138854,
+            "real": 0.0011765254832848003
+          }
+        ]
+      ]
+    ],
+    "s_renormalized": [
+      [
+        [
+          {
+            "imag": -0.016253433987615532,
+            "real": -0.2849246641508244
+          }
+        ]
+      ],
+      [
+        [
+          {
+            "imag": 0.002858181034342268,
+            "real": -0.33049173909476387
+          }
+        ]
+      ],
+      [
+        [
+          {
+            "imag": 0.021926957432042177,
+            "real": -0.29253670849381586
+          }
+        ]
+      ]
+    ],
+    "z0_source_ohm": [
+      [
+        {
+          "imag": 0.0,
+          "real": 47.25
+        }
+      ],
+      [
+        {
+          "imag": 0.0,
+          "real": 47.25
+        }
+      ],
+      [
+        {
+          "imag": 0.0,
+          "real": 47.25
+        }
+      ]
+    ],
+    "z0_target_ohm": [
+      [
+        {
+          "imag": 0.0,
+          "real": 86.5
+        }
+      ],
+      [
+        {
+          "imag": 0.0,
+          "real": 86.5
+        }
+      ],
+      [
+        {
+          "imag": 0.0,
+          "real": 86.5
+        }
+      ]
+    ]
+  },
+  "metadata": {
+    "case_id": "power_wave_renormalize_one_port_real_scalar_z0",
+    "numpy_version": "2.5.1",
+    "operation": "renormalize_s",
+    "random_seed": 20260916,
+    "reference_impedance": {
+      "source": {
+        "complex": false,
+        "frequency_dependent": false,
+        "per_port": false,
+        "unit": "ohm"
+      },
+      "target": {
+        "complex": false,
+        "frequency_dependent": false,
+        "per_port": false,
+        "unit": "ohm"
+      }
+    },
+    "schema": "rfkit-rs.oracle.fixture",
+    "schema_version": 1,
+    "scikit_rf_version": "2.0.1",
+    "shape": {
+      "frequency": [
+        3
+      ],
+      "s_input": [
+        3,
+        1,
+        1
+      ],
+      "s_renormalized": [
+        3,
+        1,
+        1
+      ],
+      "z0_source": [
+        3,
+        1
+      ],
+      "z0_target": [
+        3,
+        1
+      ]
+    },
+    "tolerance_policy": {
+      "atol": 1e-12,
+      "comparison": "abs(actual-expected) <= atol + rtol*abs(expected)",
+      "justification": "Strict binary64 tolerance for a well-conditioned, modest-magnitude deterministic renormalization case; the source S input passes a conservative I-S diagonal-dominance guard while allowing normal cross-language linear-algebra rounding.",
+      "regeneration": "canonical UTF-8 JSON serialization; s_renormalized is checked with the recorded numeric tolerance",
+      "rtol": 1e-12
+    },
+    "wave_definition": "power"
+  }
+}

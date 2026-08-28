@@ -1,0 +1,328 @@
+{
+  "data": {
+    "frequency_hz": [
+      910000000.0,
+      1370000000.0,
+      1830000000.0,
+      2290000000.0
+    ],
+    "s_input": [
+      [
+        [
+          {
+            "imag": -0.020124685546714746,
+            "real": 0.00982430195332762
+          },
+          {
+            "imag": 0.019164979579553498,
+            "real": 0.026870828578310496
+          }
+        ],
+        [
+          {
+            "imag": 0.0034821303635468306,
+            "real": 0.012574385288936549
+          },
+          {
+            "imag": 0.01626527093342527,
+            "real": 0.03552754813308849
+          }
+        ]
+      ],
+      [
+        [
+          {
+            "imag": 0.01254140884589451,
+            "real": 0.019605810591886406
+          },
+          {
+            "imag": -0.02363766469575994,
+            "real": 0.06332601585338068
+          }
+        ],
+        [
+          {
+            "imag": 0.02662040558650492,
+            "real": -0.023294440405055166
+          },
+          {
+            "imag": 0.0342676154506141,
+            "real": 0.031830622992825706
+          }
+        ]
+      ],
+      [
+        [
+          {
+            "imag": -0.03632556689030741,
+            "real": -0.023122160723048926
+          },
+          {
+            "imag": -0.024151144900847583,
+            "real": 0.008356220103973666
+          }
+        ],
+        [
+          {
+            "imag": -0.020090179634459637,
+            "real": -0.01887379329287644
+          },
+          {
+            "imag": 0.025520608120735352,
+            "real": -0.02562830930726588
+          }
+        ]
+      ],
+      [
+        [
+          {
+            "imag": 0.009295592075786889,
+            "real": -0.03507948898405371
+          },
+          {
+            "imag": -0.02298621121382083,
+            "real": 0.021954774003641937
+          }
+        ],
+        [
+          {
+            "imag": 0.03126687094392137,
+            "real": -0.01738600710245246
+          },
+          {
+            "imag": 0.0338749780579514,
+            "real": 0.03203883004382609
+          }
+        ]
+      ]
+    ],
+    "s_renormalized": [
+      [
+        [
+          {
+            "imag": -0.06046223356615272,
+            "real": -0.20285626467676554
+          },
+          {
+            "imag": 0.020116551403886143,
+            "real": 0.024761463145478124
+          }
+        ],
+        [
+          {
+            "imag": 0.004121038680914444,
+            "real": 0.0119196676309613
+          },
+          {
+            "imag": -0.018266347307174687,
+            "real": -0.15318235225446916
+          }
+        ]
+      ],
+      [
+        [
+          {
+            "imag": -0.02823407869816187,
+            "real": -0.19577616053350408
+          },
+          {
+            "imag": -0.018365530697504604,
+            "real": 0.06288816293408393
+          }
+        ],
+        [
+          {
+            "imag": 0.024083343891662688,
+            "real": -0.024402619910814115
+          },
+          {
+            "imag": -0.0005430788820423884,
+            "real": -0.15821952238679887
+          }
+        ]
+      ],
+      [
+        [
+          {
+            "imag": -0.07759200807384077,
+            "real": -0.2333369667539833
+          },
+          {
+            "imag": -0.022359149915994452,
+            "real": 0.00936113240411117
+          }
+        ],
+        [
+          {
+            "imag": -0.020151287717727694,
+            "real": -0.016658578271876234
+          },
+          {
+            "imag": -0.013401343513221713,
+            "real": -0.2129654245611536
+          }
+        ]
+      ],
+      [
+        [
+          {
+            "imag": -0.03539081153270688,
+            "real": -0.24715449209747922
+          },
+          {
+            "imag": -0.020408674612807615,
+            "real": 0.022594423889109632
+          }
+        ],
+        [
+          {
+            "imag": 0.028641229236931676,
+            "real": -0.01881434823933021
+          },
+          {
+            "imag": -0.0011716882848925212,
+            "real": -0.1577498924950558
+          }
+        ]
+      ]
+    ],
+    "z0_source_ohm": [
+      [
+        {
+          "imag": 1.2,
+          "real": 42.0
+        },
+        {
+          "imag": 1.4,
+          "real": 46.5
+        }
+      ],
+      [
+        {
+          "imag": 1.2,
+          "real": 42.0
+        },
+        {
+          "imag": 1.4,
+          "real": 46.5
+        }
+      ],
+      [
+        {
+          "imag": 1.2,
+          "real": 42.0
+        },
+        {
+          "imag": 1.4,
+          "real": 46.5
+        }
+      ],
+      [
+        {
+          "imag": 1.2,
+          "real": 42.0
+        },
+        {
+          "imag": 1.4,
+          "real": 46.5
+        }
+      ]
+    ],
+    "z0_target_ohm": [
+      [
+        {
+          "imag": -2.5,
+          "real": 65.0
+        },
+        {
+          "imag": -2.1,
+          "real": 68.0
+        }
+      ],
+      [
+        {
+          "imag": -2.5,
+          "real": 65.0
+        },
+        {
+          "imag": -2.1,
+          "real": 68.0
+        }
+      ],
+      [
+        {
+          "imag": -2.5,
+          "real": 65.0
+        },
+        {
+          "imag": -2.1,
+          "real": 68.0
+        }
+      ],
+      [
+        {
+          "imag": -2.5,
+          "real": 65.0
+        },
+        {
+          "imag": -2.1,
+          "real": 68.0
+        }
+      ]
+    ]
+  },
+  "metadata": {
+    "case_id": "power_wave_renormalize_two_port_complex_per_port_constant_z0",
+    "numpy_version": "2.5.1",
+    "operation": "renormalize_s",
+    "random_seed": 20260917,
+    "reference_impedance": {
+      "source": {
+        "complex": true,
+        "frequency_dependent": false,
+        "per_port": true,
+        "unit": "ohm"
+      },
+      "target": {
+        "complex": true,
+        "frequency_dependent": false,
+        "per_port": true,
+        "unit": "ohm"
+      }
+    },
+    "schema": "rfkit-rs.oracle.fixture",
+    "schema_version": 1,
+    "scikit_rf_version": "2.0.1",
+    "shape": {
+      "frequency": [
+        4
+      ],
+      "s_input": [
+        4,
+        2,
+        2
+      ],
+      "s_renormalized": [
+        4,
+        2,
+        2
+      ],
+      "z0_source": [
+        4,
+        2
+      ],
+      "z0_target": [
+        4,
+        2
+      ]
+    },
+    "tolerance_policy": {
+      "atol": 1e-12,
+      "comparison": "abs(actual-expected) <= atol + rtol*abs(expected)",
+      "justification": "Strict binary64 tolerance for a well-conditioned, modest-magnitude deterministic renormalization case; the source S input passes a conservative I-S diagonal-dominance guard while allowing normal cross-language linear-algebra rounding.",
+      "regeneration": "canonical UTF-8 JSON serialization; s_renormalized is checked with the recorded numeric tolerance",
+      "rtol": 1e-12
+    },
+    "wave_definition": "power"
+  }
+}

@@ -500,9 +500,32 @@ mod tests {
         include_str!("../../../tools/oracle/fixtures/power_wave_s_to_z_three_port_complex_z0.json");
     const Z_TO_S_FIXTURE_JSON: &str =
         include_str!("../../../tools/oracle/fixtures/power_wave_z_to_s_three_port_complex_z0.json");
-    const RENORMALIZE_FIXTURE_JSON: &str = include_str!(
-        "../../../tools/oracle/fixtures/power_wave_renormalize_four_port_complex_per_port_frequency_dependent_z0.json"
-    );
+    const RENORMALIZE_FIXTURES: &[(&str, &str)] = &[
+        (
+            "power_wave_renormalize_one_port_real_scalar_z0",
+            include_str!(
+                "../../../tools/oracle/fixtures/power_wave_renormalize_one_port_real_scalar_z0.json"
+            ),
+        ),
+        (
+            "power_wave_renormalize_two_port_complex_per_port_constant_z0",
+            include_str!(
+                "../../../tools/oracle/fixtures/power_wave_renormalize_two_port_complex_per_port_constant_z0.json"
+            ),
+        ),
+        (
+            "power_wave_renormalize_four_port_complex_per_port_frequency_dependent_z0",
+            include_str!(
+                "../../../tools/oracle/fixtures/power_wave_renormalize_four_port_complex_per_port_frequency_dependent_z0.json"
+            ),
+        ),
+        (
+            "power_wave_renormalize_eight_port_real_frequency_dependent_z0",
+            include_str!(
+                "../../../tools/oracle/fixtures/power_wave_renormalize_eight_port_real_frequency_dependent_z0.json"
+            ),
+        ),
+    ];
     const MATRIX_S_TO_Z_FIXTURES: &[(&str, &str)] = &[
         (
             "power_wave_s_to_z_one_port_real_scalar_z0",
@@ -921,6 +944,55 @@ mod tests {
         }
     }
 
+    #[derive(Debug, Clone, Copy)]
+    struct RenormalizationCaseSpec {
+        nfreq: usize,
+        nport: usize,
+        complex_z0: bool,
+        frequency_dependent_z0: bool,
+        per_port_z0: bool,
+    }
+
+    fn renormalization_case_spec(case_id: &str) -> RenormalizationCaseSpec {
+        match case_id {
+            "power_wave_renormalize_one_port_real_scalar_z0" => RenormalizationCaseSpec {
+                nfreq: 3,
+                nport: 1,
+                complex_z0: false,
+                frequency_dependent_z0: false,
+                per_port_z0: false,
+            },
+            "power_wave_renormalize_two_port_complex_per_port_constant_z0" => {
+                RenormalizationCaseSpec {
+                    nfreq: 4,
+                    nport: 2,
+                    complex_z0: true,
+                    frequency_dependent_z0: false,
+                    per_port_z0: true,
+                }
+            }
+            "power_wave_renormalize_four_port_complex_per_port_frequency_dependent_z0" => {
+                RenormalizationCaseSpec {
+                    nfreq: 3,
+                    nport: 4,
+                    complex_z0: true,
+                    frequency_dependent_z0: true,
+                    per_port_z0: true,
+                }
+            }
+            "power_wave_renormalize_eight_port_real_frequency_dependent_z0" => {
+                RenormalizationCaseSpec {
+                    nfreq: 3,
+                    nport: 8,
+                    complex_z0: false,
+                    frequency_dependent_z0: true,
+                    per_port_z0: false,
+                }
+            }
+            _ => panic!("unexpected power-wave renormalization case id: {case_id}"),
+        }
+    }
+
     fn matrix_parameter_array(
         values: &[Vec<Vec<ComplexValue>>],
         nfreq: usize,
@@ -939,6 +1011,124 @@ mod tests {
         Array2::from_shape_fn((nfreq, nport), |(frequency, port)| {
             matrix_complex(&values[frequency][port])
         })
+    }
+
+    fn validate_renormalization_fixture_contract(
+        fixture: &RenormalizationFixtureDocument,
+        expected_case_id: &str,
+        spec: RenormalizationCaseSpec,
+    ) -> (f64, f64) {
+        let metadata = &fixture.metadata;
+        let data = &fixture.data;
+        assert_eq!(metadata.case_id, expected_case_id);
+        assert_eq!(metadata.operation, "renormalize_s");
+        assert_eq!(metadata.wave_definition, "power");
+        assert_eq!(metadata.schema, "rfkit-rs.oracle.fixture");
+        assert_eq!(metadata.schema_version, 1);
+        assert_eq!(metadata.numpy_version, "2.5.1");
+        assert_eq!(metadata.scikit_rf_version, "2.0.1");
+        assert!(metadata.random_seed > 0);
+
+        for reference_impedance in [
+            &metadata.reference_impedance.source,
+            &metadata.reference_impedance.target,
+        ] {
+            assert_eq!(reference_impedance.complex, spec.complex_z0);
+            assert_eq!(
+                reference_impedance.frequency_dependent,
+                spec.frequency_dependent_z0
+            );
+            assert_eq!(reference_impedance.per_port, spec.per_port_z0);
+            assert_eq!(reference_impedance.unit, "ohm");
+        }
+
+        assert_eq!(metadata.shape.frequency, vec![spec.nfreq]);
+        assert_eq!(
+            metadata.shape.s_input,
+            vec![spec.nfreq, spec.nport, spec.nport]
+        );
+        assert_eq!(
+            metadata.shape.s_renormalized,
+            vec![spec.nfreq, spec.nport, spec.nport]
+        );
+        assert_eq!(metadata.shape.z0_source, vec![spec.nfreq, spec.nport]);
+        assert_eq!(metadata.shape.z0_target, vec![spec.nfreq, spec.nport]);
+
+        let policy = &metadata.tolerance_policy;
+        assert_eq!(policy.rtol, 1e-12);
+        assert_eq!(policy.atol, 1e-12);
+        assert_eq!(
+            policy.comparison,
+            "abs(actual-expected) <= atol + rtol*abs(expected)"
+        );
+        assert!(!policy.justification.is_empty());
+        assert!(!policy.regeneration.is_empty());
+
+        assert_eq!(data.frequency_hz.len(), spec.nfreq);
+        assert!(data.frequency_hz.iter().all(|value| value.is_finite()));
+        for matrix in [&data.s_input, &data.s_renormalized] {
+            assert_eq!(matrix.len(), spec.nfreq);
+            for frequency_matrix in matrix {
+                assert_eq!(frequency_matrix.len(), spec.nport);
+                assert!(frequency_matrix.iter().all(|row| row.len() == spec.nport));
+                assert!(
+                    frequency_matrix
+                        .iter()
+                        .flatten()
+                        .all(|value| { value.real.is_finite() && value.imag.is_finite() })
+                );
+            }
+        }
+
+        let source_z0 = matrix_z0_array(&data.z0_source_ohm, spec.nfreq, spec.nport);
+        let target_z0 = matrix_z0_array(&data.z0_target_ohm, spec.nfreq, spec.nport);
+        for z0 in [&source_z0, &target_z0] {
+            assert_eq!(z0.dim(), (spec.nfreq, spec.nport));
+            assert!(z0.iter().all(|value| {
+                value.re.is_finite()
+                    && value.im.is_finite()
+                    && value.re > 0.0
+                    && if spec.complex_z0 {
+                        value.im != 0.0
+                    } else {
+                        value.im == 0.0
+                    }
+            }));
+            let has_imaginary = z0.iter().any(|value| value.im != 0.0);
+            assert_eq!(has_imaginary, spec.complex_z0);
+
+            let rows_differ = (1..spec.nfreq).any(|frequency| {
+                (0..spec.nport).any(|port| z0[[frequency, port]] != z0[[0, port]])
+            });
+            assert_eq!(rows_differ, spec.frequency_dependent_z0);
+
+            let ports_differ = (0..spec.nfreq).any(|frequency| {
+                (1..spec.nport).any(|port| z0[[frequency, port]] != z0[[frequency, 0]])
+            });
+            assert_eq!(ports_differ, spec.per_port_z0);
+        }
+        assert!(
+            source_z0
+                .iter()
+                .zip(target_z0.iter())
+                .all(|(source, target)| (*source - *target).norm() > 1.0)
+        );
+
+        if spec.nport > 1 {
+            for (frequency, matrix) in data.s_input.iter().enumerate() {
+                assert!(
+                    (0..spec.nport).any(|row| {
+                        ((row + 1)..spec.nport).any(|column| {
+                            matrix[row][column].real != matrix[column][row].real
+                                || matrix[row][column].imag != matrix[column][row].imag
+                        })
+                    }),
+                    "{expected_case_id} S input is symmetric at frequency {frequency}"
+                );
+            }
+        }
+
+        (policy.rtol, policy.atol)
     }
 
     fn validate_matrix_fixture_contract(
@@ -1773,100 +1963,24 @@ mod tests {
     }
 
     #[test]
-    fn matches_power_wave_renormalization_conformance_fixture() {
-        let fixture: RenormalizationFixtureDocument =
-            serde_json::from_str(RENORMALIZE_FIXTURE_JSON)
-                .expect("checked-in renormalization fixture must parse");
-
-        let expected_case_id =
-            "power_wave_renormalize_four_port_complex_per_port_frequency_dependent_z0";
-        let metadata = &fixture.metadata;
-        let data = &fixture.data;
-        assert_eq!(metadata.case_id, expected_case_id);
-        assert_eq!(metadata.operation, "renormalize_s");
-        assert_eq!(metadata.wave_definition, "power");
-        assert_eq!(metadata.schema, "rfkit-rs.oracle.fixture");
-        assert_eq!(metadata.schema_version, 1);
-        assert_eq!(metadata.numpy_version, "2.5.1");
-        assert_eq!(metadata.scikit_rf_version, "2.0.1");
-        assert!(metadata.random_seed > 0);
-
-        for reference_impedance in [
-            &metadata.reference_impedance.source,
-            &metadata.reference_impedance.target,
-        ] {
-            assert!(reference_impedance.complex);
-            assert!(reference_impedance.frequency_dependent);
-            assert!(reference_impedance.per_port);
-            assert_eq!(reference_impedance.unit, "ohm");
-        }
-
-        assert_eq!(metadata.shape.frequency, vec![3]);
-        assert_eq!(metadata.shape.s_input, vec![3, 4, 4]);
-        assert_eq!(metadata.shape.s_renormalized, vec![3, 4, 4]);
-        assert_eq!(metadata.shape.z0_source, vec![3, 4]);
-        assert_eq!(metadata.shape.z0_target, vec![3, 4]);
-
-        assert_eq!(metadata.tolerance_policy.rtol, 1e-12);
-        assert_eq!(metadata.tolerance_policy.atol, 1e-12);
-        assert_eq!(
-            metadata.tolerance_policy.comparison,
-            "abs(actual-expected) <= atol + rtol*abs(expected)"
-        );
-        assert!(!metadata.tolerance_policy.justification.is_empty());
-        assert!(!metadata.tolerance_policy.regeneration.is_empty());
-
-        assert_eq!(data.frequency_hz.len(), 3);
-        assert!(data.frequency_hz.iter().all(|value| value.is_finite()));
-        for matrix in [&data.s_input, &data.s_renormalized] {
-            assert_eq!(matrix.len(), 3);
-            for frequency_matrix in matrix.iter() {
-                assert_eq!(frequency_matrix.len(), 4);
-                assert!(frequency_matrix.iter().all(|row| row.len() == 4));
-                assert!(
-                    frequency_matrix
-                        .iter()
-                        .flatten()
-                        .all(|value| { value.real.is_finite() && value.imag.is_finite() })
-                );
-            }
-        }
-        for z0 in [&data.z0_source_ohm, &data.z0_target_ohm] {
-            assert_eq!(z0.len(), 3);
-            assert!(z0.iter().all(|row| row.len() == 4));
-            assert!(
-                z0.iter()
-                    .flatten()
-                    .all(|value| { value.real.is_finite() && value.imag.is_finite() })
+    fn matches_power_wave_renormalization_conformance_matrix() {
+        for &(case_id, json) in RENORMALIZE_FIXTURES {
+            let spec = renormalization_case_spec(case_id);
+            let fixture: RenormalizationFixtureDocument =
+                serde_json::from_str(json).expect("checked-in renormalization fixture must parse");
+            let (rtol, atol) = validate_renormalization_fixture_contract(&fixture, case_id, spec);
+            let source_s = matrix_parameter_array(&fixture.data.s_input, spec.nfreq, spec.nport);
+            let source_z0 = matrix_z0_array(&fixture.data.z0_source_ohm, spec.nfreq, spec.nport);
+            let target_z0 = matrix_z0_array(&fixture.data.z0_target_ohm, spec.nfreq, spec.nport);
+            let actual = renormalize_s_power(&source_s, &source_z0, &target_z0)
+                .expect("renormalization fixture conversion must succeed");
+            assert_matrix_output_matches(
+                case_id,
+                &actual,
+                &fixture.data.s_renormalized,
+                rtol,
+                atol,
             );
         }
-
-        // Assert that the fixture exercises both independent reference
-        // profiles, rather than silently becoming an identity/scalar case.
-        let source_z0 = matrix_z0_array(&data.z0_source_ohm, 3, 4);
-        let target_z0 = matrix_z0_array(&data.z0_target_ohm, 3, 4);
-        assert!(source_z0.iter().any(|value| value.im != 0.0));
-        assert!(target_z0.iter().any(|value| value.im != 0.0));
-        assert_ne!(source_z0[[0, 0]], source_z0[[1, 0]]);
-        assert_ne!(target_z0[[0, 0]], target_z0[[1, 0]]);
-        assert_ne!(source_z0[[0, 0]], source_z0[[0, 1]]);
-        assert_ne!(target_z0[[0, 0]], target_z0[[0, 1]]);
-        assert!(
-            source_z0
-                .iter()
-                .zip(target_z0.iter())
-                .all(|(source, target)| source != target)
-        );
-
-        let s_input = matrix_parameter_array(&data.s_input, 3, 4);
-        let actual = renormalize_s_power(&s_input, &source_z0, &target_z0)
-            .expect("renormalization fixture conversion must succeed");
-        assert_matrix_output_matches(
-            expected_case_id,
-            &actual,
-            &data.s_renormalized,
-            metadata.tolerance_policy.rtol,
-            metadata.tolerance_policy.atol,
-        );
     }
 }
