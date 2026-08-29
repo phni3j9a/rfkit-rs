@@ -322,6 +322,16 @@
     "case_id": "power_wave_s_to_z_three_port_reciprocal_real_equal_z0",
     "numpy_version": "2.5.1",
     "operation": "s_to_z",
+    "passive_network": {
+      "criterion": "largest singular value of every relevant power-wave S matrix is strictly less than 1",
+      "matrices": [
+        {
+          "matrix_field": "s",
+          "observed_maximum": 0.151907019275
+        }
+      ],
+      "required_maximum": 0.8
+    },
     "random_seed": 20260921,
     "reference_impedance": {
       "complex": false,

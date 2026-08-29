@@ -366,6 +366,20 @@
     "case_id": "power_wave_renormalize_three_port_reciprocal_real_equal_z0",
     "numpy_version": "2.5.1",
     "operation": "renormalize_s",
+    "passive_network": {
+      "criterion": "largest singular value of every relevant power-wave S matrix is strictly less than 1",
+      "matrices": [
+        {
+          "matrix_field": "s_input",
+          "observed_maximum": 0.155165225095
+        },
+        {
+          "matrix_field": "s_renormalized",
+          "observed_maximum": 0.456137460254
+        }
+      ],
+      "required_maximum": 0.8
+    },
     "random_seed": 20260923,
     "reference_impedance": {
       "source": {

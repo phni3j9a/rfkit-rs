@@ -748,6 +748,21 @@ mod tests {
 
     #[derive(Debug, Deserialize)]
     #[serde(deny_unknown_fields)]
+    struct PassiveNetworkMetadata {
+        criterion: String,
+        matrices: Vec<PassiveMatrixEvidence>,
+        required_maximum: f64,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct PassiveMatrixEvidence {
+        matrix_field: String,
+        observed_maximum: f64,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(deny_unknown_fields)]
     struct MatrixFixtureDocument {
         data: MatrixFixtureData,
         metadata: MatrixFixtureMetadata,
@@ -767,6 +782,8 @@ mod tests {
     struct MatrixFixtureMetadata {
         #[serde(default)]
         active_network: Option<ActiveNetworkMetadata>,
+        #[serde(default)]
+        passive_network: Option<PassiveNetworkMetadata>,
         case_id: String,
         numpy_version: String,
         operation: String,
@@ -831,6 +848,8 @@ mod tests {
     struct RenormalizationFixtureMetadata {
         #[serde(default)]
         active_network: Option<ActiveNetworkMetadata>,
+        #[serde(default)]
+        passive_network: Option<PassiveNetworkMetadata>,
         case_id: String,
         numpy_version: String,
         operation: String,
@@ -955,6 +974,7 @@ mod tests {
         frequency_dependent_z0: bool,
         per_port_z0: bool,
         reciprocal: bool,
+        passive: bool,
         active: bool,
     }
 
@@ -968,6 +988,7 @@ mod tests {
                 frequency_dependent_z0: false,
                 per_port_z0: false,
                 reciprocal: false,
+                passive: false,
                 active: false,
             },
             "power_wave_s_to_z_two_port_complex_per_port_constant_z0"
@@ -978,6 +999,7 @@ mod tests {
                 frequency_dependent_z0: false,
                 per_port_z0: true,
                 reciprocal: false,
+                passive: false,
                 active: false,
             },
             "power_wave_s_to_z_four_port_real_frequency_dependent_z0"
@@ -988,6 +1010,7 @@ mod tests {
                 frequency_dependent_z0: true,
                 per_port_z0: false,
                 reciprocal: false,
+                passive: false,
                 active: false,
             },
             "power_wave_s_to_z_eight_port_complex_per_port_frequency_dependent_z0"
@@ -999,6 +1022,7 @@ mod tests {
                     frequency_dependent_z0: true,
                     per_port_z0: true,
                     reciprocal: false,
+                    passive: false,
                     active: false,
                 }
             }
@@ -1010,6 +1034,7 @@ mod tests {
                 frequency_dependent_z0: false,
                 per_port_z0: false,
                 reciprocal: true,
+                passive: true,
                 active: false,
             },
             "power_wave_s_to_z_three_port_active_real_equal_z0"
@@ -1020,6 +1045,7 @@ mod tests {
                 frequency_dependent_z0: false,
                 per_port_z0: false,
                 reciprocal: false,
+                passive: false,
                 active: true,
             },
             _ => panic!("unexpected power-wave matrix case id: {case_id}"),
@@ -1034,6 +1060,7 @@ mod tests {
         frequency_dependent_z0: bool,
         per_port_z0: bool,
         reciprocal: bool,
+        passive: bool,
         active: bool,
     }
 
@@ -1046,6 +1073,7 @@ mod tests {
                 frequency_dependent_z0: false,
                 per_port_z0: false,
                 reciprocal: false,
+                passive: false,
                 active: false,
             },
             "power_wave_renormalize_two_port_complex_per_port_constant_z0" => {
@@ -1056,6 +1084,7 @@ mod tests {
                     frequency_dependent_z0: false,
                     per_port_z0: true,
                     reciprocal: false,
+                    passive: false,
                     active: false,
                 }
             }
@@ -1067,6 +1096,7 @@ mod tests {
                     frequency_dependent_z0: true,
                     per_port_z0: true,
                     reciprocal: false,
+                    passive: false,
                     active: false,
                 }
             }
@@ -1078,6 +1108,7 @@ mod tests {
                     frequency_dependent_z0: true,
                     per_port_z0: false,
                     reciprocal: false,
+                    passive: false,
                     active: false,
                 }
             }
@@ -1089,6 +1120,7 @@ mod tests {
                     frequency_dependent_z0: false,
                     per_port_z0: false,
                     reciprocal: true,
+                    passive: true,
                     active: false,
                 }
             }
@@ -1099,6 +1131,7 @@ mod tests {
                 frequency_dependent_z0: false,
                 per_port_z0: false,
                 reciprocal: false,
+                passive: false,
                 active: true,
             },
             _ => panic!("unexpected power-wave renormalization case id: {case_id}"),
@@ -1129,6 +1162,10 @@ mod tests {
     const ACTIVE_NETWORK_CRITERION: &str =
         "largest singular value of the relevant power-wave S matrix is strictly greater than 1";
     const ACTIVE_METADATA_ROUNDING_TOLERANCE: f64 = 1e-12;
+    const PASSIVE_REQUIRED_SIGMA_MAX: f64 = 0.8;
+    const PASSIVE_NETWORK_CRITERION: &str =
+        "largest singular value of every relevant power-wave S matrix is strictly less than 1";
+    const PASSIVE_METADATA_ROUNDING_TOLERANCE: f64 = 1e-12;
 
     /// Validate active-network metadata without introducing an SVD dependency.
     ///
@@ -1206,6 +1243,140 @@ mod tests {
         );
     }
 
+    /// Validate passive metadata without introducing an SVD dependency.
+    ///
+    /// The oracle records the true NumPy sigma-max maximum for each relevant
+    /// S stack.  Rust independently certifies that maximum is below the
+    /// required bound with a Frobenius norm, using
+    /// `sigma_max(S) <= ||S||_F`.
+    fn validate_passive_network_metadata<'a>(
+        metadata: Option<&'a PassiveNetworkMetadata>,
+        expected_passive: bool,
+        expected_matrix_fields: &[&str],
+    ) -> Option<&'a PassiveNetworkMetadata> {
+        if !expected_passive {
+            assert!(
+                metadata.is_none(),
+                "non-passive fixture must not grow passive-network metadata"
+            );
+            return None;
+        }
+
+        let passive = metadata.expect("passive fixture must record passive-network metadata");
+        assert_eq!(passive.criterion, PASSIVE_NETWORK_CRITERION);
+        assert_eq!(passive.required_maximum, PASSIVE_REQUIRED_SIGMA_MAX);
+        assert_eq!(passive.matrices.len(), expected_matrix_fields.len());
+        for (evidence, expected_field) in passive.matrices.iter().zip(expected_matrix_fields) {
+            assert_eq!(evidence.matrix_field, *expected_field);
+            assert!(
+                evidence.observed_maximum.is_finite(),
+                "passive sigma-max maximum must be finite"
+            );
+            assert!(
+                evidence.observed_maximum >= 0.0,
+                "passive sigma-max maximum must be non-negative"
+            );
+            assert!(
+                evidence.observed_maximum < passive.required_maximum,
+                "recorded passive sigma-max maximum must remain below its required bound"
+            );
+        }
+        Some(passive)
+    }
+
+    fn passive_evidence_for_field<'a>(
+        passive: &'a PassiveNetworkMetadata,
+        matrix_field: &str,
+    ) -> &'a PassiveMatrixEvidence {
+        passive
+            .matrices
+            .iter()
+            .find(|evidence| evidence.matrix_field == matrix_field)
+            .unwrap_or_else(|| panic!("missing passive evidence for matrix field {matrix_field}"))
+    }
+
+    fn matrix_frobenius_norm(matrix: &[Vec<ComplexValue>]) -> f64 {
+        matrix
+            .iter()
+            .flat_map(|row| row.iter())
+            .map(|value| matrix_complex(value).norm_sqr())
+            .sum::<f64>()
+            .sqrt()
+    }
+
+    /// Certify fixture S matrices with the Frobenius upper bound on sigma-max.
+    fn assert_passive_fixture_frobenius_upper_bound(
+        case_id: &str,
+        matrices: &[(&str, &[Vec<Vec<ComplexValue>>])],
+        passive: &PassiveNetworkMetadata,
+    ) {
+        assert_eq!(matrices.len(), passive.matrices.len());
+        for (matrix_field, matrix_stack) in matrices {
+            let evidence = passive_evidence_for_field(passive, matrix_field);
+            let mut maximum_bound = 0.0_f64;
+            for (frequency, matrix) in matrix_stack.iter().enumerate() {
+                let bound = matrix_frobenius_norm(matrix);
+                assert!(
+                    bound.is_finite(),
+                    "{case_id} passive Frobenius bound is non-finite for {matrix_field} at frequency {frequency}"
+                );
+                assert!(
+                    bound >= 0.0,
+                    "{case_id} passive Frobenius bound is negative for {matrix_field} at frequency {frequency}"
+                );
+                assert!(
+                    bound < passive.required_maximum,
+                    "{case_id} passive Frobenius bound {bound:?} is not below {} for {matrix_field} at frequency {frequency}",
+                    passive.required_maximum
+                );
+                maximum_bound = maximum_bound.max(bound);
+            }
+            assert!(
+                evidence.observed_maximum <= maximum_bound + PASSIVE_METADATA_ROUNDING_TOLERANCE,
+                "{case_id} recorded passive sigma-max maximum {:?} exceeds the Frobenius upper bound {maximum_bound:?} for {matrix_field}",
+                evidence.observed_maximum
+            );
+        }
+    }
+
+    fn array3_frobenius_norm(matrix: &Array3<Complex64>, frequency: usize) -> f64 {
+        matrix
+            .index_axis(ndarray::Axis(0), frequency)
+            .iter()
+            .map(|value| value.norm_sqr())
+            .sum::<f64>()
+            .sqrt()
+    }
+
+    /// Certify an operation's returned S stack independently of fixture data.
+    fn assert_passive_array3_frobenius_upper_bound(
+        case_id: &str,
+        matrix_field: &str,
+        matrix: &Array3<Complex64>,
+        passive: &PassiveNetworkMetadata,
+    ) {
+        let evidence = passive_evidence_for_field(passive, matrix_field);
+        let mut maximum_bound = 0.0_f64;
+        for frequency in 0..matrix.dim().0 {
+            let bound = array3_frobenius_norm(matrix, frequency);
+            assert!(
+                bound.is_finite(),
+                "{case_id} returned passive Frobenius bound is non-finite for {matrix_field} at frequency {frequency}"
+            );
+            assert!(
+                bound < passive.required_maximum,
+                "{case_id} returned passive Frobenius bound {bound:?} is not below {} for {matrix_field} at frequency {frequency}",
+                passive.required_maximum
+            );
+            maximum_bound = maximum_bound.max(bound);
+        }
+        assert!(
+            evidence.observed_maximum <= maximum_bound + PASSIVE_METADATA_ROUNDING_TOLERANCE,
+            "{case_id} recorded passive sigma-max maximum {:?} exceeds the returned Frobenius upper bound {maximum_bound:?} for {matrix_field}",
+            evidence.observed_maximum
+        );
+    }
+
     fn validate_renormalization_fixture_contract(
         fixture: &RenormalizationFixtureDocument,
         expected_case_id: &str,
@@ -1218,6 +1389,11 @@ mod tests {
             metadata.active_network.as_ref(),
             spec.active,
             "s_input",
+        );
+        let passive_network = validate_passive_network_metadata(
+            metadata.passive_network.as_ref(),
+            spec.passive,
+            &["s_input", "s_renormalized"],
         );
         assert_eq!(metadata.case_id, expected_case_id);
         assert_eq!(metadata.operation, "renormalize_s");
@@ -1312,6 +1488,23 @@ mod tests {
                 .zip(target_z0.iter())
                 .all(|(source, target)| (*source - *target).norm() > 1.0)
         );
+        if spec.passive {
+            for (name, z0) in [("source", &source_z0), ("target", &target_z0)] {
+                assert!(
+                    z0.iter().all(|value| {
+                        value.re.is_finite()
+                            && value.im.is_finite()
+                            && value.re > 0.0
+                            && value.im == 0.0
+                    }),
+                    "{expected_case_id} passive {name} z0 must be real and positive"
+                );
+                assert!(
+                    z0.iter().all(|value| *value == z0[[0, 0]]),
+                    "{expected_case_id} passive {name} z0 must be equal across frequency and ports"
+                );
+            }
+        }
 
         if spec.nport > 1 {
             if expected_reciprocal {
@@ -1362,6 +1555,16 @@ mod tests {
         if let Some(active_network) = active_network {
             assert_active_column_norm_lower_bound(expected_case_id, &data.s_input, active_network);
         }
+        if let Some(passive_network) = passive_network {
+            assert_passive_fixture_frobenius_upper_bound(
+                expected_case_id,
+                &[
+                    ("s_input", data.s_input.as_slice()),
+                    ("s_renormalized", data.s_renormalized.as_slice()),
+                ],
+                passive_network,
+            );
+        }
 
         (policy.rtol, policy.atol)
     }
@@ -1379,6 +1582,7 @@ mod tests {
             frequency_dependent_z0: expected_frequency_dependent_z0,
             per_port_z0: expected_per_port_z0,
             reciprocal: expected_reciprocal,
+            passive: expected_passive,
             active: expected_active,
         } = spec;
         let metadata = &fixture.metadata;
@@ -1387,6 +1591,11 @@ mod tests {
             metadata.active_network.as_ref(),
             expected_active,
             "s",
+        );
+        let passive_network = validate_passive_network_metadata(
+            metadata.passive_network.as_ref(),
+            expected_passive,
+            &["s"],
         );
         assert_eq!(metadata.case_id, expected_case_id);
         assert_eq!(metadata.operation, expected_operation);
@@ -1482,6 +1691,21 @@ mod tests {
                     .all(|row| { row.iter().all(|value| *value == row[0]) })
             );
         }
+        if expected_passive {
+            assert!(
+                z0.iter().flatten().all(|value| {
+                    value.re.is_finite()
+                        && value.im.is_finite()
+                        && value.re > 0.0
+                        && value.im == 0.0
+                }),
+                "{expected_case_id} passive evidence requires real positive z0"
+            );
+            assert!(
+                z0.iter().flatten().all(|value| *value == z0[0][0]),
+                "{expected_case_id} passive evidence requires equal-per-port z0"
+            );
+        }
 
         let input = if expected_operation == "s_to_z" {
             &data.s
@@ -1536,6 +1760,15 @@ mod tests {
             // S-to-Z uses data.s as its direct active input; Z-to-S uses the
             // same field for its independently generated active oracle output.
             assert_active_column_norm_lower_bound(expected_case_id, &data.s, active_network);
+        }
+        if let Some(passive_network) = passive_network {
+            // S-to-Z uses data.s as its direct passive input; Z-to-S uses the
+            // same field for its independently generated passive oracle output.
+            assert_passive_fixture_frobenius_upper_bound(
+                expected_case_id,
+                &[("s", data.s.as_slice())],
+                passive_network,
+            );
         }
 
         let policy = &metadata.tolerance_policy;
@@ -2279,6 +2512,14 @@ mod tests {
             let z0 = matrix_z0_array(&fixture.data.z0_ohm, spec.nfreq, spec.nport);
             let actual = z_to_s_power(&z, &z0).expect("matrix Z-to-S conversion must succeed");
             assert_matrix_output_matches(case_id, &actual, &fixture.data.s, rtol, atol);
+            if spec.passive {
+                let passive_network = fixture
+                    .metadata
+                    .passive_network
+                    .as_ref()
+                    .expect("passive fixture must record passive-network metadata");
+                assert_passive_array3_frobenius_upper_bound(case_id, "s", &actual, passive_network);
+            }
             if spec.reciprocal {
                 assert_matrix_output_preserves_symmetry(
                     case_id,
@@ -2310,6 +2551,19 @@ mod tests {
                 rtol,
                 atol,
             );
+            if spec.passive {
+                let passive_network = fixture
+                    .metadata
+                    .passive_network
+                    .as_ref()
+                    .expect("passive fixture must record passive-network metadata");
+                assert_passive_array3_frobenius_upper_bound(
+                    case_id,
+                    "s_renormalized",
+                    &actual,
+                    passive_network,
+                );
+            }
             if spec.reciprocal {
                 assert_matrix_output_preserves_symmetry(
                     case_id,
