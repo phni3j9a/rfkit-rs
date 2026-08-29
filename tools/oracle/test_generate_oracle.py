@@ -234,6 +234,40 @@ RECIPROCAL_CASE_SPECS = {
     },
 }
 
+ACTIVE_CASE_SPECS = {
+    "power_wave_s_to_z_three_port_active_real_equal_z0": {
+        "operation": "s_to_z",
+        "ports": 3,
+        "frequencies": 3,
+        "matrix_field": "s",
+        "output": "z_ohm",
+        "seed": 20_260_924,
+        "z0": 57.25,
+        "observed_minimum": 1.799980263141,
+    },
+    "power_wave_z_to_s_three_port_active_real_equal_z0": {
+        "operation": "z_to_s",
+        "ports": 3,
+        "frequencies": 3,
+        "matrix_field": "s",
+        "output": "s",
+        "seed": 20_260_925,
+        "z0": 57.25,
+        "observed_minimum": 2.275294506203,
+    },
+    "power_wave_renormalize_three_port_active_real_equal_z0": {
+        "operation": "renormalize_s",
+        "ports": 3,
+        "frequencies": 3,
+        "matrix_field": "s_input",
+        "output": "s_renormalized",
+        "seed": 20_260_926,
+        "z0_source": 57.25,
+        "z0_target": 91.75,
+        "observed_minimum": 1.815482853976,
+    },
+}
+
 RENORMALIZATION_CASE_SPECS = {
     "power_wave_renormalize_one_port_real_scalar_z0": {
         "ports": 1,
@@ -292,7 +326,8 @@ class MatrixRegistrationAndCheckerTests(unittest.TestCase):
             3
             + len(MATRIX_CASE_SPECS)
             + len(RENORMALIZATION_CASE_SPECS)
-            + len(RECIPROCAL_CASE_SPECS),
+            + len(RECIPROCAL_CASE_SPECS)
+            + len(ACTIVE_CASE_SPECS),
         )
         self.assertTrue(set(MATRIX_CASE_SPECS).issubset(registered))
         for case_id, spec in MATRIX_CASE_SPECS.items():
@@ -514,6 +549,160 @@ class ReciprocalRegistrationAndCheckerTests(unittest.TestCase):
                         oracle._check_numeric_fixture(path, fixture, spec["output"]),
                         1,
                     )
+
+class ActiveRegistrationAndEvidenceTests(unittest.TestCase):
+    """Protect the active-network metadata and independent evidence contract."""
+
+    @staticmethod
+    def _complex(value: dict[str, float]) -> complex:
+        return complex(value["real"], value["imag"])
+
+    @classmethod
+    def _column_norm(cls, matrix: list[list[dict[str, float]]], column: int) -> float:
+        return math.sqrt(
+            sum(abs(cls._complex(matrix[row][column])) ** 2 for row in range(len(matrix)))
+        )
+
+    def test_active_cases_are_registered_with_distinct_three_port_contracts(self) -> None:
+        registered = {case.case_id: case for case in oracle._CASES}
+        expected_paths = {
+            "power_wave_s_to_z_three_port_active_real_equal_z0": oracle.ACTIVE_S_TO_Z_FIXTURE,
+            "power_wave_z_to_s_three_port_active_real_equal_z0": oracle.ACTIVE_Z_TO_S_FIXTURE,
+            "power_wave_renormalize_three_port_active_real_equal_z0": oracle.ACTIVE_RENORMALIZE_FIXTURE,
+        }
+        self.assertEqual(set(ACTIVE_CASE_SPECS), set(expected_paths))
+        self.assertEqual(
+            len({ACTIVE_CASE_SPECS[case_id]["seed"] for case_id in ACTIVE_CASE_SPECS}),
+            3,
+        )
+        for case_id, spec in ACTIVE_CASE_SPECS.items():
+            with self.subTest(case_id=case_id):
+                case = registered[case_id]
+                self.assertEqual(case.path, expected_paths[case_id])
+                self.assertEqual(case.path.stem, case_id)
+                self.assertEqual(case.comparison, "numeric_output")
+                self.assertEqual(case.numeric_output_key, spec["output"])
+
+    def test_active_fixtures_record_true_singular_value_evidence_and_real_equal_z0(self) -> None:
+        registered = {case.case_id: case for case in oracle._CASES}
+        for case_id, spec in ACTIVE_CASE_SPECS.items():
+            with self.subTest(case_id=case_id):
+                fixture = oracle._read_canonical_json(registered[case_id].path)
+                metadata = fixture["metadata"]
+                data = fixture["data"]
+                active = metadata.get("active_network")
+                self.assertIsInstance(active, dict)
+                self.assertEqual(active["criterion"], oracle.ACTIVE_NETWORK_CRITERION)
+                self.assertEqual(active["matrix_field"], spec["matrix_field"])
+                self.assertEqual(
+                    active["required_minimum"], oracle.ACTIVE_REQUIRED_SIGMA_MAX
+                )
+                self.assertEqual(active["observed_minimum"], spec["observed_minimum"])
+                self.assertEqual(
+                    active["observed_minimum"],
+                    round(
+                        active["observed_minimum"],
+                        oracle.ACTIVE_OBSERVED_MINIMUM_DECIMAL_PLACES,
+                    ),
+                )
+                self.assertTrue(math.isfinite(active["observed_minimum"]))
+                self.assertGreater(
+                    active["observed_minimum"], active["required_minimum"]
+                )
+
+                self.assertEqual(metadata["case_id"], case_id)
+                self.assertEqual(metadata["operation"], spec["operation"])
+                self.assertEqual(metadata["random_seed"], spec["seed"])
+                self.assertEqual(metadata["numpy_version"], "2.5.1")
+                self.assertEqual(metadata["scikit_rf_version"], "2.0.1")
+                self.assertEqual(metadata["wave_definition"], "power")
+                self.assertEqual(metadata["shape"]["frequency"], [3])
+
+                if spec["operation"] == "renormalize_s":
+                    self.assertEqual(metadata["shape"]["z0_source"], [3, 3])
+                    flags = {
+                        "complex": False,
+                        "frequency_dependent": False,
+                        "per_port": False,
+                        "unit": "ohm",
+                    }
+                    self.assertEqual(metadata["reference_impedance"]["source"], flags)
+                    self.assertEqual(metadata["reference_impedance"]["target"], flags)
+                    z0_values = data["z0_source_ohm"]
+                    target_values = data["z0_target_ohm"]
+                    self.assertTrue(
+                        all(
+                            self._complex(value) == complex(spec["z0_source"], 0.0)
+                            for row in z0_values
+                            for value in row
+                        )
+                    )
+                    self.assertTrue(
+                        all(
+                            self._complex(value) == complex(spec["z0_target"], 0.0)
+                            for row in target_values
+                            for value in row
+                        )
+                    )
+                    relevant = data[spec["matrix_field"]]
+                    self.assertEqual(metadata["shape"]["s_input"], [3, 3, 3])
+                    self.assertEqual(metadata["shape"]["s_renormalized"], [3, 3, 3])
+                else:
+                    self.assertEqual(metadata["shape"]["input_z0"], [3, 3])
+                    flags = {
+                        "complex": False,
+                        "frequency_dependent": False,
+                        "per_port": False,
+                        "unit": "ohm",
+                    }
+                    self.assertEqual(metadata["reference_impedance"], flags)
+                    z0_values = data["z0_ohm"]
+                    self.assertTrue(
+                        all(
+                            self._complex(value) == complex(spec["z0"], 0.0)
+                            for row in z0_values
+                            for value in row
+                        )
+                    )
+                    relevant = data[spec["matrix_field"]]
+                    output_shape = (
+                        "input_s" if spec["operation"] == "s_to_z" else "output_s"
+                    )
+                    self.assertEqual(metadata["shape"][output_shape], [3, 3, 3])
+
+                lower_bound_minimum = math.inf
+                for frequency, matrix in enumerate(relevant):
+                    self.assertEqual(len(matrix), 3)
+                    self.assertTrue(all(len(row) == 3 for row in matrix))
+                    lower_bound = max(
+                        self._column_norm(matrix, column) for column in range(3)
+                    )
+                    lower_bound_minimum = min(lower_bound_minimum, lower_bound)
+                    self.assertGreater(
+                        lower_bound,
+                        active["required_minimum"],
+                        f"frequency {frequency} has no active column-norm lower bound",
+                    )
+
+                # The generator records the true NumPy SVD minimum.  It must
+                # dominate the independently checked column-norm lower bound,
+                # up to decimal serialization round-off.
+                self.assertGreaterEqual(
+                    active["observed_minimum"] + 1e-12,
+                    lower_bound_minimum,
+                )
+
+                if spec["operation"] == "z_to_s":
+                    # The direct Z input is a negative-resistance construction,
+                    # not a round trip from the expected S output.
+                    self.assertTrue(
+                        all(
+                            self._complex(data["z_ohm"][frequency][port][port]).real < 0.0
+                            for frequency in range(3)
+                            for port in range(3)
+                        )
+                    )
+
 
 class MatrixFixtureCheckerTests(unittest.TestCase):
     """Protect the existing non-reciprocal matrix fixture contracts."""

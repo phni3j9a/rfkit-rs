@@ -4,9 +4,9 @@
 The original three-port Network fixture is retained as a stable input
 contract.  The power-wave operation fixtures additionally form a small
 conformance matrix over port count and reference-impedance structure, with
-dedicated reciprocal three-port cases for each existing kernel.  This module
-is kept independent of the Rust implementation so it can serve as a stable
-numerical reference for the internal conversion kernels.
+dedicated reciprocal and active three-port cases for each existing kernel.
+This module is kept independent of the Rust implementation so it can serve as
+a stable numerical reference for the internal conversion kernels.
 """
 
 from __future__ import annotations
@@ -172,6 +172,33 @@ RECIPROCAL_TOLERANCE_JUSTIFICATION = (
     "deterministic reciprocal three-port case; generation-time diagonal-"
     "dominance checks keep the conversion systems away from exact singularity "
     "while allowing normal cross-language linear-algebra rounding."
+)
+
+ACTIVE_S_TO_Z_FIXTURE = (
+    Path(__file__).resolve().parent
+    / "fixtures"
+    / "power_wave_s_to_z_three_port_active_real_equal_z0.json"
+)
+ACTIVE_Z_TO_S_FIXTURE = (
+    Path(__file__).resolve().parent
+    / "fixtures"
+    / "power_wave_z_to_s_three_port_active_real_equal_z0.json"
+)
+ACTIVE_RENORMALIZE_FIXTURE = (
+    Path(__file__).resolve().parent
+    / "fixtures"
+    / "power_wave_renormalize_three_port_active_real_equal_z0.json"
+)
+ACTIVE_S_TO_Z_RANDOM_SEED = 20_260_924
+ACTIVE_Z_TO_S_RANDOM_SEED = 20_260_925
+ACTIVE_RENORMALIZE_RANDOM_SEED = 20_260_926
+ACTIVE_S_TO_Z_Z0_OHM = 57.25
+ACTIVE_RENORMALIZE_SOURCE_Z0_OHM = 57.25
+ACTIVE_RENORMALIZE_TARGET_Z0_OHM = 91.75
+ACTIVE_REQUIRED_SIGMA_MAX = 1.2
+ACTIVE_OBSERVED_MINIMUM_DECIMAL_PLACES = 12
+ACTIVE_NETWORK_CRITERION = (
+    "largest singular value of the relevant power-wave S matrix is strictly greater than 1"
 )
 
 
@@ -372,6 +399,121 @@ def _assert_z_conditioning(z: Any, z0: Any) -> None:
                     "Z input failed the conservative diagonal-dominance "
                     f"bound at frequency {frequency}, row {row}"
                 )
+
+
+def _active_network_metadata(np: Any, s: Any, *, matrix_field: str) -> dict[str, Any]:
+    """Return and validate the active-network evidence for a power-wave S stack.
+
+    ``numpy.linalg.svd`` is intentionally used only by this oracle generator:
+    it computes the true largest singular value for every frequency sample in
+    the pinned NumPy environment.  The raw minimum is validated strictly
+    against the active bound, then rounded to twelve decimal places before it
+    is recorded so equivalent LAPACK backends produce the same contract. Rust
+    tests independently certify the same strict lower bound with a matrix
+    column norm, so the fixture does not turn SVD into a runtime dependency or
+    a production classifier.
+    """
+
+    if s.ndim != 3 or s.shape[1] != s.shape[2] or s.shape[1] < 2:
+        raise ValueError("active-network evidence requires a multiport S stack")
+    singular_values: list[float] = []
+    for frequency in range(s.shape[0]):
+        value = float(np.linalg.svd(s[frequency], compute_uv=False)[0])
+        if not np.isfinite(value):
+            raise ValueError(
+                f"active-network singular-value evidence is non-finite at frequency {frequency}"
+            )
+        singular_values.append(value)
+
+    raw_observed_minimum = min(singular_values)
+    if raw_observed_minimum <= ACTIVE_REQUIRED_SIGMA_MAX:
+        raise ValueError(
+            "active-network S input/output must exceed the required singular-value "
+            f"bound {ACTIVE_REQUIRED_SIGMA_MAX}; observed {raw_observed_minimum}"
+        )
+    observed_minimum = round(
+        raw_observed_minimum,
+        ACTIVE_OBSERVED_MINIMUM_DECIMAL_PLACES,
+    )
+    if observed_minimum <= ACTIVE_REQUIRED_SIGMA_MAX:
+        raise ValueError(
+            "rounded active-network evidence must remain above the required "
+            f"bound {ACTIVE_REQUIRED_SIGMA_MAX}; observed {observed_minimum}"
+        )
+
+    return {
+        "criterion": ACTIVE_NETWORK_CRITERION,
+        "matrix_field": matrix_field,
+        "observed_minimum": observed_minimum,
+        "required_minimum": ACTIVE_REQUIRED_SIGMA_MAX,
+    }
+
+
+def _active_s_inputs(
+    np: Any,
+    *,
+    seed: int,
+    z0_ohm: float = ACTIVE_S_TO_Z_Z0_OHM,
+) -> tuple[Any, Any, float, Any]:
+    """Build a deterministic, non-symmetric, deliberately active S stack."""
+
+    nfreq = 3
+    nports = 3
+    frequency_hz = np.array(
+        [0.87e9 + 0.43e9 * index for index in range(nfreq)], dtype=np.float64
+    )
+    expanded_z0 = np.full((nfreq, nports), z0_ohm, dtype=np.complex128)
+    rng = np.random.default_rng(seed)
+    s = (
+        rng.normal(loc=0.0, scale=0.025, size=(nfreq, nports, nports))
+        + 1j * rng.normal(loc=0.0, scale=0.025, size=(nfreq, nports, nports))
+    ).astype(np.complex128)
+    for frequency in range(nfreq):
+        for port in range(nports):
+            # These diagonal values are deliberately well above one while
+            # keeping I-S comfortably diagonally dominant for the existing
+            # exact-pivot conversion solver.
+            s[frequency, port, port] += complex(
+                1.72 + 0.06 * frequency + 0.025 * port,
+                0.035 + 0.006 * frequency - 0.004 * port,
+            )
+
+    _assert_non_symmetric(np, s, name="active S input")
+    _assert_s_conditioning(s)
+    return frequency_hz, s, z0_ohm, expanded_z0
+
+
+def _active_z_inputs(
+    np: Any,
+    *,
+    seed: int,
+    z0_ohm: float = ACTIVE_S_TO_Z_Z0_OHM,
+) -> tuple[Any, Any, float, Any]:
+    """Build a direct deterministic Z stack whose power-wave S is active."""
+
+    nfreq = 3
+    nports = 3
+    frequency_hz = np.array(
+        [0.87e9 + 0.43e9 * index for index in range(nfreq)], dtype=np.float64
+    )
+    expanded_z0 = np.full((nfreq, nports), z0_ohm, dtype=np.complex128)
+    rng = np.random.default_rng(seed)
+    z = (
+        rng.normal(loc=0.0, scale=0.35, size=(nfreq, nports, nports))
+        + 1j * rng.normal(loc=0.0, scale=0.35, size=(nfreq, nports, nports))
+    ).astype(np.complex128)
+    for frequency in range(nfreq):
+        for port in range(nports):
+            # Negative-resistance diagonal terms are far from -z0.  The
+            # modest non-symmetric coupling keeps this a genuine N-port input.
+            z[frequency, port, port] += complex(
+                -(2.4 + 0.08 * frequency + 0.04 * port) * z0_ohm,
+                1.5 + 0.2 * frequency - 0.15 * port,
+            )
+
+    _assert_non_symmetric(np, z, name="active Z input")
+    _assert_z_conditioning(z, expanded_z0)
+    return frequency_hz, z, z0_ohm, expanded_z0
 
 
 def _matrix_frequency_and_z0(
@@ -1428,6 +1570,245 @@ def _reciprocal_renormalize_fixture(np: Any, skrf: Any) -> dict[str, Any]:
     }
 
 
+def _active_s_to_z_fixture(np: Any, skrf: Any) -> dict[str, Any]:
+    """Build the active three-port S-to-Z fixture through public scikit-rf."""
+
+    case_id = "power_wave_s_to_z_three_port_active_real_equal_z0"
+    frequency_hz, source_s, constructor_z0, _expanded_z0 = _active_s_inputs(
+        np,
+        seed=ACTIVE_S_TO_Z_RANDOM_SEED,
+    )
+    network = skrf.Network(
+        f=frequency_hz,
+        s=source_s,
+        z0=constructor_z0,
+        s_def="power",
+        name=case_id,
+    )
+    frequency = np.asarray(network.f, dtype=np.float64)
+    network_s = np.asarray(network.s, dtype=np.complex128)
+    network_z0 = np.asarray(network.z0, dtype=np.complex128)
+    network_z = np.asarray(network.z, dtype=np.complex128)
+    active_network = _active_network_metadata(np, network_s, matrix_field="s")
+
+    return {
+        "metadata": {
+            "active_network": active_network,
+            "case_id": case_id,
+            "numpy_version": np.__version__,
+            "operation": "s_to_z",
+            "random_seed": ACTIVE_S_TO_Z_RANDOM_SEED,
+            "reference_impedance": {
+                "complex": False,
+                "frequency_dependent": False,
+                "per_port": False,
+                "unit": "ohm",
+            },
+            "schema": "rfkit-rs.oracle.fixture",
+            "schema_version": SCHEMA_VERSION,
+            "scikit_rf_version": skrf.__version__,
+            "shape": {
+                "frequency": list(frequency.shape),
+                "input_s": list(network_s.shape),
+                "input_z0": list(network_z0.shape),
+                "output_z": list(network_z.shape),
+            },
+            "tolerance_policy": {
+                "atol_ohm": S_TO_Z_ATOL_OHM,
+                "comparison": (
+                    "abs(actual-expected) <= "
+                    "atol_ohm + rtol*abs(expected)"
+                ),
+                "justification": (
+                    "Strict binary64 tolerance for a well-conditioned, modest-"
+                    "magnitude deterministic active three-port case; the active "
+                    "input passes a conservative I-S diagonal-dominance guard "
+                    "while allowing normal cross-language linear-algebra rounding."
+                ),
+                "regeneration": (
+                    "canonical UTF-8 JSON serialization; z_ohm is checked "
+                    "with the recorded numeric tolerance"
+                ),
+                "rtol": S_TO_Z_RTOL,
+            },
+            "wave_definition": network.s_def,
+        },
+        "data": {
+            "frequency_hz": [float(value) for value in frequency],
+            "s": _complex_array(network_s),
+            "z0_ohm": _complex_array(network_z0),
+            "z_ohm": _complex_array(network_z),
+        },
+    }
+
+
+def _active_z_to_s_fixture(np: Any, skrf: Any) -> dict[str, Any]:
+    """Build the active three-port Z-to-S fixture from direct Z data."""
+
+    case_id = "power_wave_z_to_s_three_port_active_real_equal_z0"
+    frequency_hz, source_z, constructor_z0, _expanded_z0 = _active_z_inputs(
+        np,
+        seed=ACTIVE_Z_TO_S_RANDOM_SEED,
+    )
+    converted = skrf.Network.from_z(
+        source_z,
+        f=frequency_hz,
+        z0=constructor_z0,
+        s_def="power",
+        name=case_id,
+    )
+    frequency = np.asarray(converted.f, dtype=np.float64)
+    converted_s = np.asarray(converted.s, dtype=np.complex128)
+    network_z0 = np.asarray(converted.z0, dtype=np.complex128)
+    active_network = _active_network_metadata(np, converted_s, matrix_field="s")
+
+    return {
+        "metadata": {
+            "active_network": active_network,
+            "case_id": case_id,
+            "numpy_version": np.__version__,
+            "operation": "z_to_s",
+            "random_seed": ACTIVE_Z_TO_S_RANDOM_SEED,
+            "reference_impedance": {
+                "complex": False,
+                "frequency_dependent": False,
+                "per_port": False,
+                "unit": "ohm",
+            },
+            "schema": "rfkit-rs.oracle.fixture",
+            "schema_version": SCHEMA_VERSION,
+            "scikit_rf_version": skrf.__version__,
+            "shape": {
+                "frequency": list(frequency.shape),
+                "input_z": list(source_z.shape),
+                "input_z0": list(network_z0.shape),
+                "output_s": list(converted_s.shape),
+            },
+            "tolerance_policy": {
+                "atol": Z_TO_S_ATOL,
+                "comparison": "abs(actual-expected) <= atol + rtol*abs(expected)",
+                "justification": (
+                    "Strict binary64 tolerance for a well-conditioned, modest-"
+                    "magnitude deterministic active three-port case; the direct "
+                    "negative-resistance Z input passes a conservative Z+G "
+                    "diagonal-dominance guard while allowing normal cross-language "
+                    "linear-algebra rounding."
+                ),
+                "regeneration": (
+                    "canonical UTF-8 JSON serialization; s is checked with the "
+                    "recorded numeric tolerance"
+                ),
+                "rtol": Z_TO_S_RTOL,
+            },
+            "wave_definition": converted.s_def,
+        },
+        "data": {
+            "frequency_hz": [float(value) for value in frequency],
+            "s": _complex_array(converted_s),
+            "z0_ohm": _complex_array(network_z0),
+            "z_ohm": _complex_array(source_z),
+        },
+    }
+
+
+def _active_renormalize_fixture(np: Any, skrf: Any) -> dict[str, Any]:
+    """Build the active three-port S-renormalization fixture."""
+
+    case_id = "power_wave_renormalize_three_port_active_real_equal_z0"
+    frequency_hz, source_s, source_z0, _expanded_z0 = _active_s_inputs(
+        np,
+        seed=ACTIVE_RENORMALIZE_RANDOM_SEED,
+        z0_ohm=ACTIVE_RENORMALIZE_SOURCE_Z0_OHM,
+    )
+    network = skrf.Network(
+        f=frequency_hz,
+        s=source_s,
+        z0=source_z0,
+        s_def="power",
+        name=case_id,
+    )
+    frequency = np.asarray(network.f, dtype=np.float64)
+    network_s_input = np.asarray(network.s, dtype=np.complex128)
+    network_z0_source = np.asarray(network.z0, dtype=np.complex128)
+    # Validate the second conversion stage explicitly before mutating the
+    # Network.  Network.z is the public scikit-rf read-back of the underlying
+    # Z matrix, and the expanded target array is the exact real/equal-per-port
+    # reference used by the subsequent renormalization.
+    network_z = np.asarray(network.z, dtype=np.complex128)
+    target_z0_for_guard = np.full(
+        network_z0_source.shape,
+        ACTIVE_RENORMALIZE_TARGET_Z0_OHM,
+        dtype=np.complex128,
+    )
+    _assert_z_conditioning(network_z, target_z0_for_guard)
+    network.renormalize(ACTIVE_RENORMALIZE_TARGET_Z0_OHM, s_def="power")
+    network_s_renormalized = np.asarray(network.s, dtype=np.complex128)
+    network_z0_target = np.asarray(network.z0, dtype=np.complex128)
+    # The contract deliberately records source S as the relevant active
+    # matrix.  Renormalization is still checked through its complete output;
+    # no passive/active classifier is introduced for a target network.
+    active_network = _active_network_metadata(
+        np,
+        network_s_input,
+        matrix_field="s_input",
+    )
+    flags = {
+        "complex": False,
+        "frequency_dependent": False,
+        "per_port": False,
+        "unit": "ohm",
+    }
+
+    return {
+        "metadata": {
+            "active_network": active_network,
+            "case_id": case_id,
+            "numpy_version": np.__version__,
+            "operation": "renormalize_s",
+            "random_seed": ACTIVE_RENORMALIZE_RANDOM_SEED,
+            "reference_impedance": {
+                "source": dict(flags),
+                "target": dict(flags),
+            },
+            "schema": "rfkit-rs.oracle.fixture",
+            "schema_version": SCHEMA_VERSION,
+            "scikit_rf_version": skrf.__version__,
+            "shape": {
+                "frequency": list(frequency.shape),
+                "s_input": list(network_s_input.shape),
+                "s_renormalized": list(network_s_renormalized.shape),
+                "z0_source": list(network_z0_source.shape),
+                "z0_target": list(network_z0_target.shape),
+            },
+            "tolerance_policy": {
+                "atol": RENORMALIZE_ATOL,
+                "comparison": "abs(actual-expected) <= atol + rtol*abs(expected)",
+                "justification": (
+                    "Strict binary64 tolerance for a well-conditioned, modest-"
+                    "magnitude deterministic active three-port case; the source "
+                    "S input passes a conservative I-S diagonal-dominance guard "
+                    "and the underlying target-stage Z passes the corresponding "
+                    "Z+G guard while allowing normal cross-language linear-algebra "
+                    "rounding."
+                ),
+                "regeneration": (
+                    "canonical UTF-8 JSON serialization; s_renormalized is checked "
+                    "with the recorded numeric tolerance"
+                ),
+                "rtol": RENORMALIZE_RTOL,
+            },
+            "wave_definition": network.s_def,
+        },
+        "data": {
+            "frequency_hz": [float(value) for value in frequency],
+            "s_input": _complex_array(network_s_input),
+            "s_renormalized": _complex_array(network_s_renormalized),
+            "z0_source_ohm": _complex_array(network_z0_source),
+            "z0_target_ohm": _complex_array(network_z0_target),
+        },
+    }
+
+
 def _renormalize_fixture(
     np: Any,
     skrf: Any,
@@ -1810,6 +2191,27 @@ _CASES = (
         "power_wave_renormalize_three_port_reciprocal_real_equal_z0",
         RECIPROCAL_RENORMALIZE_FIXTURE,
         _reciprocal_renormalize_fixture,
+        "numeric_output",
+        "s_renormalized",
+    ),
+    _OracleCase(
+        "power_wave_s_to_z_three_port_active_real_equal_z0",
+        ACTIVE_S_TO_Z_FIXTURE,
+        _active_s_to_z_fixture,
+        "numeric_output",
+        "z_ohm",
+    ),
+    _OracleCase(
+        "power_wave_z_to_s_three_port_active_real_equal_z0",
+        ACTIVE_Z_TO_S_FIXTURE,
+        _active_z_to_s_fixture,
+        "numeric_output",
+        "s",
+    ),
+    _OracleCase(
+        "power_wave_renormalize_three_port_active_real_equal_z0",
+        ACTIVE_RENORMALIZE_FIXTURE,
+        _active_renormalize_fixture,
         "numeric_output",
         "s_renormalized",
     ),

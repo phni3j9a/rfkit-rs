@@ -5,8 +5,9 @@ It generates checked-in JSON fixtures through `scikit-rf==2.0.1`, with
 `numpy==2.5.1` pinned directly. scikit-rf is an oracle for numerical behavior
 here, not the public API specification for the Rust library. The harness keeps
 the original three-port fixture and registers an additional eight-case
-S↔Z power-wave conformance matrix, a four-case S renormalization matrix, and
-one reciprocal three-port case for each of those existing operations.
+S↔Z power-wave conformance matrix, a four-case S renormalization matrix, one
+reciprocal three-port case, and one active three-port case for each existing
+operation.
 
 ## Clean-checkout setup
 
@@ -26,7 +27,7 @@ fails clearly instead of silently regenerating a fixture with another version.
 
 ## Generate and verify
 
-The harness has eighteen registered canonical cases. The original three cases
+The harness has twenty-one registered canonical cases. The original three cases
 remain unchanged:
 
 - `three_port_complex_z0` — the representative four-frequency, three-port
@@ -69,6 +70,18 @@ reference impedance on every port and frequency sample.
 | S→Z | 3 | real, equal across ports and frequency | `20260921` | `power_wave_s_to_z_three_port_reciprocal_real_equal_z0` |
 | Z→S | 3 | real, equal across ports and frequency | `20260922` | `power_wave_z_to_s_three_port_reciprocal_real_equal_z0` |
 
+The active S↔Z cases are registered separately. Each is a three-frequency,
+three-port case with real 57.25 Ω reference impedance on every port and
+frequency. The relevant power-wave S matrix has a true largest singular value
+strictly above one at every frequency; the generator records the observed
+minimum from unrounded NumPy SVD values, rounded to 12 decimal places for
+cross-backend portability, and requires the raw minimum to exceed 1.2.
+
+| Direction | Ports | Reference-impedance profile | Seed | Active matrix field | Case id |
+| --- | ---: | --- | ---: | --- | --- |
+| S→Z | 3 | real, equal across ports and frequency | `20260924` | `s` (direct input) | `power_wave_s_to_z_three_port_active_real_equal_z0` |
+| Z→S | 3 | real, equal across ports and frequency | `20260925` | `s` (public output) | `power_wave_z_to_s_three_port_active_real_equal_z0` |
+
 The S renormalization cases are registered separately:
 
 | Operation | Ports | Reference-impedance profile | Case id |
@@ -78,6 +91,7 @@ The S renormalization cases are registered separately:
 | S renormalization | 4 | complex, per-port, frequency-dependent source and target z0 | `power_wave_renormalize_four_port_complex_per_port_frequency_dependent_z0` |
 | S renormalization | 8 | real, frequency-dependent, same across ports source and target z0 | `power_wave_renormalize_eight_port_real_frequency_dependent_z0` |
 | S renormalization | 3 | real, equal across ports and frequency; 42.75 Ω → 86.5 Ω | `power_wave_renormalize_three_port_reciprocal_real_equal_z0` |
+| S renormalization | 3 | real, equal across ports and frequency; 57.25 Ω → 91.75 Ω | `power_wave_renormalize_three_port_active_real_equal_z0` |
 
 Each case records explicit source and target reference impedances in the
 frequency-major `(frequency, port)` representation after Network read-back.
@@ -89,6 +103,12 @@ The reciprocal renormalization case uses the same exact transpose-symmetric
 three-port S input construction, with scalar real source and target values
 42.75 Ω and 86.5 Ω respectively; both values are expanded and recorded after
 Network read-back.
+
+The active renormalization case uses a directly generated active source S input
+with 57.25 Ω source and 91.75 Ω target reference impedances. Its active
+metadata explicitly identifies `s_input` as the relevant matrix, so the
+recorded 1.2 lower bound is not confused with a classification of the
+renormalized output.
 
 All registered cases are checked by default against a fresh scikit-rf run; the
 default command checks every case:
@@ -158,6 +178,23 @@ tolerance used by the fixture checker. Their reference impedances are real,
 equal across ports/frequency, and intentionally non-50 Ω; the renormalization
 source/target values are materially separated.
 
+The three active cases use dedicated local NumPy `default_rng` seeds
+`20260924`, `20260925`, and `20260926`. S-to-Z and renormalization construct
+their active S inputs directly with deliberately active diagonal values and
+small non-symmetric coupling. The Z-to-S case constructs a separate direct Z
+input with negative-resistance diagonal terms far from `-z0`; its active
+matrix is the S result read back from public
+`Network.from_z(..., s_def="power").s`, never a round trip from that output.
+The generator computes the unrounded true largest singular value of each
+relevant S sample with NumPy SVD, validates every raw value against 1.2, and
+records the minimum rounded to 12 decimal places in
+`metadata.active_network` for equivalent-LAPACK portability. Rust independently
+certifies that bound using the mathematically valid maximum column 2-norm
+lower bound, without adding an SVD or other runtime dependency. All active
+inputs pass the existing conservative diagonal-dominance guards; for active
+renormalization, the underlying source-referenced Z is explicitly checked
+against the target-stage Z+G guard before the public renormalization call.
+
 The JSON representation is deliberately machine-readable and byte-stable:
 
 - UTF-8 encoding, `sort_keys=True`, two-space indentation, and one final LF;
@@ -167,7 +204,10 @@ The JSON representation is deliberately machine-readable and byte-stable:
   seed, input/output array shapes, wave definition, and reference-impedance
   characteristics; operation cases may additionally link a shared input case;
   renormalization records separate source and target reference-impedance flags
-  and shapes for each input/output array;
+  and shapes for each input/output array. Active cases additionally record a
+  concise `active_network` contract with `criterion`, `matrix_field`,
+  `required_minimum`, and the NumPy-SVD `observed_minimum`; existing fixtures
+  omit this optional field;
 - The `three_port_complex_z0` network case retains an exact canonical UTF-8
   byte comparison.
 - Every operation case requires strict JSON parsing (including finite
