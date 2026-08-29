@@ -596,6 +596,27 @@ mod tests {
             ),
         ),
     ];
+    const ACTIVE_S_TO_Z_FIXTURE: &str = include_str!(
+        "../../../tools/oracle/fixtures/power_wave_s_to_z_three_port_active_real_equal_z0.json"
+    );
+    const ACTIVE_Z_TO_S_FIXTURE: &str = include_str!(
+        "../../../tools/oracle/fixtures/power_wave_z_to_s_three_port_active_real_equal_z0.json"
+    );
+    const ACTIVE_RENORMALIZE_FIXTURE: &str = include_str!(
+        "../../../tools/oracle/fixtures/power_wave_renormalize_three_port_active_real_equal_z0.json"
+    );
+    const ACTIVE_S_TO_Z_FIXTURES: &[(&str, &str)] = &[(
+        "power_wave_s_to_z_three_port_active_real_equal_z0",
+        ACTIVE_S_TO_Z_FIXTURE,
+    )];
+    const ACTIVE_Z_TO_S_FIXTURES: &[(&str, &str)] = &[(
+        "power_wave_z_to_s_three_port_active_real_equal_z0",
+        ACTIVE_Z_TO_S_FIXTURE,
+    )];
+    const ACTIVE_RENORMALIZE_FIXTURES: &[(&str, &str)] = &[(
+        "power_wave_renormalize_three_port_active_real_equal_z0",
+        ACTIVE_RENORMALIZE_FIXTURE,
+    )];
 
     #[derive(Debug, Deserialize)]
     #[serde(deny_unknown_fields)]
@@ -718,6 +739,15 @@ mod tests {
 
     #[derive(Debug, Deserialize)]
     #[serde(deny_unknown_fields)]
+    struct ActiveNetworkMetadata {
+        criterion: String,
+        matrix_field: String,
+        observed_minimum: f64,
+        required_minimum: f64,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(deny_unknown_fields)]
     struct MatrixFixtureDocument {
         data: MatrixFixtureData,
         metadata: MatrixFixtureMetadata,
@@ -735,6 +765,8 @@ mod tests {
     #[derive(Debug, Deserialize)]
     #[serde(deny_unknown_fields)]
     struct MatrixFixtureMetadata {
+        #[serde(default)]
+        active_network: Option<ActiveNetworkMetadata>,
         case_id: String,
         numpy_version: String,
         operation: String,
@@ -797,6 +829,8 @@ mod tests {
     #[derive(Debug, Deserialize)]
     #[serde(deny_unknown_fields)]
     struct RenormalizationFixtureMetadata {
+        #[serde(default)]
+        active_network: Option<ActiveNetworkMetadata>,
         case_id: String,
         numpy_version: String,
         operation: String,
@@ -921,6 +955,7 @@ mod tests {
         frequency_dependent_z0: bool,
         per_port_z0: bool,
         reciprocal: bool,
+        active: bool,
     }
 
     fn matrix_case_spec(case_id: &str) -> MatrixCaseSpec {
@@ -933,6 +968,7 @@ mod tests {
                 frequency_dependent_z0: false,
                 per_port_z0: false,
                 reciprocal: false,
+                active: false,
             },
             "power_wave_s_to_z_two_port_complex_per_port_constant_z0"
             | "power_wave_z_to_s_two_port_complex_per_port_constant_z0" => MatrixCaseSpec {
@@ -942,6 +978,7 @@ mod tests {
                 frequency_dependent_z0: false,
                 per_port_z0: true,
                 reciprocal: false,
+                active: false,
             },
             "power_wave_s_to_z_four_port_real_frequency_dependent_z0"
             | "power_wave_z_to_s_four_port_real_frequency_dependent_z0" => MatrixCaseSpec {
@@ -951,6 +988,7 @@ mod tests {
                 frequency_dependent_z0: true,
                 per_port_z0: false,
                 reciprocal: false,
+                active: false,
             },
             "power_wave_s_to_z_eight_port_complex_per_port_frequency_dependent_z0"
             | "power_wave_z_to_s_eight_port_complex_per_port_frequency_dependent_z0" => {
@@ -961,6 +999,7 @@ mod tests {
                     frequency_dependent_z0: true,
                     per_port_z0: true,
                     reciprocal: false,
+                    active: false,
                 }
             }
             "power_wave_s_to_z_three_port_reciprocal_real_equal_z0"
@@ -971,6 +1010,17 @@ mod tests {
                 frequency_dependent_z0: false,
                 per_port_z0: false,
                 reciprocal: true,
+                active: false,
+            },
+            "power_wave_s_to_z_three_port_active_real_equal_z0"
+            | "power_wave_z_to_s_three_port_active_real_equal_z0" => MatrixCaseSpec {
+                nfreq: 3,
+                nport: 3,
+                complex_z0: false,
+                frequency_dependent_z0: false,
+                per_port_z0: false,
+                reciprocal: false,
+                active: true,
             },
             _ => panic!("unexpected power-wave matrix case id: {case_id}"),
         }
@@ -984,6 +1034,7 @@ mod tests {
         frequency_dependent_z0: bool,
         per_port_z0: bool,
         reciprocal: bool,
+        active: bool,
     }
 
     fn renormalization_case_spec(case_id: &str) -> RenormalizationCaseSpec {
@@ -995,6 +1046,7 @@ mod tests {
                 frequency_dependent_z0: false,
                 per_port_z0: false,
                 reciprocal: false,
+                active: false,
             },
             "power_wave_renormalize_two_port_complex_per_port_constant_z0" => {
                 RenormalizationCaseSpec {
@@ -1004,6 +1056,7 @@ mod tests {
                     frequency_dependent_z0: false,
                     per_port_z0: true,
                     reciprocal: false,
+                    active: false,
                 }
             }
             "power_wave_renormalize_four_port_complex_per_port_frequency_dependent_z0" => {
@@ -1014,6 +1067,7 @@ mod tests {
                     frequency_dependent_z0: true,
                     per_port_z0: true,
                     reciprocal: false,
+                    active: false,
                 }
             }
             "power_wave_renormalize_eight_port_real_frequency_dependent_z0" => {
@@ -1024,6 +1078,7 @@ mod tests {
                     frequency_dependent_z0: true,
                     per_port_z0: false,
                     reciprocal: false,
+                    active: false,
                 }
             }
             "power_wave_renormalize_three_port_reciprocal_real_equal_z0" => {
@@ -1034,8 +1089,18 @@ mod tests {
                     frequency_dependent_z0: false,
                     per_port_z0: false,
                     reciprocal: true,
+                    active: false,
                 }
             }
+            "power_wave_renormalize_three_port_active_real_equal_z0" => RenormalizationCaseSpec {
+                nfreq: 3,
+                nport: 3,
+                complex_z0: false,
+                frequency_dependent_z0: false,
+                per_port_z0: false,
+                reciprocal: false,
+                active: true,
+            },
             _ => panic!("unexpected power-wave renormalization case id: {case_id}"),
         }
     }
@@ -1060,6 +1125,87 @@ mod tests {
         })
     }
 
+    const ACTIVE_REQUIRED_SIGMA_MAX: f64 = 1.2;
+    const ACTIVE_NETWORK_CRITERION: &str =
+        "largest singular value of the relevant power-wave S matrix is strictly greater than 1";
+    const ACTIVE_METADATA_ROUNDING_TOLERANCE: f64 = 1e-12;
+
+    /// Validate active-network metadata without introducing an SVD dependency.
+    ///
+    /// NumPy records the true sigma-max minimum in the fixture.  The Rust
+    /// tests independently prove the strict active bound with column norms in
+    /// `assert_active_column_norm_lower_bound`, using
+    /// `sigma_max >= max(column 2-norm)`.
+    fn validate_active_network_metadata<'a>(
+        metadata: Option<&'a ActiveNetworkMetadata>,
+        expected_active: bool,
+        expected_matrix_field: &str,
+    ) -> Option<&'a ActiveNetworkMetadata> {
+        if !expected_active {
+            assert!(
+                metadata.is_none(),
+                "non-active fixture must not grow active-network metadata"
+            );
+            return None;
+        }
+
+        let active = metadata.expect("active fixture must record active-network metadata");
+        assert_eq!(active.criterion, ACTIVE_NETWORK_CRITERION);
+        assert_eq!(active.matrix_field, expected_matrix_field);
+        assert_eq!(active.required_minimum, ACTIVE_REQUIRED_SIGMA_MAX);
+        assert!(active.observed_minimum.is_finite());
+        assert!(
+            active.observed_minimum > active.required_minimum,
+            "recorded active sigma-max minimum must exceed its required bound"
+        );
+        Some(active)
+    }
+
+    fn column_two_norm(matrix: &[Vec<ComplexValue>], column: usize) -> f64 {
+        matrix
+            .iter()
+            .map(|row| {
+                let value = matrix_complex(&row[column]);
+                value.norm_sqr()
+            })
+            .sum::<f64>()
+            .sqrt()
+    }
+
+    /// Independently certify each active frequency with a valid sigma-max lower bound.
+    fn assert_active_column_norm_lower_bound(
+        case_id: &str,
+        matrices: &[Vec<Vec<ComplexValue>>],
+        active: &ActiveNetworkMetadata,
+    ) {
+        let mut minimum_column_bound = f64::INFINITY;
+        for (frequency, matrix) in matrices.iter().enumerate() {
+            assert_eq!(
+                matrix.len(),
+                3,
+                "{case_id} active matrix must be three-port"
+            );
+            assert!(matrix.iter().all(|row| row.len() == 3));
+            let column_bound = (0..3)
+                .map(|column| column_two_norm(matrix, column))
+                .fold(0.0_f64, f64::max);
+            assert!(
+                column_bound.is_finite(),
+                "{case_id} active column bound is non-finite at frequency {frequency}"
+            );
+            assert!(
+                column_bound > active.required_minimum,
+                "{case_id} active column bound {column_bound:?} does not exceed required sigma-max minimum at frequency {frequency}"
+            );
+            minimum_column_bound = minimum_column_bound.min(column_bound);
+        }
+        assert!(
+            active.observed_minimum + ACTIVE_METADATA_ROUNDING_TOLERANCE >= minimum_column_bound,
+            "{case_id} recorded sigma-max minimum {:?} is below the independently certified column-norm lower bound {minimum_column_bound:?}",
+            active.observed_minimum
+        );
+    }
+
     fn validate_renormalization_fixture_contract(
         fixture: &RenormalizationFixtureDocument,
         expected_case_id: &str,
@@ -1068,6 +1214,11 @@ mod tests {
         let metadata = &fixture.metadata;
         let data = &fixture.data;
         let expected_reciprocal = spec.reciprocal;
+        let active_network = validate_active_network_metadata(
+            metadata.active_network.as_ref(),
+            spec.active,
+            "s_input",
+        );
         assert_eq!(metadata.case_id, expected_case_id);
         assert_eq!(metadata.operation, "renormalize_s");
         assert_eq!(metadata.wave_definition, "power");
@@ -1208,6 +1359,10 @@ mod tests {
             }
         }
 
+        if let Some(active_network) = active_network {
+            assert_active_column_norm_lower_bound(expected_case_id, &data.s_input, active_network);
+        }
+
         (policy.rtol, policy.atol)
     }
 
@@ -1224,9 +1379,15 @@ mod tests {
             frequency_dependent_z0: expected_frequency_dependent_z0,
             per_port_z0: expected_per_port_z0,
             reciprocal: expected_reciprocal,
+            active: expected_active,
         } = spec;
         let metadata = &fixture.metadata;
         let data = &fixture.data;
+        let active_network = validate_active_network_metadata(
+            metadata.active_network.as_ref(),
+            expected_active,
+            "s",
+        );
         assert_eq!(metadata.case_id, expected_case_id);
         assert_eq!(metadata.operation, expected_operation);
         assert_eq!(metadata.wave_definition, "power");
@@ -1369,6 +1530,12 @@ mod tests {
                     );
                 }
             }
+        }
+
+        if let Some(active_network) = active_network {
+            // S-to-Z uses data.s as its direct active input; Z-to-S uses the
+            // same field for its independently generated active oracle output.
+            assert_active_column_norm_lower_bound(expected_case_id, &data.s, active_network);
         }
 
         let policy = &metadata.tolerance_policy;
@@ -2152,6 +2319,57 @@ mod tests {
                     atol,
                 );
             }
+        }
+    }
+
+    #[test]
+    fn matches_power_wave_active_s_to_z_conformance_fixture() {
+        for &(case_id, json) in ACTIVE_S_TO_Z_FIXTURES {
+            let spec = matrix_case_spec(case_id);
+            let fixture: MatrixFixtureDocument =
+                serde_json::from_str(json).expect("checked-in active fixture must parse");
+            let (rtol, atol_ohm) =
+                validate_matrix_fixture_contract(&fixture, case_id, "s_to_z", spec);
+            let s = matrix_parameter_array(&fixture.data.s, spec.nfreq, spec.nport);
+            let z0 = matrix_z0_array(&fixture.data.z0_ohm, spec.nfreq, spec.nport);
+            let actual = s_to_z_power(&s, &z0).expect("active S-to-Z conversion must succeed");
+            assert_matrix_output_matches(case_id, &actual, &fixture.data.z_ohm, rtol, atol_ohm);
+        }
+    }
+
+    #[test]
+    fn matches_power_wave_active_z_to_s_conformance_fixture() {
+        for &(case_id, json) in ACTIVE_Z_TO_S_FIXTURES {
+            let spec = matrix_case_spec(case_id);
+            let fixture: MatrixFixtureDocument =
+                serde_json::from_str(json).expect("checked-in active fixture must parse");
+            let (rtol, atol) = validate_matrix_fixture_contract(&fixture, case_id, "z_to_s", spec);
+            let z = matrix_parameter_array(&fixture.data.z_ohm, spec.nfreq, spec.nport);
+            let z0 = matrix_z0_array(&fixture.data.z0_ohm, spec.nfreq, spec.nport);
+            let actual = z_to_s_power(&z, &z0).expect("active Z-to-S conversion must succeed");
+            assert_matrix_output_matches(case_id, &actual, &fixture.data.s, rtol, atol);
+        }
+    }
+
+    #[test]
+    fn matches_power_wave_active_renormalization_conformance_fixture() {
+        for &(case_id, json) in ACTIVE_RENORMALIZE_FIXTURES {
+            let spec = renormalization_case_spec(case_id);
+            let fixture: RenormalizationFixtureDocument =
+                serde_json::from_str(json).expect("checked-in active fixture must parse");
+            let (rtol, atol) = validate_renormalization_fixture_contract(&fixture, case_id, spec);
+            let source_s = matrix_parameter_array(&fixture.data.s_input, spec.nfreq, spec.nport);
+            let source_z0 = matrix_z0_array(&fixture.data.z0_source_ohm, spec.nfreq, spec.nport);
+            let target_z0 = matrix_z0_array(&fixture.data.z0_target_ohm, spec.nfreq, spec.nport);
+            let actual = renormalize_s_power(&source_s, &source_z0, &target_z0)
+                .expect("active renormalization conversion must succeed");
+            assert_matrix_output_matches(
+                case_id,
+                &actual,
+                &fixture.data.s_renormalized,
+                rtol,
+                atol,
+            );
         }
     }
 }
