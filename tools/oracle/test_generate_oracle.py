@@ -234,6 +234,33 @@ RECIPROCAL_CASE_SPECS = {
     },
 }
 
+PASSIVE_CASE_SPECS = {
+    "power_wave_s_to_z_three_port_reciprocal_real_equal_z0": {
+        "operation": "s_to_z",
+        "matrix_fields": ["s"],
+        "observed_maxima": [0.151907019275],
+        "z0": [61.25],
+        "input": "s",
+        "output": "z_ohm",
+    },
+    "power_wave_z_to_s_three_port_reciprocal_real_equal_z0": {
+        "operation": "z_to_s",
+        "matrix_fields": ["s"],
+        "observed_maxima": [0.166759615367],
+        "z0": [61.25],
+        "input": "z_ohm",
+        "output": "s",
+    },
+    "power_wave_renormalize_three_port_reciprocal_real_equal_z0": {
+        "operation": "renormalize_s",
+        "matrix_fields": ["s_input", "s_renormalized"],
+        "observed_maxima": [0.155165225095, 0.456137460254],
+        "z0": [42.75, 86.5],
+        "input": "s_input",
+        "output": "s_renormalized",
+    },
+}
+
 ACTIVE_CASE_SPECS = {
     "power_wave_s_to_z_three_port_active_real_equal_z0": {
         "operation": "s_to_z",
@@ -549,6 +576,229 @@ class ReciprocalRegistrationAndCheckerTests(unittest.TestCase):
                         oracle._check_numeric_fixture(path, fixture, spec["output"]),
                         1,
                     )
+
+class PassiveRegistrationAndEvidenceTests(unittest.TestCase):
+    """Protect passive metadata and its independent Frobenius certificate."""
+
+    @staticmethod
+    def _complex(value: dict[str, float]) -> complex:
+        return complex(value["real"], value["imag"])
+
+    @classmethod
+    def _matrix_frobenius_norm(
+        cls, matrix: list[list[dict[str, float]]]
+    ) -> float:
+        return math.sqrt(
+            sum(
+                abs(cls._complex(value)) ** 2
+                for row in matrix
+                for value in row
+            )
+        )
+
+    @classmethod
+    def _matrix_numpy(cls, np: object, matrix: list[list[dict[str, float]]]) -> object:
+        return np.asarray(
+            [[cls._complex(value) for value in row] for row in matrix],
+            dtype=np.complex128,
+        )
+
+    def test_passive_cases_are_registered_without_adding_fixture_cases(self) -> None:
+        registered = {case.case_id: case for case in oracle._CASES}
+        self.assertEqual(set(PASSIVE_CASE_SPECS), set(RECIPROCAL_CASE_SPECS))
+        for case_id, spec in PASSIVE_CASE_SPECS.items():
+            with self.subTest(case_id=case_id):
+                case = registered[case_id]
+                self.assertEqual(case.path.stem, case_id)
+                self.assertEqual(case.comparison, "numeric_output")
+                self.assertEqual(case.numeric_output_key, spec["output"])
+                self.assertEqual(len(spec["matrix_fields"]), len(spec["observed_maxima"]))
+
+    def test_passive_metadata_is_pinned_and_nonpassive_cases_omit_it(self) -> None:
+        registered = {case.case_id: case for case in oracle._CASES}
+        for case_id, spec in PASSIVE_CASE_SPECS.items():
+            with self.subTest(case_id=case_id):
+                fixture = oracle._read_canonical_json(registered[case_id].path)
+                metadata = fixture["metadata"]
+                passive = metadata.get("passive_network")
+                self.assertIsInstance(passive, dict)
+                self.assertEqual(passive["criterion"], oracle.PASSIVE_NETWORK_CRITERION)
+                self.assertEqual(
+                    passive["required_maximum"], oracle.PASSIVE_REQUIRED_SIGMA_MAX
+                )
+                evidence = passive["matrices"]
+                self.assertEqual(
+                    [item["matrix_field"] for item in evidence], spec["matrix_fields"]
+                )
+                self.assertEqual(
+                    [item["observed_maximum"] for item in evidence],
+                    spec["observed_maxima"],
+                )
+                for item in evidence:
+                    observed = item["observed_maximum"]
+                    self.assertTrue(math.isfinite(observed))
+                    self.assertGreaterEqual(observed, 0.0)
+                    self.assertLess(observed, oracle.PASSIVE_REQUIRED_SIGMA_MAX)
+                    self.assertEqual(
+                        observed,
+                        round(
+                            observed,
+                            oracle.PASSIVE_OBSERVED_MAXIMUM_DECIMAL_PLACES,
+                        ),
+                    )
+
+        passive_case_ids = set(PASSIVE_CASE_SPECS)
+        for case in oracle._CASES:
+            if case.case_id in passive_case_ids:
+                continue
+            with self.subTest(nonpassive_case=case.case_id):
+                fixture = oracle._read_canonical_json(case.path)
+                self.assertNotIn("passive_network", fixture["metadata"])
+
+    def test_pinned_numpy_svd_records_the_true_maximum_for_every_field(self) -> None:
+        np, _skrf = oracle._load_dependencies()
+        registered = {case.case_id: case for case in oracle._CASES}
+        for case_id, spec in PASSIVE_CASE_SPECS.items():
+            with self.subTest(case_id=case_id):
+                fixture = oracle._read_canonical_json(registered[case_id].path)
+                evidence = fixture["metadata"]["passive_network"]["matrices"]
+                data = fixture["data"]
+                for item in evidence:
+                    field = item["matrix_field"]
+                    raw_maximum = max(
+                        float(
+                            np.linalg.svd(
+                                self._matrix_numpy(np, matrix), compute_uv=False
+                            )[0]
+                        )
+                        for matrix in data[field]
+                    )
+                    self.assertTrue(math.isfinite(raw_maximum))
+                    self.assertGreaterEqual(raw_maximum, 0.0)
+                    self.assertLess(raw_maximum, oracle.PASSIVE_REQUIRED_SIGMA_MAX)
+                    self.assertEqual(
+                        item["observed_maximum"],
+                        round(
+                            raw_maximum,
+                            oracle.PASSIVE_OBSERVED_MAXIMUM_DECIMAL_PLACES,
+                        ),
+                    )
+
+    def test_frobenius_upper_bound_certifies_every_fixture_s_field(self) -> None:
+        registered = {case.case_id: case for case in oracle._CASES}
+        for case_id in PASSIVE_CASE_SPECS:
+            with self.subTest(case_id=case_id):
+                fixture = oracle._read_canonical_json(registered[case_id].path)
+                passive = fixture["metadata"]["passive_network"]
+                bounds = []
+                for item in passive["matrices"]:
+                    bounds_for_field = [
+                        self._matrix_frobenius_norm(matrix)
+                        for matrix in fixture["data"][item["matrix_field"]]
+                    ]
+                    self.assertTrue(all(math.isfinite(bound) for bound in bounds_for_field))
+                    self.assertTrue(
+                        all(
+                            bound < oracle.PASSIVE_REQUIRED_SIGMA_MAX
+                            for bound in bounds_for_field
+                        )
+                    )
+                    maximum_bound = max(bounds_for_field)
+                    bounds.append(maximum_bound)
+                    self.assertLessEqual(
+                        item["observed_maximum"], maximum_bound + 1e-12
+                    )
+                self.assertEqual(len(bounds), len(passive["matrices"]))
+
+    def test_passive_z0_is_real_positive_and_equal_per_port(self) -> None:
+        registered = {case.case_id: case for case in oracle._CASES}
+        for case_id, spec in PASSIVE_CASE_SPECS.items():
+            with self.subTest(case_id=case_id):
+                fixture = oracle._read_canonical_json(registered[case_id].path)
+                data = fixture["data"]
+                if spec["operation"] == "renormalize_s":
+                    z0_fields = ("z0_source_ohm", "z0_target_ohm")
+                    expected_z0 = spec["z0"]
+                else:
+                    z0_fields = ("z0_ohm",)
+                    expected_z0 = [spec["z0"][0]]
+                for field, expected in zip(z0_fields, expected_z0):
+                    values = [
+                        self._complex(value)
+                        for row in data[field]
+                        for value in row
+                    ]
+                    self.assertTrue(values)
+                    self.assertTrue(
+                        all(
+                            value.real > 0.0
+                            and math.isfinite(value.real)
+                            and value.imag == 0.0
+                            for value in values
+                        )
+                    )
+                    self.assertTrue(all(value == values[0] for value in values))
+                    self.assertEqual(values[0], complex(expected, 0.0))
+
+    def test_z_to_s_reciprocal_fixture_keeps_independent_direct_z_input(self) -> None:
+        np, _skrf = oracle._load_dependencies()
+        case_id = "power_wave_z_to_s_three_port_reciprocal_real_equal_z0"
+        fixture = oracle._read_canonical_json(oracle.RECIPROCAL_Z_TO_S_FIXTURE)
+        _frequency, source_z, _constructor_z0, _expanded_z0 = oracle._reciprocal_z_inputs(
+            np,
+            nfreq=3,
+            nports=3,
+            seed=RECIPROCAL_CASE_SPECS[case_id]["seed"],
+            z0_ohm=RECIPROCAL_CASE_SPECS[case_id]["z0"],
+        )
+        for frequency in range(3):
+            for row in range(3):
+                for column in range(3):
+                    self.assertEqual(
+                        self._complex(fixture["data"]["z_ohm"][frequency][row][column]),
+                        source_z[frequency, row, column],
+                    )
+        self.assertTrue(
+            all(
+                self._complex(fixture["data"]["z_ohm"][frequency][port][port]).real
+                > 60.0
+                for frequency in range(3)
+                for port in range(3)
+            )
+        )
+
+    def test_renormalization_evidence_keeps_source_then_target_order(self) -> None:
+        case_id = "power_wave_renormalize_three_port_reciprocal_real_equal_z0"
+        fixture = oracle._read_canonical_json(oracle.RECIPROCAL_RENORMALIZE_FIXTURE)
+        passive = fixture["metadata"]["passive_network"]
+        self.assertEqual(
+            [item["matrix_field"] for item in passive["matrices"]],
+            ["s_input", "s_renormalized"],
+        )
+        self.assertEqual(
+            fixture["metadata"]["shape"]["s_input"], [3, 3, 3]
+        )
+        self.assertEqual(
+            fixture["metadata"]["shape"]["s_renormalized"], [3, 3, 3]
+        )
+        self.assertEqual(
+            [
+                self._complex(value)
+                for row in fixture["data"]["z0_source_ohm"]
+                for value in row
+            ],
+            [complex(42.75, 0.0)] * 9,
+        )
+        self.assertEqual(
+            [
+                self._complex(value)
+                for row in fixture["data"]["z0_target_ohm"]
+                for value in row
+            ],
+            [complex(86.5, 0.0)] * 9,
+        )
+        self.assertEqual(case_id, fixture["metadata"]["case_id"])
+
 
 class ActiveRegistrationAndEvidenceTests(unittest.TestCase):
     """Protect the active-network metadata and independent evidence contract."""

@@ -4,7 +4,9 @@
 The original three-port Network fixture is retained as a stable input
 contract.  The power-wave operation fixtures additionally form a small
 conformance matrix over port count and reference-impedance structure, with
-dedicated reciprocal and active three-port cases for each existing kernel.
+dedicated reciprocal, passive, and active three-port cases for each existing
+kernel.  Reciprocal cases additionally carry deterministic passive-network
+evidence for every relevant power-wave S matrix.
 This module is kept independent of the Rust implementation so it can serve as
 a stable numerical reference for the internal conversion kernels.
 """
@@ -172,6 +174,12 @@ RECIPROCAL_TOLERANCE_JUSTIFICATION = (
     "deterministic reciprocal three-port case; generation-time diagonal-"
     "dominance checks keep the conversion systems away from exact singularity "
     "while allowing normal cross-language linear-algebra rounding."
+)
+
+PASSIVE_REQUIRED_SIGMA_MAX = 0.8
+PASSIVE_OBSERVED_MAXIMUM_DECIMAL_PLACES = 12
+PASSIVE_NETWORK_CRITERION = (
+    "largest singular value of every relevant power-wave S matrix is strictly less than 1"
 )
 
 ACTIVE_S_TO_Z_FIXTURE = (
@@ -354,6 +362,19 @@ def _assert_output_symmetric(
                     )
 
 
+def _assert_real_positive_equal_z0(np: Any, z0: Any, *, name: str) -> None:
+    """Require finite, real-positive, equal-per-port reference impedances."""
+
+    if z0.ndim != 2 or z0.shape[0] < 1 or z0.shape[1] < 1:
+        raise ValueError(f"{name} z0 must be a non-empty (frequency, port) array")
+    if not np.isfinite(z0).all():
+        raise ValueError(f"{name} z0 must be finite")
+    if not (z0.real > 0.0).all() or (z0.imag != 0.0).any():
+        raise ValueError(f"{name} z0 must be real and strictly positive")
+    if not np.all(z0 == z0[0, 0]):
+        raise ValueError(f"{name} z0 must be equal across frequency and ports")
+
+
 def _assert_s_conditioning(s: Any) -> None:
     """Check a conservative diagonal-dominance bound for ``I-S``.
 
@@ -446,6 +467,79 @@ def _active_network_metadata(np: Any, s: Any, *, matrix_field: str) -> dict[str,
         "matrix_field": matrix_field,
         "observed_minimum": observed_minimum,
         "required_minimum": ACTIVE_REQUIRED_SIGMA_MAX,
+    }
+
+
+def _passive_network_metadata(
+    np: Any,
+    matrices: list[tuple[str, Any]],
+) -> dict[str, Any]:
+    """Return pinned NumPy SVD evidence for each relevant passive S stack.
+
+    The oracle is the only place where the true largest singular value is
+    computed.  Every frequency sample is checked before taking the raw maximum
+    for a matrix field; the rounded value is then recorded with twelve decimal
+    places so equivalent LAPACK backends share one deterministic fixture
+    contract.  Rust tests independently certify the same strict bound with a
+    Frobenius norm, which is an upper bound on the largest singular value and
+    does not require an SVD dependency.
+    """
+
+    if not matrices:
+        raise ValueError("passive-network evidence requires at least one S stack")
+
+    evidence: list[dict[str, Any]] = []
+    seen_fields: set[str] = set()
+    allowed_fields = {"s", "s_input", "s_renormalized"}
+    for matrix_field, s in matrices:
+        if matrix_field not in allowed_fields:
+            raise ValueError(f"unsupported passive-network matrix field: {matrix_field!r}")
+        if matrix_field in seen_fields:
+            raise ValueError(f"duplicate passive-network matrix field: {matrix_field!r}")
+        seen_fields.add(matrix_field)
+        if s.ndim != 3 or s.shape[1] != s.shape[2] or s.shape[1] < 1:
+            raise ValueError(
+                "passive-network evidence requires a stack of square S matrices"
+            )
+
+        singular_values: list[float] = []
+        for frequency in range(s.shape[0]):
+            value = float(np.linalg.svd(s[frequency], compute_uv=False)[0])
+            if not np.isfinite(value) or value < 0.0:
+                raise ValueError(
+                    "passive-network singular-value evidence must be finite and "
+                    f"non-negative at frequency {frequency} for {matrix_field!r}"
+                )
+            singular_values.append(value)
+
+        raw_observed_maximum = max(singular_values)
+        if raw_observed_maximum >= PASSIVE_REQUIRED_SIGMA_MAX:
+            raise ValueError(
+                "passive-network S matrices must remain strictly below the "
+                f"required bound {PASSIVE_REQUIRED_SIGMA_MAX}; "
+                f"{matrix_field!r} observed {raw_observed_maximum}"
+            )
+        observed_maximum = round(
+            raw_observed_maximum,
+            PASSIVE_OBSERVED_MAXIMUM_DECIMAL_PLACES,
+        )
+        if observed_maximum >= PASSIVE_REQUIRED_SIGMA_MAX:
+            raise ValueError(
+                "rounded passive-network evidence must remain strictly below "
+                f"the required bound {PASSIVE_REQUIRED_SIGMA_MAX}; "
+                f"{matrix_field!r} observed {observed_maximum}"
+            )
+        evidence.append(
+            {
+                "matrix_field": matrix_field,
+                "observed_maximum": observed_maximum,
+            }
+        )
+
+    return {
+        "criterion": PASSIVE_NETWORK_CRITERION,
+        "required_maximum": PASSIVE_REQUIRED_SIGMA_MAX,
+        "matrices": evidence,
     }
 
 
@@ -836,6 +930,7 @@ def _reciprocal_frequency_and_z0(
         [0.95e9 + 0.41e9 * index for index in range(nfreq)], dtype=np.float64
     )
     expanded_z0 = np.full((nfreq, nports), z0_ohm, dtype=np.complex128)
+    _assert_real_positive_equal_z0(np, expanded_z0, name="reciprocal")
     return frequency_hz, z0_ohm, expanded_z0
 
 
@@ -1352,6 +1447,7 @@ def _reciprocal_s_to_z_fixture(np: Any, skrf: Any) -> dict[str, Any]:
     network_s = np.asarray(network.s, dtype=np.complex128)
     network_z0 = np.asarray(network.z0, dtype=np.complex128)
     network_z = np.asarray(network.z, dtype=np.complex128)
+    _assert_real_positive_equal_z0(np, network_z0, name="reciprocal S-to-Z")
     _assert_exact_symmetric(np, network_s, name="reciprocal S input")
     _assert_output_symmetric(
         np,
@@ -1360,9 +1456,11 @@ def _reciprocal_s_to_z_fixture(np: Any, skrf: Any) -> dict[str, Any]:
         rtol=S_TO_Z_RTOL,
         atol=S_TO_Z_ATOL_OHM,
     )
+    passive_network = _passive_network_metadata(np, [("s", network_s)])
 
     return {
         "metadata": {
+            "passive_network": passive_network,
             "case_id": case_id,
             "numpy_version": np.__version__,
             "operation": "s_to_z",
@@ -1432,6 +1530,7 @@ def _reciprocal_z_to_s_fixture(np: Any, skrf: Any) -> dict[str, Any]:
     frequency = np.asarray(converted.f, dtype=np.float64)
     converted_s = np.asarray(converted.s, dtype=np.complex128)
     network_z0 = np.asarray(converted.z0, dtype=np.complex128)
+    _assert_real_positive_equal_z0(np, network_z0, name="reciprocal Z-to-S")
     _assert_exact_symmetric(np, source_z, name="reciprocal Z input")
     _assert_output_symmetric(
         np,
@@ -1440,9 +1539,11 @@ def _reciprocal_z_to_s_fixture(np: Any, skrf: Any) -> dict[str, Any]:
         rtol=Z_TO_S_RTOL,
         atol=Z_TO_S_ATOL,
     )
+    passive_network = _passive_network_metadata(np, [("s", converted_s)])
 
     return {
         "metadata": {
+            "passive_network": passive_network,
             "case_id": case_id,
             "numpy_version": np.__version__,
             "operation": "z_to_s",
@@ -1510,9 +1611,15 @@ def _reciprocal_renormalize_fixture(np: Any, skrf: Any) -> dict[str, Any]:
     frequency = np.asarray(network.f, dtype=np.float64)
     network_s_input = np.asarray(network.s, dtype=np.complex128)
     network_z0_source = np.asarray(network.z0, dtype=np.complex128)
+    _assert_real_positive_equal_z0(
+        np, network_z0_source, name="reciprocal renormalization source"
+    )
     network.renormalize(RECIPROCAL_RENORMALIZE_TARGET_Z0_OHM, s_def="power")
     network_s_renormalized = np.asarray(network.s, dtype=np.complex128)
     network_z0_target = np.asarray(network.z0, dtype=np.complex128)
+    _assert_real_positive_equal_z0(
+        np, network_z0_target, name="reciprocal renormalization target"
+    )
     _assert_exact_symmetric(np, network_s_input, name="reciprocal S input")
     _assert_output_symmetric(
         np,
@@ -1520,6 +1627,10 @@ def _reciprocal_renormalize_fixture(np: Any, skrf: Any) -> dict[str, Any]:
         name="reciprocal renormalized-S output",
         rtol=RENORMALIZE_RTOL,
         atol=RENORMALIZE_ATOL,
+    )
+    passive_network = _passive_network_metadata(
+        np,
+        [("s_input", network_s_input), ("s_renormalized", network_s_renormalized)],
     )
 
     flags = {
@@ -1530,6 +1641,7 @@ def _reciprocal_renormalize_fixture(np: Any, skrf: Any) -> dict[str, Any]:
     }
     return {
         "metadata": {
+            "passive_network": passive_network,
             "case_id": case_id,
             "numpy_version": np.__version__,
             "operation": "renormalize_s",

@@ -5,9 +5,10 @@ It generates checked-in JSON fixtures through `scikit-rf==2.0.1`, with
 `numpy==2.5.1` pinned directly. scikit-rf is an oracle for numerical behavior
 here, not the public API specification for the Rust library. The harness keeps
 the original three-port fixture and registers an additional eight-case
-S↔Z power-wave conformance matrix, a four-case S renormalization matrix, one
-reciprocal three-port case, and one active three-port case for each existing
-operation.
+S↔Z power-wave conformance matrix, a four-case S renormalization matrix, and
+reciprocal and active three-port cases for each existing operation. The three
+existing reciprocal cases also carry optional passive-network evidence; no
+new fixture or operation case is introduced.
 
 ## Clean-checkout setup
 
@@ -63,12 +64,44 @@ The full case ids are prefixed with `power_wave_s_to_z_` or
 The reciprocal S↔Z cases are registered separately. They use one explicit
 three-port, three-frequency input per operation, with exact complex transpose
 symmetry (the mirrored value is not conjugated) and the same real 61.25 Ω
-reference impedance on every port and frequency sample.
+reference impedance on every port and frequency sample. Their relevant
+power-wave S matrices are strictly passive by a deliberately non-marginal
+contract: the largest singular value at every frequency is below 0.8 (and
+therefore below 1). The generator computes the true largest singular value
+with pinned NumPy SVD, records the maximum over all frequencies rounded to 12
+decimal places, and stores that evidence in `metadata.passive_network`.
 
 | Direction | Ports | Reference-impedance profile | Seed | Case id |
 | --- | ---: | --- | ---: | --- |
 | S→Z | 3 | real, equal across ports and frequency | `20260921` | `power_wave_s_to_z_three_port_reciprocal_real_equal_z0` |
 | Z→S | 3 | real, equal across ports and frequency | `20260922` | `power_wave_z_to_s_three_port_reciprocal_real_equal_z0` |
+
+The pinned passive maxima are kept with the existing reciprocal fixture data:
+
+| Case | Matrix field | Observed maximum |
+| --- | --- | ---: |
+| S→Z reciprocal | `s` | `0.151907019275` |
+| Z→S reciprocal | `s` | `0.166759615367` |
+| Renormalization reciprocal | `s_input` | `0.155165225095` |
+| Renormalization reciprocal | `s_renormalized` | `0.456137460254` |
+
+For renormalization, `s_input` and `s_renormalized` are evidenced separately
+and in that order. The metadata shape is intentionally:
+
+```json
+{
+  "criterion": "largest singular value of every relevant power-wave S matrix is strictly less than 1",
+  "required_maximum": 0.8,
+  "matrices": [
+    {"matrix_field": "s", "observed_maximum": 0.151907019275}
+  ]
+}
+```
+
+The S→Z fixture uses the source `s`, Z→S uses the public converted `s`, and
+renormalization uses both source and target S stacks. Rust tests independently
+certify each relevant matrix with the Frobenius upper bound
+`sigma_max(S) <= ||S||_F`, without adding an SVD or production dependency.
 
 The active S↔Z cases are registered separately. Each is a three-frequency,
 three-port case with real 57.25 Ω reference impedance on every port and
@@ -174,9 +207,13 @@ triangle with complex binary64 values and mirroring it to the other triangle
 without conjugation. S inputs pass the `I-S` diagonal-dominance guard, direct Z
 inputs pass the corresponding `Z+G` guard, and each generated oracle output is
 checked for transpose symmetry under the same recorded mixed binary64
-tolerance used by the fixture checker. Their reference impedances are real,
-equal across ports/frequency, and intentionally non-50 Ω; the renormalization
-source/target values are materially separated.
+tolerance used by the fixture checker. Their reference impedances are finite,
+real, strictly positive, equal across every port and frequency, and
+intentionally non-50 Ω; the renormalization source/target values are
+materially separated. For each relevant S stack, the generator checks every
+raw NumPy SVD sigma-max against `0.8`, checks the rounded maximum against the
+same strict bound, and records only the rounded maximum in
+`metadata.passive_network`.
 
 The three active cases use dedicated local NumPy `default_rng` seeds
 `20260924`, `20260925`, and `20260926`. S-to-Z and renormalization construct
@@ -204,10 +241,13 @@ The JSON representation is deliberately machine-readable and byte-stable:
   seed, input/output array shapes, wave definition, and reference-impedance
   characteristics; operation cases may additionally link a shared input case;
   renormalization records separate source and target reference-impedance flags
-  and shapes for each input/output array. Active cases additionally record a
+  and shapes for each input/output array. Reciprocal passive cases additionally
+  record a `passive_network` contract with `criterion`, `required_maximum`, and
+  ordered per-field `matrices` entries containing the pinned NumPy-SVD
+  `observed_maximum`; active cases additionally record a
   concise `active_network` contract with `criterion`, `matrix_field`,
   `required_minimum`, and the NumPy-SVD `observed_minimum`; existing fixtures
-  omit this optional field;
+  omit each optional evidence field when it does not apply;
 - The `three_port_complex_z0` network case retains an exact canonical UTF-8
   byte comparison.
 - Every operation case requires strict JSON parsing (including finite
