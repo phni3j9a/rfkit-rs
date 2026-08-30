@@ -8,6 +8,8 @@ use num_complex::Complex64;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+mod impedance_admittance;
+mod linalg;
 mod power_waves;
 
 /// Errors produced while constructing or manipulating RF network data.

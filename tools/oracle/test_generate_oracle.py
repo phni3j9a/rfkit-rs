@@ -368,6 +368,61 @@ RENORMALIZATION_REFERENCE_FLAGS = {
     "unit": "ohm",
 }
 
+IMPEDANCE_ADMITTANCE_CASE_SPECS = {
+    "impedance_admittance_z_to_y_three_port_well_conditioned": {
+        "operation": "z_to_y",
+        "ports": 3,
+        "frequencies": 3,
+        "input": "z_ohm",
+        "output": "y_s",
+        "input_unit": "ohm",
+        "output_unit": "S",
+        "seed": 20_260_933,
+        "near": False,
+        "system": "Z",
+        "absolute_tolerance": "atol_s",
+    },
+    "impedance_admittance_y_to_z_three_port_well_conditioned": {
+        "operation": "y_to_z",
+        "ports": 3,
+        "frequencies": 3,
+        "input": "y_s",
+        "output": "z_ohm",
+        "input_unit": "S",
+        "output_unit": "ohm",
+        "seed": 20_260_934,
+        "near": False,
+        "system": "Y",
+        "absolute_tolerance": "atol_ohm",
+    },
+    "impedance_admittance_z_to_y_three_port_near_singular": {
+        "operation": "z_to_y",
+        "ports": 3,
+        "frequencies": 3,
+        "input": "z_ohm",
+        "output": "y_s",
+        "input_unit": "ohm",
+        "output_unit": "S",
+        "seed": 20_260_935,
+        "near": True,
+        "system": "Z",
+        "absolute_tolerance": "atol_s",
+    },
+    "impedance_admittance_y_to_z_three_port_near_singular": {
+        "operation": "y_to_z",
+        "ports": 3,
+        "frequencies": 3,
+        "input": "y_s",
+        "output": "z_ohm",
+        "input_unit": "S",
+        "output_unit": "ohm",
+        "seed": 20_260_936,
+        "near": True,
+        "system": "Y",
+        "absolute_tolerance": "atol_ohm",
+    },
+}
+
 
 class MatrixRegistrationAndCheckerTests(unittest.TestCase):
     """Protect registration, z0-pattern, and output-only checker semantics."""
@@ -384,9 +439,11 @@ class MatrixRegistrationAndCheckerTests(unittest.TestCase):
             + len(MATRIX_CASE_SPECS)
             + len(RENORMALIZATION_CASE_SPECS)
             + len(RECIPROCAL_CASE_SPECS)
-            + len(ACTIVE_CASE_SPECS),
+            + len(ACTIVE_CASE_SPECS)
+            + len(IMPEDANCE_ADMITTANCE_CASE_SPECS),
         )
         self.assertTrue(set(MATRIX_CASE_SPECS).issubset(registered))
+        self.assertTrue(set(IMPEDANCE_ADMITTANCE_CASE_SPECS).issubset(registered))
         for case_id, spec in MATRIX_CASE_SPECS.items():
             case = registered[case_id]
             self.assertEqual(case.comparison, "numeric_output")
@@ -1127,8 +1184,14 @@ class NearSingularRegistrationAndEvidenceTests(unittest.TestCase):
                 self.assertEqual(case.path.stem, case_id)
                 self.assertEqual(case.comparison, "numeric_output")
                 self.assertEqual(case.numeric_output_key, spec["output"])
+        all_near_case_ids = set(NEAR_SINGULAR_CASE_SPECS)
+        all_near_case_ids.update(
+            case_id
+            for case_id, spec in IMPEDANCE_ADMITTANCE_CASE_SPECS.items()
+            if spec["near"]
+        )
         for case in oracle._CASES:
-            if case.case_id not in NEAR_SINGULAR_CASE_SPECS:
+            if case.case_id not in all_near_case_ids:
                 with self.subTest(non_near_case=case.case_id):
                     fixture = oracle._read_canonical_json(case.path)
                     self.assertNotIn("near_singular", fixture["metadata"])
@@ -1524,6 +1587,213 @@ class RenormalizationRegistrationAndCheckerTests(unittest.TestCase):
                     self.assertEqual(
                         oracle._check_numeric_fixture(
                             path, fixture, "s_renormalized"
+                        ),
+                        1,
+                    )
+
+
+class ImpedanceAdmittanceRegistrationAndCheckerTests(unittest.TestCase):
+    """Protect direct Z↔Y registration, units, and output-only checking."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.np, cls.skrf = oracle._load_dependencies()
+
+    @staticmethod
+    def _complex(value: dict[str, float]) -> complex:
+        return complex(value["real"], value["imag"])
+
+    def _nested_complex_equal(self, values: object, expected: object) -> None:
+        if isinstance(expected, list):
+            if not isinstance(values, list):
+                raise AssertionError("serialized complex array is not a list")
+            self.assertEqual(len(values), len(expected))
+            for actual_item, expected_item in zip(values, expected):
+                self._nested_complex_equal(actual_item, expected_item)
+            return
+
+        if not isinstance(values, dict) or not isinstance(expected, complex):
+            raise AssertionError("serialized complex leaf has an unexpected shape")
+        self.assertEqual(self._complex(values), expected)
+
+    def _assert_direct_input_reconstruction(
+        self,
+        fixture: dict[str, object],
+        spec: dict[str, object],
+    ) -> None:
+        quantity = "z" if spec["operation"] == "z_to_y" else "y"
+        builder = (
+            oracle._impedance_admittance_near_inputs
+            if spec["near"]
+            else oracle._impedance_admittance_well_inputs
+        )
+        direct_frequency, direct_input = builder(
+            self.np,
+            quantity=quantity,
+            seed=spec["seed"],
+        )
+        data = fixture["data"]
+        self.assertIsInstance(data, dict)
+        self.assertEqual(
+            data["frequency_hz"],
+            [float(value) for value in direct_frequency],
+        )
+        serialized_input = data[spec["input"]]
+        # The helper stores exact binary64 components.  Recursing through the
+        # direct construction proves that the expected output was not reused
+        # as the next case's input.
+        self._nested_complex_equal(serialized_input, direct_input.tolist())
+
+    def test_all_cases_are_registered_with_quantity_specific_outputs(self) -> None:
+        registered = {case.case_id: case for case in oracle._CASES}
+        expected_paths = {
+            "impedance_admittance_z_to_y_three_port_well_conditioned": oracle.IMPEDANCE_ADMITTANCE_Z_TO_Y_WELL_FIXTURE,
+            "impedance_admittance_y_to_z_three_port_well_conditioned": oracle.IMPEDANCE_ADMITTANCE_Y_TO_Z_WELL_FIXTURE,
+            "impedance_admittance_z_to_y_three_port_near_singular": oracle.IMPEDANCE_ADMITTANCE_Z_TO_Y_NEAR_FIXTURE,
+            "impedance_admittance_y_to_z_three_port_near_singular": oracle.IMPEDANCE_ADMITTANCE_Y_TO_Z_NEAR_FIXTURE,
+        }
+        self.assertEqual(set(IMPEDANCE_ADMITTANCE_CASE_SPECS), set(expected_paths))
+        self.assertEqual(
+            len(
+                {
+                    spec["seed"] for spec in IMPEDANCE_ADMITTANCE_CASE_SPECS.values()
+                }
+            ),
+            4,
+        )
+        for case_id, spec in IMPEDANCE_ADMITTANCE_CASE_SPECS.items():
+            with self.subTest(case_id=case_id):
+                case = registered[case_id]
+                self.assertEqual(case.path, expected_paths[case_id])
+                self.assertEqual(case.path.stem, case_id)
+                self.assertEqual(case.comparison, "numeric_output")
+                self.assertEqual(case.numeric_output_key, spec["output"])
+
+    def test_fixture_contracts_reconstruct_direct_inputs_and_near_metadata(self) -> None:
+        registered = {case.case_id: case for case in oracle._CASES}
+        expected_factors = [2.0**-20, 0.625, 0.75]
+        expected_determinant = math.prod(expected_factors)
+        for case_id, spec in IMPEDANCE_ADMITTANCE_CASE_SPECS.items():
+            with self.subTest(case_id=case_id):
+                fixture = oracle._read_canonical_json(registered[case_id].path)
+                metadata = fixture["metadata"]
+                data = fixture["data"]
+                self.assertEqual(metadata["case_id"], case_id)
+                self.assertEqual(metadata["operation"], spec["operation"])
+                self.assertEqual(metadata["numpy_version"], "2.5.1")
+                self.assertEqual(metadata["scikit_rf_version"], "2.0.1")
+                self.assertEqual(metadata["wave_definition"], "not_applicable")
+                self.assertEqual(metadata["random_seed"], spec["seed"])
+                self.assertEqual(metadata["input_unit"], spec["input_unit"])
+                self.assertEqual(metadata["output_unit"], spec["output_unit"])
+                self.assertEqual(metadata["shape"]["frequency"], [3])
+                self.assertEqual(
+                    metadata["shape"]["input_z" if spec["operation"] == "z_to_y" else "input_y"],
+                    [3, 3, 3],
+                )
+                self.assertEqual(
+                    metadata["shape"]["output_y" if spec["operation"] == "z_to_y" else "output_z"],
+                    [3, 3, 3],
+                )
+                self.assertEqual(
+                    metadata["tolerance_policy"]["rtol"],
+                    1e-12,
+                )
+                self.assertEqual(
+                    metadata["tolerance_policy"][spec["absolute_tolerance"]],
+                    1e-12,
+                )
+                justification = metadata["tolerance_policy"]["justification"].lower()
+                self.assertIn(
+                    "case-local" if spec["near"] else "well-conditioned",
+                    justification,
+                )
+                self.assertEqual(len(data["frequency_hz"]), 3)
+                self.assertEqual(len(data[spec["input"]]), 3)
+                self.assertEqual(len(data[spec["output"]]), 3)
+                self.assertTrue(
+                    all(
+                        math.isfinite(self._complex(value).real)
+                        and math.isfinite(self._complex(value).imag)
+                        for matrix in data[spec["output"]]
+                        for row in matrix
+                        for value in row
+                    )
+                )
+                self._assert_direct_input_reconstruction(fixture, spec)
+
+                if spec["near"]:
+                    near = metadata.get("near_singular")
+                    self.assertIsInstance(near, dict)
+                    self.assertEqual(near["system_matrix"], spec["system"])
+                    self.assertEqual(near["matrix_structure"], "upper_triangular")
+                    self.assertEqual(near["binary_exponent"], -20)
+                    self.assertEqual(near["small_diagonal_port"], 0)
+                    self.assertEqual(near["small_diagonal_value"], expected_factors[0])
+                    self.assertTrue(near["determinant_factors_nonzero"])
+                    self.assertEqual(near["determinant_factors"], expected_factors)
+                    self.assertEqual(near["determinant"], expected_determinant)
+                    self.assertTrue(
+                        all(
+                            matrix[row][column] == {"real": 0.0, "imag": 0.0}
+                            for matrix in data[spec["input"]]
+                            for row in range(3)
+                            for column in range(row)
+                        )
+                    )
+                    for matrix in data[spec["input"]]:
+                        diagonal = [self._complex(matrix[index][index]) for index in range(3)]
+                        self.assertEqual(
+                            diagonal,
+                            [complex(value, 0.0) for value in expected_factors],
+                        )
+                else:
+                    self.assertNotIn("near_singular", metadata)
+
+    def test_checker_tolerates_only_computed_output_and_respects_units(self) -> None:
+        registered = {case.case_id: case for case in oracle._CASES}
+        for case_id, spec in IMPEDANCE_ADMITTANCE_CASE_SPECS.items():
+            with self.subTest(case_id=case_id):
+                case = registered[case_id]
+                fixture = oracle._read_canonical_json(case.path)
+                adjusted = copy.deepcopy(fixture)
+                adjusted["data"][spec["output"]][0][0][0]["real"] += 1e-13
+                with tempfile.TemporaryDirectory() as directory:
+                    path = Path(directory) / case.path.name
+                    path.write_bytes(oracle._canonical_bytes(adjusted))
+                    self.assertEqual(
+                        oracle._check_numeric_fixture(
+                            path,
+                            fixture,
+                            spec["output"],
+                        ),
+                        0,
+                    )
+
+                drifted_input = copy.deepcopy(fixture)
+                drifted_input["data"][spec["input"]][0][0][0]["real"] += 1e-3
+                with tempfile.TemporaryDirectory() as directory:
+                    path = Path(directory) / case.path.name
+                    path.write_bytes(oracle._canonical_bytes(drifted_input))
+                    self.assertEqual(
+                        oracle._check_numeric_fixture(
+                            path,
+                            fixture,
+                            spec["output"],
+                        ),
+                        1,
+                    )
+
+                drifted_metadata = copy.deepcopy(fixture)
+                drifted_metadata["metadata"]["output_unit"] = "wrong"
+                with tempfile.TemporaryDirectory() as directory:
+                    path = Path(directory) / case.path.name
+                    path.write_bytes(oracle._canonical_bytes(drifted_metadata))
+                    self.assertEqual(
+                        oracle._check_numeric_fixture(
+                            path,
+                            fixture,
+                            spec["output"],
                         ),
                         1,
                     )
