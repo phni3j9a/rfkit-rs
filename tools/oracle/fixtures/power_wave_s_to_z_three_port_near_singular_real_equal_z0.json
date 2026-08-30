@@ -1,0 +1,377 @@
+{
+  "data": {
+    "frequency_hz": [
+      770000000.0,
+      1080000000.0,
+      1390000000.0
+    ],
+    "s": [
+      [
+        [
+          {
+            "imag": 0.0,
+            "real": 0.9999990463256836
+          },
+          {
+            "imag": 0.014202016712535487,
+            "real": 0.06419449605679552
+          },
+          {
+            "imag": -0.013396555085916724,
+            "real": 0.013071826659515241
+          }
+        ],
+        [
+          {
+            "imag": 0.0,
+            "real": 0.0
+          },
+          {
+            "imag": 0.0,
+            "real": 0.375
+          },
+          {
+            "imag": 0.013697087922614079,
+            "real": 0.00829215308490501
+          }
+        ],
+        [
+          {
+            "imag": 0.0,
+            "real": 0.0
+          },
+          {
+            "imag": 0.0,
+            "real": 0.0
+          },
+          {
+            "imag": 0.0,
+            "real": 0.25
+          }
+        ]
+      ],
+      [
+        [
+          {
+            "imag": 0.0,
+            "real": 0.9999990463256836
+          },
+          {
+            "imag": -0.020808557046139507,
+            "real": 0.06865616576849198
+          },
+          {
+            "imag": -0.07655669530929475,
+            "real": 0.005174355943498547
+          }
+        ],
+        [
+          {
+            "imag": 0.0,
+            "real": 0.0
+          },
+          {
+            "imag": 0.0,
+            "real": 0.375
+          },
+          {
+            "imag": -0.03282206607772511,
+            "real": 0.02504229920235354
+          }
+        ],
+        [
+          {
+            "imag": 0.0,
+            "real": 0.0
+          },
+          {
+            "imag": 0.0,
+            "real": 0.0
+          },
+          {
+            "imag": 0.0,
+            "real": 0.25
+          }
+        ]
+      ],
+      [
+        [
+          {
+            "imag": 0.0,
+            "real": 0.9999990463256836
+          },
+          {
+            "imag": 0.024574596490751426,
+            "real": -0.07946907831944144
+          },
+          {
+            "imag": -0.010592356895803111,
+            "real": -0.008897400786617944
+          }
+        ],
+        [
+          {
+            "imag": 0.0,
+            "real": 0.0
+          },
+          {
+            "imag": 0.0,
+            "real": 0.375
+          },
+          {
+            "imag": -0.02659249730000858,
+            "real": 0.016876084057680544
+          }
+        ],
+        [
+          {
+            "imag": 0.0,
+            "real": 0.0
+          },
+          {
+            "imag": 0.0,
+            "real": 0.0
+          },
+          {
+            "imag": 0.0,
+            "real": 0.25
+          }
+        ]
+      ]
+    ],
+    "z0_ohm": [
+      [
+        {
+          "imag": 0.0,
+          "real": 64.0
+        },
+        {
+          "imag": 0.0,
+          "real": 64.0
+        },
+        {
+          "imag": 0.0,
+          "real": 64.0
+        }
+      ],
+      [
+        {
+          "imag": 0.0,
+          "real": 64.0
+        },
+        {
+          "imag": 0.0,
+          "real": 64.0
+        },
+        {
+          "imag": 0.0,
+          "real": 64.0
+        }
+      ],
+      [
+        {
+          "imag": 0.0,
+          "real": 64.0
+        },
+        {
+          "imag": 0.0,
+          "real": 64.0
+        },
+        {
+          "imag": 0.0,
+          "real": 64.0
+        }
+      ]
+    ],
+    "z_ohm": [
+      [
+        [
+          {
+            "imag": -0.0,
+            "real": 134217664.0
+          },
+          {
+            "imag": 3049859.8658792675,
+            "real": 13785663.057356887
+          },
+          {
+            "imag": -2111922.457060078,
+            "real": 2436012.673018517
+          }
+        ],
+        [
+          {
+            "imag": -0.0,
+            "real": 0.0
+          },
+          {
+            "imag": -0.0,
+            "real": 140.8
+          },
+          {
+            "imag": 3.740218142068484,
+            "real": 2.2643106023847284
+          }
+        ],
+        [
+          {
+            "imag": 0.0,
+            "real": 0.0
+          },
+          {
+            "imag": 0.0,
+            "real": 0.0
+          },
+          {
+            "imag": 0.0,
+            "real": 106.66666666666666
+          }
+        ]
+      ],
+      [
+        [
+          {
+            "imag": -0.0,
+            "real": 134217664.0
+          },
+          {
+            "imag": -4468603.599505978,
+            "real": 14743799.332221389
+          },
+          {
+            "imag": -14494789.029168308,
+            "real": 1222720.173651299
+          }
+        ],
+        [
+          {
+            "imag": -0.0,
+            "real": 0.0
+          },
+          {
+            "imag": -0.0,
+            "real": 140.8
+          },
+          {
+            "imag": -8.96261217695747,
+            "real": 6.838217168856007
+          }
+        ],
+        [
+          {
+            "imag": 0.0,
+            "real": 0.0
+          },
+          {
+            "imag": 0.0,
+            "real": 0.0
+          },
+          {
+            "imag": 0.0,
+            "real": 106.66666666666666
+          }
+        ]
+      ],
+      [
+        [
+          {
+            "imag": 0.0,
+            "real": 134217664.0
+          },
+          {
+            "imag": 5277354.412008688,
+            "real": -17065854.621263184
+          },
+          {
+            "imag": -1171729.742829755,
+            "real": -1789140.9104497829
+          }
+        ],
+        [
+          {
+            "imag": -0.0,
+            "real": 0.0
+          },
+          {
+            "imag": -0.0,
+            "real": 140.8
+          },
+          {
+            "imag": -7.2615245960556765,
+            "real": 4.608296020017301
+          }
+        ],
+        [
+          {
+            "imag": 0.0,
+            "real": 0.0
+          },
+          {
+            "imag": 0.0,
+            "real": 0.0
+          },
+          {
+            "imag": 0.0,
+            "real": 106.66666666666666
+          }
+        ]
+      ]
+    ]
+  },
+  "metadata": {
+    "case_id": "power_wave_s_to_z_three_port_near_singular_real_equal_z0",
+    "near_singular": {
+      "binary_exponent": -20,
+      "determinant": 4.470348358154297e-07,
+      "determinant_factors": [
+        9.5367431640625e-07,
+        0.625,
+        0.75
+      ],
+      "determinant_factors_nonzero": true,
+      "matrix_structure": "upper_triangular",
+      "small_diagonal_port": 0,
+      "small_diagonal_value": 9.5367431640625e-07,
+      "system_matrix": "I-S"
+    },
+    "numpy_version": "2.5.1",
+    "operation": "s_to_z",
+    "random_seed": 20260927,
+    "reference_impedance": {
+      "complex": false,
+      "frequency_dependent": false,
+      "per_port": false,
+      "unit": "ohm"
+    },
+    "schema": "rfkit-rs.oracle.fixture",
+    "schema_version": 1,
+    "scikit_rf_version": "2.0.1",
+    "shape": {
+      "frequency": [
+        3
+      ],
+      "input_s": [
+        3,
+        3,
+        3
+      ],
+      "input_z0": [
+        3,
+        3
+      ],
+      "output_z": [
+        3,
+        3,
+        3
+      ]
+    },
+    "tolerance_policy": {
+      "atol_ohm": 1e-12,
+      "comparison": "abs(actual-expected) <= atol_ohm + rtol*abs(expected)",
+      "justification": "case-local strict binary64 tolerance for a deterministic three-port upper-triangular system with one diagonal factor 2^-20=9.5367431640625e-07; this factor is non-zero, comfortably above scikit-rf EIG_COND=1e-9, and intentionally much smaller than the diagonal factors in the well-conditioned fixtures. The resulting finite outputs are O(10^8 ohm) for S-to-Z and O(10^6) for Z-to-S; the existing 1e-12 relative/absolute policy therefore allows binary64 solve round-off at the amplified scale while still catching material disagreement. No platform-sensitive condition number is recorded.",
+      "regeneration": "canonical UTF-8 JSON serialization; z_ohm is checked with the case-local recorded numeric tolerance",
+      "rtol": 1e-12
+    },
+    "wave_definition": "power"
+  }
+}
