@@ -12,7 +12,10 @@ constructed, nonsingular upper-triangular conversion system with one binary
 power-of-two diagonal factor close to (but safely above) scikit-rf's
 eigenvalue-nudging threshold.  This module is kept independent of the Rust
 implementation so it can serve as a stable numerical reference for the
-internal conversion kernels.
+internal conversion kernels.  The impedance/admittance fixtures use the
+public ``skrf.network.z2y`` and ``skrf.network.y2z`` functions for expected
+outputs, with direct Z and Y inputs constructed independently for each
+direction.
 """
 
 from __future__ import annotations
@@ -254,6 +257,60 @@ NEAR_SINGULAR_TOLERANCE_JUSTIFICATION = (
     "allows binary64 solve round-off at the amplified scale while still "
     "catching material disagreement. No platform-sensitive condition number "
     "is recorded."
+)
+
+# The impedance/admittance cases deliberately use direct parameter arrays and
+# no reference impedance or wave definition.  Keep the four paths explicit so
+# registration and the default all-case harness remain auditable.
+IMPEDANCE_ADMITTANCE_Z_TO_Y_WELL_FIXTURE = (
+    Path(__file__).resolve().parent
+    / "fixtures"
+    / "impedance_admittance_z_to_y_three_port_well_conditioned.json"
+)
+IMPEDANCE_ADMITTANCE_Y_TO_Z_WELL_FIXTURE = (
+    Path(__file__).resolve().parent
+    / "fixtures"
+    / "impedance_admittance_y_to_z_three_port_well_conditioned.json"
+)
+IMPEDANCE_ADMITTANCE_Z_TO_Y_NEAR_FIXTURE = (
+    Path(__file__).resolve().parent
+    / "fixtures"
+    / "impedance_admittance_z_to_y_three_port_near_singular.json"
+)
+IMPEDANCE_ADMITTANCE_Y_TO_Z_NEAR_FIXTURE = (
+    Path(__file__).resolve().parent
+    / "fixtures"
+    / "impedance_admittance_y_to_z_three_port_near_singular.json"
+)
+IMPEDANCE_ADMITTANCE_Z_TO_Y_WELL_RANDOM_SEED = 20_260_933
+IMPEDANCE_ADMITTANCE_Y_TO_Z_WELL_RANDOM_SEED = 20_260_934
+IMPEDANCE_ADMITTANCE_Z_TO_Y_NEAR_RANDOM_SEED = 20_260_935
+IMPEDANCE_ADMITTANCE_Y_TO_Z_NEAR_RANDOM_SEED = 20_260_936
+IMPEDANCE_ADMITTANCE_NFREQ = 3
+IMPEDANCE_ADMITTANCE_NPORTS = 3
+IMPEDANCE_ADMITTANCE_RTOL = 1e-12
+IMPEDANCE_ADMITTANCE_ATOL_S = 1e-12
+IMPEDANCE_ADMITTANCE_ATOL_OHM = 1e-12
+IMPEDANCE_ADMITTANCE_NEAR_BINARY_EXPONENT = -20
+IMPEDANCE_ADMITTANCE_NEAR_DIAGONAL_VALUE = (
+    2.0**IMPEDANCE_ADMITTANCE_NEAR_BINARY_EXPONENT
+)
+IMPEDANCE_ADMITTANCE_NEAR_DIAGONAL_FACTORS = (
+    IMPEDANCE_ADMITTANCE_NEAR_DIAGONAL_VALUE,
+    0.625,
+    0.75,
+)
+IMPEDANCE_ADMITTANCE_NEAR_DETERMINANT = math.prod(
+    IMPEDANCE_ADMITTANCE_NEAR_DIAGONAL_FACTORS
+)
+IMPEDANCE_ADMITTANCE_NEAR_TOLERANCE_JUSTIFICATION = (
+    "Case-local strict binary64 tolerance for a deterministic three-port "
+    "upper-triangular direct parameter matrix with one exact binary factor "
+    f"2^{IMPEDANCE_ADMITTANCE_NEAR_BINARY_EXPONENT}="
+    f"{IMPEDANCE_ADMITTANCE_NEAR_DIAGONAL_VALUE:.17g}; the factor is finite "
+    "and non-zero, and pinned NumPy matrix_rank reports full rank. The "
+    "determinant product is recorded from the input diagonal factors, with "
+    "no condition number used for acceptance."
 )
 
 
@@ -1117,6 +1174,287 @@ def _matrix_z_inputs(
     _assert_non_symmetric(np, z, name="Z input")
     _assert_z_conditioning(z, expanded_z0)
     return frequency_hz, z, constructor_z0, expanded_z0
+
+
+def _assert_parameter_diagonal_dominance(
+    np: Any,
+    matrix: Any,
+    *,
+    name: str,
+    margin: float,
+) -> None:
+    """Keep a well-conditioned direct parameter input away from singularity.
+
+    This is a generation-time construction guard only.  It is intentionally a
+    simple strict row diagonal-dominance check rather than a runtime policy or
+    a recorded condition-number acceptance value.
+    """
+
+    if matrix.ndim != 3 or matrix.shape[1] != matrix.shape[2]:
+        raise ValueError(f"{name} must be a stack of square matrices")
+    if not np.isfinite(matrix).all():
+        raise ValueError(f"{name} must be finite")
+    for frequency in range(matrix.shape[0]):
+        for row in range(matrix.shape[1]):
+            diagonal = abs(matrix[frequency, row, row])
+            off_diagonal = sum(
+                abs(matrix[frequency, row, column])
+                for column in range(matrix.shape[2])
+                if column != row
+            )
+            if diagonal <= off_diagonal + margin:
+                raise ValueError(
+                    f"{name} failed the strict diagonal-dominance guard at "
+                    f"frequency {frequency}, row {row}"
+                )
+
+
+def _impedance_admittance_frequency(np: Any) -> Any:
+    """Build deterministic frequency samples for direct Z/Y fixtures."""
+
+    return np.array(
+        [0.73e9 + 0.37e9 * index for index in range(IMPEDANCE_ADMITTANCE_NFREQ)],
+        dtype=np.float64,
+    )
+
+
+def _impedance_admittance_well_inputs(
+    np: Any,
+    *,
+    quantity: str,
+    seed: int,
+) -> tuple[Any, Any]:
+    """Construct an independent, non-symmetric well-conditioned Z or Y stack."""
+
+    if quantity not in {"z", "y"}:
+        raise ValueError(f"unknown impedance/admittance quantity: {quantity!r}")
+
+    frequency_hz = _impedance_admittance_frequency(np)
+    nfreq = frequency_hz.size
+    nports = IMPEDANCE_ADMITTANCE_NPORTS
+    rng = np.random.default_rng(seed)
+    if quantity == "z":
+        scale = 0.35
+        diagonal_base = 18.0
+        diagonal_step = 2.5
+        name = "well-conditioned Z input"
+    else:
+        scale = 0.0035
+        diagonal_base = 0.095
+        diagonal_step = 0.011
+        name = "well-conditioned Y input"
+
+    matrix = (
+        rng.normal(loc=0.0, scale=scale, size=(nfreq, nports, nports))
+        + 1j * rng.normal(loc=0.0, scale=scale, size=(nfreq, nports, nports))
+    ).astype(np.complex128)
+    for frequency in range(nfreq):
+        for port in range(nports):
+            matrix[frequency, port, port] += complex(
+                diagonal_base + diagonal_step * frequency + 0.8 * port,
+                0.75 + 0.12 * frequency - 0.09 * port,
+            )
+
+    _assert_non_symmetric(np, matrix, name=name)
+    _assert_parameter_diagonal_dominance(
+        np,
+        matrix,
+        name=name,
+        margin=0.25 * diagonal_base,
+    )
+    for frequency in range(nfreq):
+        if np.linalg.matrix_rank(matrix[frequency]) != nports:
+            raise ValueError(f"{name} must have full pinned-NumPy matrix rank")
+    return frequency_hz, matrix
+
+
+def _impedance_admittance_near_inputs(
+    np: Any,
+    *,
+    quantity: str,
+    seed: int,
+) -> tuple[Any, Any]:
+    """Construct an upper-triangular near-singular direct Z or Y stack.
+
+    The binary diagonal factor and determinant product are generated from the
+    input itself.  Full rank is checked with the pinned NumPy matrix-rank
+    implementation at generation time; no condition number is recorded or
+    used as a fixture acceptance criterion.
+    """
+
+    if quantity not in {"z", "y"}:
+        raise ValueError(f"unknown impedance/admittance quantity: {quantity!r}")
+
+    frequency_hz = _impedance_admittance_frequency(np)
+    nfreq = frequency_hz.size
+    nports = IMPEDANCE_ADMITTANCE_NPORTS
+    rng = np.random.default_rng(seed)
+    matrix = np.zeros((nfreq, nports, nports), dtype=np.complex128)
+    for frequency in range(nfreq):
+        for row, factor in enumerate(IMPEDANCE_ADMITTANCE_NEAR_DIAGONAL_FACTORS):
+            matrix[frequency, row, row] = complex(factor, 0.0)
+            for column in range(row + 1, nports):
+                matrix[frequency, row, column] = complex(
+                    rng.normal(loc=0.0, scale=0.03125),
+                    rng.normal(loc=0.0, scale=0.03125),
+                )
+
+    name = f"near-singular {quantity.upper()} input"
+    if not np.isfinite(matrix).all():
+        raise ValueError(f"{name} must be finite")
+    lower_triangle = np.tril(matrix, k=-1)
+    if not np.array_equal(lower_triangle, np.zeros_like(lower_triangle)):
+        raise ValueError(f"{name} must be upper triangular")
+    expected_diagonal = np.asarray(
+        IMPEDANCE_ADMITTANCE_NEAR_DIAGONAL_FACTORS,
+        dtype=np.complex128,
+    )
+    if not np.array_equal(
+        np.diagonal(matrix, axis1=1, axis2=2),
+        np.broadcast_to(expected_diagonal, (nfreq, nports)),
+    ):
+        raise ValueError(f"{name} has unexpected binary diagonal factors")
+    for frequency in range(nfreq):
+        if np.linalg.matrix_rank(matrix[frequency]) != nports:
+            raise ValueError(f"{name} must have full pinned-NumPy matrix rank")
+    return frequency_hz, matrix
+
+
+def _impedance_admittance_near_metadata(*, system_matrix: str) -> dict[str, Any]:
+    """Describe the input-derived nonsingular near-singular construction."""
+
+    factors = [float(value) for value in IMPEDANCE_ADMITTANCE_NEAR_DIAGONAL_FACTORS]
+    determinant = float(IMPEDANCE_ADMITTANCE_NEAR_DETERMINANT)
+    if not all(math.isfinite(value) and value != 0.0 for value in factors):
+        raise ValueError("near-singular diagonal factors must be finite and non-zero")
+    if not math.isfinite(determinant) or determinant == 0.0:
+        raise ValueError("near-singular determinant must be finite and non-zero")
+    return {
+        "binary_exponent": IMPEDANCE_ADMITTANCE_NEAR_BINARY_EXPONENT,
+        "determinant": determinant,
+        "determinant_factors": factors,
+        "determinant_factors_nonzero": True,
+        "matrix_structure": "upper_triangular",
+        "small_diagonal_port": 0,
+        "small_diagonal_value": float(IMPEDANCE_ADMITTANCE_NEAR_DIAGONAL_VALUE),
+        "system_matrix": system_matrix,
+    }
+
+
+def _impedance_admittance_fixture(
+    np: Any,
+    skrf: Any,
+    *,
+    case_id: str,
+    operation: str,
+    seed: int,
+    near_singular: bool,
+) -> dict[str, Any]:
+    """Build one direct Z↔Y fixture from public scikit-rf conversion behavior."""
+
+    if operation == "z_to_y":
+        input_quantity = "z"
+        input_key = "z_ohm"
+        output_key = "y_s"
+        input_unit = "ohm"
+        output_unit = "S"
+        absolute_tolerance_key = "atol_s"
+        absolute_tolerance = IMPEDANCE_ADMITTANCE_ATOL_S
+        if near_singular:
+            frequency_hz, direct_input = _impedance_admittance_near_inputs(
+                np,
+                quantity=input_quantity,
+                seed=seed,
+            )
+        else:
+            frequency_hz, direct_input = _impedance_admittance_well_inputs(
+                np,
+                quantity=input_quantity,
+                seed=seed,
+            )
+        expected_output = skrf.network.z2y(direct_input)
+    elif operation == "y_to_z":
+        input_quantity = "y"
+        input_key = "y_s"
+        output_key = "z_ohm"
+        input_unit = "S"
+        output_unit = "ohm"
+        absolute_tolerance_key = "atol_ohm"
+        absolute_tolerance = IMPEDANCE_ADMITTANCE_ATOL_OHM
+        if near_singular:
+            frequency_hz, direct_input = _impedance_admittance_near_inputs(
+                np,
+                quantity=input_quantity,
+                seed=seed,
+            )
+        else:
+            frequency_hz, direct_input = _impedance_admittance_well_inputs(
+                np,
+                quantity=input_quantity,
+                seed=seed,
+            )
+        expected_output = skrf.network.y2z(direct_input)
+    else:
+        raise ValueError(f"unknown impedance/admittance operation: {operation!r}")
+
+    expected_output = np.asarray(expected_output, dtype=np.complex128)
+    if not np.isfinite(expected_output).all():
+        raise ValueError(f"{case_id} output must be finite")
+    if near_singular:
+        near_metadata = _impedance_admittance_near_metadata(
+            system_matrix=input_quantity.upper()
+        )
+        justification = IMPEDANCE_ADMITTANCE_NEAR_TOLERANCE_JUSTIFICATION
+    else:
+        near_metadata = None
+        justification = (
+            "Strict binary64 tolerance for a well-conditioned, modest-magnitude "
+            "deterministic direct complex N-port parameter matrix; a generation-"
+            "time diagonal-dominance guard keeps the input away from exact "
+            "singularity while allowing normal cross-language solve round-off."
+        )
+
+    input_shape_key = f"input_{input_quantity}"
+    output_shape_key = f"output_{'y' if operation == 'z_to_y' else 'z'}"
+    data = {
+        "frequency_hz": [float(value) for value in frequency_hz],
+        input_key: _complex_array(direct_input),
+        output_key: _complex_array(expected_output),
+    }
+    metadata = {
+        "case_id": case_id,
+        "input_unit": input_unit,
+        "numpy_version": np.__version__,
+        "operation": operation,
+        "output_unit": output_unit,
+        "random_seed": seed,
+        "schema": "rfkit-rs.oracle.fixture",
+        "schema_version": SCHEMA_VERSION,
+        "scikit_rf_version": skrf.__version__,
+        "shape": {
+            "frequency": list(frequency_hz.shape),
+            input_shape_key: list(direct_input.shape),
+            output_shape_key: list(expected_output.shape),
+        },
+        "tolerance_policy": {
+            absolute_tolerance_key: absolute_tolerance,
+            "comparison": (
+                f"abs(actual-expected) <= {absolute_tolerance_key} + "
+                "rtol*abs(expected)"
+            ),
+            "justification": justification,
+            "regeneration": (
+                f"canonical UTF-8 JSON serialization; {output_key} is checked "
+                "with the recorded numeric tolerance"
+            ),
+            "rtol": IMPEDANCE_ADMITTANCE_RTOL,
+        },
+        "wave_definition": "not_applicable",
+    }
+    if near_metadata is not None:
+        metadata["near_singular"] = near_metadata
+
+    return {"metadata": metadata, "data": data}
 
 
 def _reciprocal_frequency_and_z0(
@@ -2543,6 +2881,58 @@ def _z_to_s_eight_port_complex_per_port_frequency_dependent_z0_fixture(
     )
 
 
+def _impedance_admittance_z_to_y_well_fixture(
+    np: Any, skrf: Any
+) -> dict[str, Any]:
+    return _impedance_admittance_fixture(
+        np,
+        skrf,
+        case_id="impedance_admittance_z_to_y_three_port_well_conditioned",
+        operation="z_to_y",
+        seed=IMPEDANCE_ADMITTANCE_Z_TO_Y_WELL_RANDOM_SEED,
+        near_singular=False,
+    )
+
+
+def _impedance_admittance_y_to_z_well_fixture(
+    np: Any, skrf: Any
+) -> dict[str, Any]:
+    return _impedance_admittance_fixture(
+        np,
+        skrf,
+        case_id="impedance_admittance_y_to_z_three_port_well_conditioned",
+        operation="y_to_z",
+        seed=IMPEDANCE_ADMITTANCE_Y_TO_Z_WELL_RANDOM_SEED,
+        near_singular=False,
+    )
+
+
+def _impedance_admittance_z_to_y_near_fixture(
+    np: Any, skrf: Any
+) -> dict[str, Any]:
+    return _impedance_admittance_fixture(
+        np,
+        skrf,
+        case_id="impedance_admittance_z_to_y_three_port_near_singular",
+        operation="z_to_y",
+        seed=IMPEDANCE_ADMITTANCE_Z_TO_Y_NEAR_RANDOM_SEED,
+        near_singular=True,
+    )
+
+
+def _impedance_admittance_y_to_z_near_fixture(
+    np: Any, skrf: Any
+) -> dict[str, Any]:
+    return _impedance_admittance_fixture(
+        np,
+        skrf,
+        case_id="impedance_admittance_y_to_z_three_port_near_singular",
+        operation="y_to_z",
+        seed=IMPEDANCE_ADMITTANCE_Y_TO_Z_NEAR_RANDOM_SEED,
+        near_singular=True,
+    )
+
+
 _CASES = (
     _OracleCase(
         "three_port_complex_z0",
@@ -2704,6 +3094,34 @@ _CASES = (
         "numeric_output",
         "s",
     ),
+    _OracleCase(
+        "impedance_admittance_z_to_y_three_port_well_conditioned",
+        IMPEDANCE_ADMITTANCE_Z_TO_Y_WELL_FIXTURE,
+        _impedance_admittance_z_to_y_well_fixture,
+        "numeric_output",
+        "y_s",
+    ),
+    _OracleCase(
+        "impedance_admittance_y_to_z_three_port_well_conditioned",
+        IMPEDANCE_ADMITTANCE_Y_TO_Z_WELL_FIXTURE,
+        _impedance_admittance_y_to_z_well_fixture,
+        "numeric_output",
+        "z_ohm",
+    ),
+    _OracleCase(
+        "impedance_admittance_z_to_y_three_port_near_singular",
+        IMPEDANCE_ADMITTANCE_Z_TO_Y_NEAR_FIXTURE,
+        _impedance_admittance_z_to_y_near_fixture,
+        "numeric_output",
+        "y_s",
+    ),
+    _OracleCase(
+        "impedance_admittance_y_to_z_three_port_near_singular",
+        IMPEDANCE_ADMITTANCE_Y_TO_Z_NEAR_FIXTURE,
+        _impedance_admittance_y_to_z_near_fixture,
+        "numeric_output",
+        "z_ohm",
+    ),
 )
 _CASES_BY_ID = {case.case_id: case for case in _CASES}
 
@@ -2857,11 +3275,13 @@ def _numeric_tolerance(document: dict[str, Any]) -> tuple[float, float]:
     if not isinstance(policy, dict):
         raise ValueError("fixture tolerance_policy must be a JSON object")
 
-    absolute_keys = [key for key in ("atol", "atol_ohm") if key in policy]
+    absolute_keys = [
+        key for key in ("atol", "atol_ohm", "atol_s") if key in policy
+    ]
     if len(absolute_keys) != 1:
         raise ValueError(
             "fixture tolerance_policy must contain exactly one of "
-            "'atol' or 'atol_ohm'"
+            "'atol', 'atol_ohm', or 'atol_s'"
         )
 
     absolute_key = absolute_keys[0]

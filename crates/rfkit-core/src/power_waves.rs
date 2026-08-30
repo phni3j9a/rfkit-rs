@@ -24,6 +24,8 @@ use ndarray::{Array2, Array3};
 use num_complex::Complex64;
 use thiserror::Error;
 
+use crate::linalg;
+
 const ZERO: Complex64 = Complex64::new(0.0, 0.0);
 
 /// Failure modes for the internal power-wave conversion kernel.
@@ -354,141 +356,30 @@ pub(crate) fn renormalize_s_power(
     z_to_s_power(&z, target_z0)
 }
 
-/// Solve `A X = B` in place for a square `A` and multiple right-hand sides.
-///
-/// The only singularity criterion is an exactly-zero selected pivot.  This is
-/// intentional: a tolerance or diagonal nudge would silently change the
-/// requested network conversion semantics.
+/// Solve one power-wave system through the shared operation-independent
+/// linear-algebra kernel, adding the frequency context required by the
+/// existing private error contract.
 fn solve_multiple_rhs(
     a: &mut [Complex64],
     b: &mut [Complex64],
     n: usize,
     frequency: usize,
 ) -> Result<(), PowerWaveError> {
-    for pivot_index in 0..n {
-        let mut pivot_row = pivot_index;
-        let mut pivot_magnitude = a[pivot_index * n + pivot_index].norm_sqr();
-
-        for row in (pivot_index + 1)..n {
-            let candidate = a[row * n + pivot_index];
-            if !is_finite(candidate) {
-                return Err(PowerWaveError::NonFiniteComputation {
-                    frequency,
-                    row,
-                    column: pivot_index,
-                });
-            }
-            let candidate_magnitude = candidate.norm_sqr();
-            if candidate_magnitude > pivot_magnitude {
-                pivot_row = row;
-                pivot_magnitude = candidate_magnitude;
-            }
+    linalg::solve_multiple_rhs(a, b, n).map_err(|error| match error {
+        linalg::SolveError::Singular { pivot } => PowerWaveError::Singular { frequency, pivot },
+        linalg::SolveError::NonFinite { row, column } => PowerWaveError::NonFiniteComputation {
+            frequency,
+            row,
+            column,
+        },
+        linalg::SolveError::InvalidStorage { .. } => {
+            unreachable!("power-wave solver storage is constructed with square matrices")
         }
-
-        let pivot = a[pivot_row * n + pivot_index];
-        if !is_finite(pivot) {
-            return Err(PowerWaveError::NonFiniteComputation {
-                frequency,
-                row: pivot_row,
-                column: pivot_index,
-            });
-        }
-        if pivot == ZERO {
-            return Err(PowerWaveError::Singular {
-                frequency,
-                pivot: pivot_index,
-            });
-        }
-
-        if pivot_row != pivot_index {
-            for column in 0..n {
-                a.swap(pivot_index * n + column, pivot_row * n + column);
-                b.swap(pivot_index * n + column, pivot_row * n + column);
-            }
-        }
-
-        let pivot_value = a[pivot_index * n + pivot_index];
-        for row in (pivot_index + 1)..n {
-            let factor = a[row * n + pivot_index] / pivot_value;
-            if !is_finite(factor) {
-                return Err(PowerWaveError::NonFiniteComputation {
-                    frequency,
-                    row,
-                    column: pivot_index,
-                });
-            }
-
-            a[row * n + pivot_index] = ZERO;
-            for column in (pivot_index + 1)..n {
-                let index = row * n + column;
-                a[index] -= factor * a[pivot_index * n + column];
-                if !is_finite(a[index]) {
-                    return Err(PowerWaveError::NonFiniteComputation {
-                        frequency,
-                        row,
-                        column,
-                    });
-                }
-            }
-            for rhs_column in 0..n {
-                let index = row * n + rhs_column;
-                b[index] -= factor * b[pivot_index * n + rhs_column];
-                if !is_finite(b[index]) {
-                    return Err(PowerWaveError::NonFiniteComputation {
-                        frequency,
-                        row,
-                        column: rhs_column,
-                    });
-                }
-            }
-        }
-    }
-
-    for row in (0..n).rev() {
-        let pivot = a[row * n + row];
-        if !is_finite(pivot) {
-            return Err(PowerWaveError::NonFiniteComputation {
-                frequency,
-                row,
-                column: row,
-            });
-        }
-        if pivot == ZERO {
-            return Err(PowerWaveError::Singular {
-                frequency,
-                pivot: row,
-            });
-        }
-
-        for rhs_column in 0..n {
-            let mut value = b[row * n + rhs_column];
-            for column in (row + 1)..n {
-                value -= a[row * n + column] * b[column * n + rhs_column];
-                if !is_finite(value) {
-                    return Err(PowerWaveError::NonFiniteComputation {
-                        frequency,
-                        row,
-                        column: rhs_column,
-                    });
-                }
-            }
-            let solution = value / pivot;
-            if !is_finite(solution) {
-                return Err(PowerWaveError::NonFiniteComputation {
-                    frequency,
-                    row,
-                    column: rhs_column,
-                });
-            }
-            b[row * n + rhs_column] = solution;
-        }
-    }
-
-    Ok(())
+    })
 }
 
 fn is_finite(value: Complex64) -> bool {
-    value.re.is_finite() && value.im.is_finite()
+    linalg::is_finite(value)
 }
 
 #[cfg(test)]

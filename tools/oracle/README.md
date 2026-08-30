@@ -11,7 +11,9 @@ existing reciprocal cases also carry optional passive-network evidence; no
 new reciprocal fixture or operation case is introduced. Two near-singular
 three-port operation cases are also registered; they exercise the existing
 exact-pivot kernels at a deterministic nonsingular boundary without changing
-production semantics.
+production semantics. Four direct impedance/admittance cases are also
+registered: Z→Y and Y→Z inputs are constructed independently, each with a
+well-conditioned and an explicitly nonsingular near-singular three-port case.
 
 ## Clean-checkout setup
 
@@ -31,7 +33,7 @@ fails clearly instead of silently regenerating a fixture with another version.
 
 ## Generate and verify
 
-The harness has twenty-three registered canonical cases. The original three cases
+The harness has twenty-seven registered canonical cases. The original three cases
 remain unchanged:
 
 - `three_port_complex_z0` — the representative four-frequency, three-port
@@ -178,6 +180,37 @@ policy with `atol_ohm=1e-12` for S→Z and `atol=1e-12` for Z→S. The policy is
 recorded in each fixture with the binary64 and `2^-20` proximity rationale;
 the outputs are checked to be finite before comparison.
 
+The direct impedance/admittance cases do not use a reference impedance or a
+wave definition. Z→Y inputs are stored under `data.z_ohm` and expected outputs
+under `data.y_s`; Y→Z inputs use `data.y_s` and expected outputs use
+`data.z_ohm`. The expected values come directly from the public
+`skrf.network.z2y` or `skrf.network.y2z` function for the corresponding
+independent input. In scikit-rf 2.0.1 these public functions are exposed from
+the `network` module rather than as top-level `skrf.z2y`/`skrf.y2z` names.
+
+| Direction | Conditioning | Ports | Seed | Input/output units | Case id |
+| --- | --- | ---: | ---: | --- | --- |
+| Z→Y | well-conditioned | 3 | `20260933` | Ω → S | `impedance_admittance_z_to_y_three_port_well_conditioned` |
+| Y→Z | well-conditioned | 3 | `20260934` | S → Ω | `impedance_admittance_y_to_z_three_port_well_conditioned` |
+| Z→Y | near-singular, nonsingular | 3 | `20260935` | Ω → S | `impedance_admittance_z_to_y_three_port_near_singular` |
+| Y→Z | near-singular, nonsingular | 3 | `20260936` | S → Ω | `impedance_admittance_y_to_z_three_port_near_singular` |
+
+The well-conditioned inputs use independent local NumPy `default_rng` seeds
+and a generation-time strict diagonal-dominance guard. The near inputs are
+independent upper-triangular matrices with exact diagonal factors
+`[2^-20, 0.625, 0.75]`; the determinant evidence is the product of these
+non-zero factors (`4.470348358154297e-7`). Pinned NumPy `matrix_rank` is used
+only while generating the fixture to verify full rank. No condition number,
+rank cutoff, or runtime tolerance classification is used by the Rust kernel.
+The near metadata records the binary exponent, diagonal factors, determinant,
+and upper-triangular structure so the construction can be reconstructed from
+the serialized direct input.
+
+All four cases use strict binary64 `rtol=1e-12`; Z→Y records `atol_s=1e-12`
+and Y→Z records `atol_ohm=1e-12`. The checker tolerates differences only in
+the selected computed output and requires exact canonical equality for the
+direct input, frequencies, units, metadata, shapes, and all other fields.
+
 All registered cases are checked by default against a fresh scikit-rf run; the
 default command checks every case:
 
@@ -280,6 +313,19 @@ configuration. These checks intentionally do not calculate or record a
 condition number. Every source and expected output is checked for finite
 values; the first factor is non-zero and above scikit-rf's `EIG_COND=1e-9`.
 
+The direct impedance/admittance fixtures use a separate input construction for
+each direction. The Z→Y builders generate `z_ohm` directly and call only
+`skrf.network.z2y` for `y_s`; the Y→Z builders generate `y_s` directly and
+call only `skrf.network.y2z` for `z_ohm`. Neither direction uses an expected
+output or a round-trip result as its input. Well-conditioned inputs use a
+strict generation-time diagonal-dominance guard. Near-singular inputs are
+upper triangular with exact diagonal `[2^-20, 0.625, 0.75]`, and the metadata
+records the non-zero determinant product and structure. Pinned NumPy
+`matrix_rank` verifies full rank during generation only. The four direct cases
+use seeds `20260933` through `20260936`; they have no z0 or wave-definition
+fields beyond `wave_definition: "not_applicable"`, and record units explicitly
+as `ohm`/`S` in `input_unit` and `output_unit`.
+
 The JSON representation is deliberately machine-readable and byte-stable:
 
 - UTF-8 encoding, `sort_keys=True`, two-space indentation, and one final LF;
@@ -300,18 +346,23 @@ The JSON representation is deliberately machine-readable and byte-stable:
   `system_matrix`, `matrix_structure`, `binary_exponent`,
   `small_diagonal_port`, `small_diagonal_value`, `determinant_factors`,
   `determinant`, and `determinant_factors_nonzero`;
+- direct impedance/admittance cases record `input_unit` and `output_unit`,
+  use `y_s` for Z→Y outputs and `z_ohm` for Y→Z outputs, and use exactly one
+  of `tolerance_policy.atol_s` or `tolerance_policy.atol_ohm` as appropriate;
 - The `three_port_complex_z0` network case retains an exact canonical UTF-8
   byte comparison.
 - Every operation case requires strict JSON parsing (including finite
   numbers), canonical encoding of the actual document, and exact canonical
   equality for metadata, schema, dependency versions, shapes, frequency,
   inputs, z0, and every other field except the computed output (`z_ohm` for
-  S→Z, `s` for Z→S, or `s_renormalized` for S renormalization). The output's
+  S→Z, `s` for Z→S, `y_s` for Z→Y, `z_ohm` for Y→Z, or `s_renormalized` for S
+  renormalization). The output's
   recursively validated complex array is
   compared with the recorded
   `abs(actual-expected) <= atol + rtol*abs(expected)` policy. S→Z uses
   `rtol=1e-12` and `atol_ohm=1e-12`; Z→S and S renormalization use
-  `rtol=1e-12` and `atol=1e-12`.
+  `rtol=1e-12` and `atol=1e-12`; Z→Y uses `rtol=1e-12` and `atol_s=1e-12`,
+  and Y→Z uses `rtol=1e-12` and `atol_ohm=1e-12`.
   These are strict binary64 tolerances for the well-conditioned,
   modest-magnitude deterministic cases: they allow normal cross-language
   linear-algebra rounding while catching material disagreement.
