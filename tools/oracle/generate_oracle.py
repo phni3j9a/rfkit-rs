@@ -7,8 +7,12 @@ conformance matrix over port count and reference-impedance structure, with
 dedicated reciprocal, passive, and active three-port cases for each existing
 kernel.  Reciprocal cases additionally carry deterministic passive-network
 evidence for every relevant power-wave S matrix.
-This module is kept independent of the Rust implementation so it can serve as
-a stable numerical reference for the internal conversion kernels.
+The near-singular operation fixtures additionally exercise an explicitly
+constructed, nonsingular upper-triangular conversion system with one binary
+power-of-two diagonal factor close to (but safely above) scikit-rf's
+eigenvalue-nudging threshold.  This module is kept independent of the Rust
+implementation so it can serve as a stable numerical reference for the
+internal conversion kernels.
 """
 
 from __future__ import annotations
@@ -207,6 +211,49 @@ ACTIVE_REQUIRED_SIGMA_MAX = 1.2
 ACTIVE_OBSERVED_MINIMUM_DECIMAL_PLACES = 12
 ACTIVE_NETWORK_CRITERION = (
     "largest singular value of the relevant power-wave S matrix is strictly greater than 1"
+)
+
+NEAR_SINGULAR_S_TO_Z_FIXTURE = (
+    Path(__file__).resolve().parent
+    / "fixtures"
+    / "power_wave_s_to_z_three_port_near_singular_real_equal_z0.json"
+)
+NEAR_SINGULAR_Z_TO_S_FIXTURE = (
+    Path(__file__).resolve().parent
+    / "fixtures"
+    / "power_wave_z_to_s_three_port_near_singular_real_equal_z0.json"
+)
+NEAR_SINGULAR_S_TO_Z_RANDOM_SEED = 20_260_927
+NEAR_SINGULAR_Z_TO_S_RANDOM_SEED = 20_260_928
+NEAR_SINGULAR_NFREQ = 3
+NEAR_SINGULAR_NPORTS = 3
+NEAR_SINGULAR_Z0_OHM = 64.0
+NEAR_SINGULAR_BINARY_EXPONENT = -20
+NEAR_SINGULAR_DIAGONAL_VALUE = 2.0**NEAR_SINGULAR_BINARY_EXPONENT
+NEAR_SINGULAR_DIAGONAL_FACTORS = (
+    NEAR_SINGULAR_DIAGONAL_VALUE,
+    0.625,
+    0.75,
+)
+NEAR_SINGULAR_DETERMINANT = math.prod(NEAR_SINGULAR_DIAGONAL_FACTORS)
+NEAR_SINGULAR_SYSTEM_STRUCTURE = "upper_triangular"
+NEAR_SINGULAR_S_TO_Z_SYSTEM = "I-S"
+NEAR_SINGULAR_Z_TO_S_SYSTEM = "(Z+z0 I)/z0"
+NEAR_SINGULAR_S_TO_Z_RTOL = 1e-12
+NEAR_SINGULAR_S_TO_Z_ATOL_OHM = 1e-12
+NEAR_SINGULAR_Z_TO_S_RTOL = 1e-12
+NEAR_SINGULAR_Z_TO_S_ATOL = 1e-12
+NEAR_SINGULAR_TOLERANCE_JUSTIFICATION = (
+    "case-local strict binary64 tolerance for a deterministic three-port "
+    "upper-triangular system with one diagonal factor 2^-20="
+    f"{NEAR_SINGULAR_DIAGONAL_VALUE:.17g}; this factor is non-zero, "
+    "comfortably above scikit-rf EIG_COND=1e-9, and intentionally much "
+    "smaller than the diagonal factors in the well-conditioned fixtures. "
+    "The resulting finite outputs are O(10^8 ohm) for S-to-Z and O(10^6) "
+    "for Z-to-S; the existing 1e-12 relative/absolute policy therefore "
+    "allows binary64 solve round-off at the amplified scale while still "
+    "catching material disagreement. No platform-sensitive condition number "
+    "is recorded."
 )
 
 
@@ -420,6 +467,161 @@ def _assert_z_conditioning(z: Any, z0: Any) -> None:
                     "Z input failed the conservative diagonal-dominance "
                     f"bound at frequency {frequency}, row {row}"
                 )
+
+
+def _assert_upper_triangular_system(
+    np: Any,
+    system: Any,
+    *,
+    system_matrix: str,
+) -> None:
+    """Validate the exact, input-derived structure of a near-singular system.
+
+    This deliberately uses only structural and binary-value checks.  A
+    platform-sensitive condition-number estimate would make the fixture
+    contract less reproducible and is not needed to establish a non-zero
+    determinant for the upper-triangular construction.
+    """
+
+    if (
+        system.ndim != 3
+        or system.shape[1] != NEAR_SINGULAR_NPORTS
+        or system.shape[2] != NEAR_SINGULAR_NPORTS
+    ):
+        raise ValueError(
+            f"{system_matrix} near-singular system must have shape "
+            f"(nfreq, {NEAR_SINGULAR_NPORTS}, {NEAR_SINGULAR_NPORTS})"
+        )
+    if not np.isfinite(system).all():
+        raise ValueError(f"{system_matrix} near-singular system must be finite")
+
+    lower_triangle = np.tril(system, k=-1)
+    if not np.array_equal(lower_triangle, np.zeros_like(lower_triangle)):
+        raise ValueError(f"{system_matrix} near-singular system must be upper triangular")
+
+    expected_diagonal = np.asarray(
+        NEAR_SINGULAR_DIAGONAL_FACTORS,
+        dtype=np.complex128,
+    )
+    actual_diagonal = np.diagonal(system, axis1=1, axis2=2)
+    if not np.array_equal(
+        actual_diagonal,
+        np.broadcast_to(expected_diagonal, actual_diagonal.shape),
+    ):
+        raise ValueError(
+            f"{system_matrix} near-singular system has unexpected diagonal factors"
+        )
+
+    determinant = math.prod(NEAR_SINGULAR_DIAGONAL_FACTORS)
+    if not math.isfinite(determinant) or determinant == 0.0:
+        raise ValueError("near-singular diagonal factors must have a finite non-zero product")
+
+
+def _near_singular_metadata(*, system_matrix: str) -> dict[str, Any]:
+    """Describe the deterministic binary upper-triangular construction."""
+
+    factors = [float(value) for value in NEAR_SINGULAR_DIAGONAL_FACTORS]
+    determinant = float(NEAR_SINGULAR_DETERMINANT)
+    if not all(math.isfinite(value) and value != 0.0 for value in factors):
+        raise ValueError("near-singular determinant factors must be finite and non-zero")
+    if not math.isfinite(determinant) or determinant == 0.0:
+        raise ValueError("near-singular determinant must be finite and non-zero")
+
+    return {
+        "binary_exponent": NEAR_SINGULAR_BINARY_EXPONENT,
+        "determinant": determinant,
+        "determinant_factors": factors,
+        "determinant_factors_nonzero": True,
+        "matrix_structure": NEAR_SINGULAR_SYSTEM_STRUCTURE,
+        "small_diagonal_port": 0,
+        "small_diagonal_value": float(NEAR_SINGULAR_DIAGONAL_VALUE),
+        "system_matrix": system_matrix,
+    }
+
+
+def _near_singular_frequency_and_z0(np: Any) -> tuple[Any, Any, Any]:
+    """Build the shared multi-frequency real/equal reference impedance."""
+
+    frequency_hz = np.array(
+        [0.77e9 + 0.31e9 * index for index in range(NEAR_SINGULAR_NFREQ)],
+        dtype=np.float64,
+    )
+    constructor_z0 = float(NEAR_SINGULAR_Z0_OHM)
+    expanded_z0 = np.full(
+        (NEAR_SINGULAR_NFREQ, NEAR_SINGULAR_NPORTS),
+        constructor_z0,
+        dtype=np.complex128,
+    )
+    _assert_real_positive_equal_z0(np, expanded_z0, name="near-singular")
+    return frequency_hz, constructor_z0, expanded_z0
+
+
+def _near_singular_s_inputs(
+    np: Any,
+    *,
+    seed: int,
+) -> tuple[Any, Any, Any, Any]:
+    """Build direct S data whose ``I-S`` system is upper triangular."""
+
+    frequency_hz, constructor_z0, expanded_z0 = _near_singular_frequency_and_z0(np)
+    rng = np.random.default_rng(seed)
+    system = np.zeros(
+        (NEAR_SINGULAR_NFREQ, NEAR_SINGULAR_NPORTS, NEAR_SINGULAR_NPORTS),
+        dtype=np.complex128,
+    )
+    for frequency in range(NEAR_SINGULAR_NFREQ):
+        for row, factor in enumerate(NEAR_SINGULAR_DIAGONAL_FACTORS):
+            system[frequency, row, row] = factor
+            for column in range(row + 1, NEAR_SINGULAR_NPORTS):
+                system[frequency, row, column] = complex(
+                    rng.normal(loc=0.0, scale=0.03125),
+                    rng.normal(loc=0.0, scale=0.03125),
+                )
+
+    _assert_upper_triangular_system(
+        np,
+        system,
+        system_matrix=NEAR_SINGULAR_S_TO_Z_SYSTEM,
+    )
+    identity = np.eye(NEAR_SINGULAR_NPORTS, dtype=np.complex128)
+    source_s = identity[None, :, :] - system
+    if not np.isfinite(source_s).all():
+        raise ValueError("near-singular S input must be finite")
+    return frequency_hz, source_s, constructor_z0, expanded_z0
+
+
+def _near_singular_z_inputs(
+    np: Any,
+    *,
+    seed: int,
+) -> tuple[Any, Any, Any, Any]:
+    """Build direct Z data whose normalized ``(Z+z0 I)/z0`` is upper triangular."""
+
+    frequency_hz, constructor_z0, expanded_z0 = _near_singular_frequency_and_z0(np)
+    rng = np.random.default_rng(seed)
+    normalized_system = np.zeros(
+        (NEAR_SINGULAR_NFREQ, NEAR_SINGULAR_NPORTS, NEAR_SINGULAR_NPORTS),
+        dtype=np.complex128,
+    )
+    for frequency in range(NEAR_SINGULAR_NFREQ):
+        for row, factor in enumerate(NEAR_SINGULAR_DIAGONAL_FACTORS):
+            normalized_system[frequency, row, row] = factor
+            for column in range(row + 1, NEAR_SINGULAR_NPORTS):
+                normalized_system[frequency, row, column] = complex(
+                    rng.normal(loc=0.0, scale=0.03125),
+                    rng.normal(loc=0.0, scale=0.03125),
+                )
+
+    _assert_upper_triangular_system(
+        np,
+        normalized_system,
+        system_matrix=NEAR_SINGULAR_Z_TO_S_SYSTEM,
+    )
+    identity = np.eye(NEAR_SINGULAR_NPORTS, dtype=np.complex128)
+    source_z = expanded_z0[:, :, None] * (normalized_system - identity[None, :, :])
+    if not np.isfinite(source_z).all():
+        raise ValueError("near-singular Z input must be finite")
+    return frequency_hz, source_z, constructor_z0, expanded_z0
 
 
 def _active_network_metadata(np: Any, s: Any, *, matrix_field: str) -> dict[str, Any]:
@@ -1921,6 +2123,167 @@ def _active_renormalize_fixture(np: Any, skrf: Any) -> dict[str, Any]:
     }
 
 
+def _near_singular_s_to_z_fixture(np: Any, skrf: Any) -> dict[str, Any]:
+    """Build a direct-S near-singular three-port S-to-Z fixture."""
+
+    case_id = "power_wave_s_to_z_three_port_near_singular_real_equal_z0"
+    frequency_hz, source_s, constructor_z0, _expanded_z0 = _near_singular_s_inputs(
+        np,
+        seed=NEAR_SINGULAR_S_TO_Z_RANDOM_SEED,
+    )
+    network = skrf.Network(
+        f=frequency_hz,
+        s=source_s,
+        z0=constructor_z0,
+        s_def="power",
+        name=case_id,
+    )
+
+    # The operation input and expected output are read from the public Network
+    # object.  The system evidence is reconstructed from the input S itself,
+    # never from the expected Z output.
+    frequency = np.asarray(network.f, dtype=np.float64)
+    network_s = np.asarray(network.s, dtype=np.complex128)
+    network_z0 = np.asarray(network.z0, dtype=np.complex128)
+    network_z = np.asarray(network.z, dtype=np.complex128)
+    identity = np.eye(NEAR_SINGULAR_NPORTS, dtype=np.complex128)
+    input_system = identity[None, :, :] - network_s
+    _assert_real_positive_equal_z0(np, network_z0, name="near-singular S-to-Z")
+    _assert_upper_triangular_system(
+        np,
+        input_system,
+        system_matrix=NEAR_SINGULAR_S_TO_Z_SYSTEM,
+    )
+    if not np.isfinite(network_z).all():
+        raise ValueError("near-singular S-to-Z output must be finite")
+
+    return {
+        "metadata": {
+            "case_id": case_id,
+            "near_singular": _near_singular_metadata(
+                system_matrix=NEAR_SINGULAR_S_TO_Z_SYSTEM
+            ),
+            "numpy_version": np.__version__,
+            "operation": "s_to_z",
+            "random_seed": NEAR_SINGULAR_S_TO_Z_RANDOM_SEED,
+            "reference_impedance": {
+                "complex": False,
+                "frequency_dependent": False,
+                "per_port": False,
+                "unit": "ohm",
+            },
+            "schema": "rfkit-rs.oracle.fixture",
+            "schema_version": SCHEMA_VERSION,
+            "scikit_rf_version": skrf.__version__,
+            "shape": {
+                "frequency": list(frequency.shape),
+                "input_s": list(network_s.shape),
+                "input_z0": list(network_z0.shape),
+                "output_z": list(network_z.shape),
+            },
+            "tolerance_policy": {
+                "atol_ohm": NEAR_SINGULAR_S_TO_Z_ATOL_OHM,
+                "comparison": (
+                    "abs(actual-expected) <= "
+                    "atol_ohm + rtol*abs(expected)"
+                ),
+                "justification": NEAR_SINGULAR_TOLERANCE_JUSTIFICATION,
+                "regeneration": (
+                    "canonical UTF-8 JSON serialization; z_ohm is checked "
+                    "with the case-local recorded numeric tolerance"
+                ),
+                "rtol": NEAR_SINGULAR_S_TO_Z_RTOL,
+            },
+            "wave_definition": network.s_def,
+        },
+        "data": {
+            "frequency_hz": [float(value) for value in frequency],
+            "s": _complex_array(network_s),
+            "z0_ohm": _complex_array(network_z0),
+            "z_ohm": _complex_array(network_z),
+        },
+    }
+
+
+def _near_singular_z_to_s_fixture(np: Any, skrf: Any) -> dict[str, Any]:
+    """Build a direct-Z near-singular three-port Z-to-S fixture."""
+
+    case_id = "power_wave_z_to_s_three_port_near_singular_real_equal_z0"
+    frequency_hz, source_z, constructor_z0, expanded_z0 = _near_singular_z_inputs(
+        np,
+        seed=NEAR_SINGULAR_Z_TO_S_RANDOM_SEED,
+    )
+
+    # Keep this expected output independent of the S-to-Z case: source_z is a
+    # separate direct construction and scikit-rf's public from_z/s path is the
+    # only source of the expected S values.
+    converted = skrf.Network.from_z(
+        source_z,
+        f=frequency_hz,
+        z0=constructor_z0,
+        s_def="power",
+        name=case_id,
+    )
+    frequency = np.asarray(converted.f, dtype=np.float64)
+    converted_s = np.asarray(converted.s, dtype=np.complex128)
+    network_z0 = np.asarray(converted.z0, dtype=np.complex128)
+    normalized_system = source_z / expanded_z0[:, :, None]
+    for port in range(NEAR_SINGULAR_NPORTS):
+        normalized_system[:, port, port] += 1.0
+    _assert_real_positive_equal_z0(np, network_z0, name="near-singular Z-to-S")
+    _assert_upper_triangular_system(
+        np,
+        normalized_system,
+        system_matrix=NEAR_SINGULAR_Z_TO_S_SYSTEM,
+    )
+    if not np.isfinite(converted_s).all():
+        raise ValueError("near-singular Z-to-S output must be finite")
+
+    return {
+        "metadata": {
+            "case_id": case_id,
+            "near_singular": _near_singular_metadata(
+                system_matrix=NEAR_SINGULAR_Z_TO_S_SYSTEM
+            ),
+            "numpy_version": np.__version__,
+            "operation": "z_to_s",
+            "random_seed": NEAR_SINGULAR_Z_TO_S_RANDOM_SEED,
+            "reference_impedance": {
+                "complex": False,
+                "frequency_dependent": False,
+                "per_port": False,
+                "unit": "ohm",
+            },
+            "schema": "rfkit-rs.oracle.fixture",
+            "schema_version": SCHEMA_VERSION,
+            "scikit_rf_version": skrf.__version__,
+            "shape": {
+                "frequency": list(frequency.shape),
+                "input_z": list(source_z.shape),
+                "input_z0": list(network_z0.shape),
+                "output_s": list(converted_s.shape),
+            },
+            "tolerance_policy": {
+                "atol": NEAR_SINGULAR_Z_TO_S_ATOL,
+                "comparison": "abs(actual-expected) <= atol + rtol*abs(expected)",
+                "justification": NEAR_SINGULAR_TOLERANCE_JUSTIFICATION,
+                "regeneration": (
+                    "canonical UTF-8 JSON serialization; s is checked "
+                    "with the case-local recorded numeric tolerance"
+                ),
+                "rtol": NEAR_SINGULAR_Z_TO_S_RTOL,
+            },
+            "wave_definition": converted.s_def,
+        },
+        "data": {
+            "frequency_hz": [float(value) for value in frequency],
+            "s": _complex_array(converted_s),
+            "z0_ohm": _complex_array(network_z0),
+            "z_ohm": _complex_array(source_z),
+        },
+    }
+
+
 def _renormalize_fixture(
     np: Any,
     skrf: Any,
@@ -2326,6 +2689,20 @@ _CASES = (
         _active_renormalize_fixture,
         "numeric_output",
         "s_renormalized",
+    ),
+    _OracleCase(
+        "power_wave_s_to_z_three_port_near_singular_real_equal_z0",
+        NEAR_SINGULAR_S_TO_Z_FIXTURE,
+        _near_singular_s_to_z_fixture,
+        "numeric_output",
+        "z_ohm",
+    ),
+    _OracleCase(
+        "power_wave_z_to_s_three_port_near_singular_real_equal_z0",
+        NEAR_SINGULAR_Z_TO_S_FIXTURE,
+        _near_singular_z_to_s_fixture,
+        "numeric_output",
+        "s",
     ),
 )
 _CASES_BY_ID = {case.case_id: case for case in _CASES}

@@ -198,6 +198,36 @@ MATRIX_CASE_SPECS = {
         "frequency_dependent": True,
         "per_port": True,
     },
+    "power_wave_s_to_z_three_port_near_singular_real_equal_z0": {
+        "operation": "s_to_z",
+        "ports": 3,
+        "frequencies": 3,
+        "output": "z_ohm",
+        "complex": False,
+        "frequency_dependent": False,
+        "per_port": False,
+        "input": "s",
+        "seed": 20_260_927,
+        "system": "I-S",
+    },
+    "power_wave_z_to_s_three_port_near_singular_real_equal_z0": {
+        "operation": "z_to_s",
+        "ports": 3,
+        "frequencies": 3,
+        "output": "s",
+        "complex": False,
+        "frequency_dependent": False,
+        "per_port": False,
+        "input": "z_ohm",
+        "seed": 20_260_928,
+        "system": "(Z+z0 I)/z0",
+    },
+}
+
+NEAR_SINGULAR_CASE_SPECS = {
+    case_id: spec
+    for case_id, spec in MATRIX_CASE_SPECS.items()
+    if "_near_singular_" in case_id
 }
 
 RECIPROCAL_CASE_SPECS = {
@@ -1042,6 +1072,188 @@ class MatrixFixtureCheckerTests(unittest.TestCase):
                     self.assertEqual(
                         oracle._check_numeric_fixture(path, fixture, output_key), 1
                     )
+
+
+class NearSingularRegistrationAndEvidenceTests(unittest.TestCase):
+    """Protect the explicit, condition-number-free near-singular contracts."""
+
+    @staticmethod
+    def _complex(value: dict[str, float]) -> complex:
+        return complex(value["real"], value["imag"])
+
+    @classmethod
+    def _system_from_fixture(
+        cls,
+        fixture: dict[str, object],
+        operation: str,
+    ) -> list[list[list[complex]]]:
+        data = fixture["data"]
+        z0 = data["z0_ohm"]
+        input_matrices = data["s"] if operation == "s_to_z" else data["z_ohm"]
+        systems: list[list[list[complex]]] = []
+        for frequency, matrix in enumerate(input_matrices):
+            system: list[list[complex]] = []
+            for row, values in enumerate(matrix):
+                system_row: list[complex] = []
+                for column, value in enumerate(values):
+                    input_value = cls._complex(value)
+                    if operation == "s_to_z":
+                        system_value = (1.0 if row == column else 0.0) - input_value
+                    else:
+                        impedance = cls._complex(z0[frequency][row])
+                        if row == column:
+                            input_value += impedance
+                        system_value = input_value / impedance
+                    system_row.append(system_value)
+                system.append(system_row)
+            systems.append(system)
+        return systems
+
+    def test_near_singular_cases_are_registered_with_distinct_direct_inputs(self) -> None:
+        registered = {case.case_id: case for case in oracle._CASES}
+        expected_paths = {
+            "power_wave_s_to_z_three_port_near_singular_real_equal_z0": oracle.NEAR_SINGULAR_S_TO_Z_FIXTURE,
+            "power_wave_z_to_s_three_port_near_singular_real_equal_z0": oracle.NEAR_SINGULAR_Z_TO_S_FIXTURE,
+        }
+        self.assertEqual(set(NEAR_SINGULAR_CASE_SPECS), set(expected_paths))
+        self.assertEqual(
+            len({spec["seed"] for spec in NEAR_SINGULAR_CASE_SPECS.values()}),
+            2,
+        )
+        for case_id, spec in NEAR_SINGULAR_CASE_SPECS.items():
+            with self.subTest(case_id=case_id):
+                case = registered[case_id]
+                self.assertEqual(case.path, expected_paths[case_id])
+                self.assertEqual(case.path.stem, case_id)
+                self.assertEqual(case.comparison, "numeric_output")
+                self.assertEqual(case.numeric_output_key, spec["output"])
+        for case in oracle._CASES:
+            if case.case_id not in NEAR_SINGULAR_CASE_SPECS:
+                with self.subTest(non_near_case=case.case_id):
+                    fixture = oracle._read_canonical_json(case.path)
+                    self.assertNotIn("near_singular", fixture["metadata"])
+
+    def test_near_singular_metadata_and_input_system_are_reproducible(self) -> None:
+        np, _skrf = oracle._load_dependencies()
+        registered = {case.case_id: case for case in oracle._CASES}
+        expected_factors = [2.0**-20, 0.625, 0.75]
+        expected_determinant = math.prod(expected_factors)
+
+        for case_id, spec in NEAR_SINGULAR_CASE_SPECS.items():
+            with self.subTest(case_id=case_id):
+                fixture = oracle._read_canonical_json(registered[case_id].path)
+                metadata = fixture["metadata"]
+                data = fixture["data"]
+                near = metadata.get("near_singular")
+                self.assertIsInstance(near, dict)
+                self.assertEqual(metadata["case_id"], case_id)
+                self.assertEqual(metadata["operation"], spec["operation"])
+                self.assertEqual(metadata["random_seed"], spec["seed"])
+                self.assertEqual(metadata["numpy_version"], "2.5.1")
+                self.assertEqual(metadata["scikit_rf_version"], "2.0.1")
+                self.assertEqual(metadata["wave_definition"], "power")
+                self.assertEqual(metadata["shape"]["frequency"], [3])
+                self.assertEqual(metadata["shape"]["input_z0"], [3, 3])
+                self.assertEqual(metadata["reference_impedance"], {
+                    "complex": False,
+                    "frequency_dependent": False,
+                    "per_port": False,
+                    "unit": "ohm",
+                })
+
+                self.assertEqual(near["system_matrix"], spec["system"])
+                self.assertEqual(near["matrix_structure"], "upper_triangular")
+                self.assertEqual(near["binary_exponent"], -20)
+                self.assertEqual(near["small_diagonal_port"], 0)
+                self.assertEqual(near["small_diagonal_value"], expected_factors[0])
+                self.assertGreater(near["small_diagonal_value"], 1e-9)
+                self.assertLess(near["small_diagonal_value"], expected_factors[1])
+                self.assertEqual(near["determinant_factors"], expected_factors)
+                self.assertTrue(near["determinant_factors_nonzero"])
+                self.assertTrue(
+                    all(
+                        math.isfinite(value) and value != 0.0
+                        for value in near["determinant_factors"]
+                    )
+                )
+                self.assertEqual(near["determinant"], expected_determinant)
+                self.assertTrue(math.isfinite(near["determinant"]))
+                self.assertNotEqual(near["determinant"], 0.0)
+
+                self.assertEqual(data["z0_ohm"], [
+                    [{"imag": 0.0, "real": 64.0}] * 3,
+                    [{"imag": 0.0, "real": 64.0}] * 3,
+                    [{"imag": 0.0, "real": 64.0}] * 3,
+                ])
+                self.assertEqual(
+                    data["frequency_hz"],
+                    [770_000_000.0, 1_080_000_000.0, 1_390_000_000.0],
+                )
+                systems = self._system_from_fixture(fixture, spec["operation"])
+                self.assertEqual(len(systems), 3)
+                for frequency, system in enumerate(systems):
+                    self.assertTrue(
+                        all(math.isfinite(value.real) and math.isfinite(value.imag)
+                            for row in system for value in row)
+                    )
+                    self.assertTrue(
+                        all(
+                            system[row][column] == 0.0j
+                            for row in range(3)
+                            for column in range(row)
+                        ),
+                        f"frequency {frequency} system is not upper triangular",
+                    )
+                    self.assertEqual(
+                        [system[index][index] for index in range(3)],
+                        [complex(value, 0.0) for value in expected_factors],
+                    )
+                    self.assertTrue(
+                        any(
+                            system[row][column] != 0.0j
+                            for row in range(3)
+                            for column in range(row + 1, 3)
+                        ),
+                        f"frequency {frequency} has no upper coupling",
+                    )
+
+                output = data[spec["output"]]
+                self.assertTrue(
+                    all(
+                        math.isfinite(self._complex(value).real)
+                        and math.isfinite(self._complex(value).imag)
+                        for matrix in output
+                        for row in matrix
+                        for value in row
+                    )
+                )
+                tolerance_policy = metadata["tolerance_policy"]
+                self.assertEqual(tolerance_policy["rtol"], 1e-12)
+                absolute_key = "atol_ohm" if spec["operation"] == "s_to_z" else "atol"
+                self.assertEqual(tolerance_policy[absolute_key], 1e-12)
+                self.assertIn("case-local", tolerance_policy["justification"])
+                self.assertIn("2^-20", tolerance_policy["justification"])
+
+                if spec["operation"] == "s_to_z":
+                    direct_frequency, direct_input, _constructor_z0, _expanded_z0 = (
+                        oracle._near_singular_s_inputs(np, seed=spec["seed"])
+                    )
+                else:
+                    direct_frequency, direct_input, _constructor_z0, _expanded_z0 = (
+                        oracle._near_singular_z_inputs(np, seed=spec["seed"])
+                    )
+                self.assertEqual(
+                    direct_frequency.tolist(),
+                    data["frequency_hz"],
+                )
+                fixture_input = data[spec["input"]]
+                for frequency in range(3):
+                    for row in range(3):
+                        for column in range(3):
+                            self.assertEqual(
+                                self._complex(fixture_input[frequency][row][column]),
+                                direct_input[frequency, row, column],
+                            )
 
 
 class RenormalizationRegistrationAndCheckerTests(unittest.TestCase):

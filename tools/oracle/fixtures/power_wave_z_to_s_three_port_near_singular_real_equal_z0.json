@@ -1,0 +1,377 @@
+{
+  "data": {
+    "frequency_hz": [
+      770000000.0,
+      1080000000.0,
+      1390000000.0
+    ],
+    "s": [
+      [
+        [
+          {
+            "imag": -0.0,
+            "real": -2097151.0
+          },
+          {
+            "imag": -76651.55590490684,
+            "real": -47497.58237524015
+          },
+          {
+            "imag": -71079.29592295141,
+            "real": 115691.27415118561
+          }
+        ],
+        [
+          {
+            "imag": 1.4091108811912085e-16,
+            "real": 2.3824148338255597e-16
+          },
+          {
+            "imag": 6.938893903907228e-18,
+            "real": -2.2
+          },
+          {
+            "imag": 0.15557691103724933,
+            "real": -0.08423439931550966
+          }
+        ],
+        [
+          {
+            "imag": 5.435448342686192e-15,
+            "real": 2.169995524887986e-15
+          },
+          {
+            "imag": 3.64356947906339e-16,
+            "real": -1.4943484518065512e-16
+          },
+          {
+            "imag": -2.220446049250313e-16,
+            "real": -1.666666666666667
+          }
+        ]
+      ],
+      [
+        [
+          {
+            "imag": -1.1641532182693481e-10,
+            "real": -2097150.9999999998
+          },
+          {
+            "imag": -135529.15465818322,
+            "real": -65444.197228236095
+          },
+          {
+            "imag": -2679.3062359103037,
+            "real": 46918.0793186139
+          }
+        ],
+        [
+          {
+            "imag": -5.8033362093018266e-15,
+            "real": -6.335655827042508e-16
+          },
+          {
+            "imag": -2.220446049250313e-16,
+            "real": -2.1999999999999997
+          },
+          {
+            "imag": -0.05205532872266935,
+            "real": -0.005599453706228317
+          }
+        ],
+        [
+          {
+            "imag": 6.182953107210031e-16,
+            "real": -3.530840361983141e-17
+          },
+          {
+            "imag": 1.7012845118137915e-17,
+            "real": -4.105938478538833e-17
+          },
+          {
+            "imag": -1.3877787807814457e-17,
+            "real": -1.6666666666666665
+          }
+        ]
+      ],
+      [
+        [
+          {
+            "imag": -2.3283064365386963e-10,
+            "real": -2097150.9999999998
+          },
+          {
+            "imag": -202757.3719466583,
+            "real": -102986.23493255407
+          },
+          {
+            "imag": -46069.72001481524,
+            "real": 95993.10439352147
+          }
+        ],
+        [
+          {
+            "imag": -2.9500067197160532e-15,
+            "real": 1.4266222090165104e-15
+          },
+          {
+            "imag": -6.938893903907228e-18,
+            "real": -2.1999999999999997
+          },
+          {
+            "imag": 0.054933216200457116,
+            "real": 0.013871368091015064
+          }
+        ],
+        [
+          {
+            "imag": 1.971416478481069e-15,
+            "real": -9.461367644064388e-16
+          },
+          {
+            "imag": 5.337026953504456e-18,
+            "real": -2.3706354488689687e-16
+          },
+          {
+            "imag": -1.1102230246251565e-16,
+            "real": -1.6666666666666667
+          }
+        ]
+      ]
+    ],
+    "z0_ohm": [
+      [
+        {
+          "imag": 0.0,
+          "real": 64.0
+        },
+        {
+          "imag": 0.0,
+          "real": 64.0
+        },
+        {
+          "imag": 0.0,
+          "real": 64.0
+        }
+      ],
+      [
+        {
+          "imag": 0.0,
+          "real": 64.0
+        },
+        {
+          "imag": 0.0,
+          "real": 64.0
+        },
+        {
+          "imag": 0.0,
+          "real": 64.0
+        }
+      ],
+      [
+        {
+          "imag": 0.0,
+          "real": 64.0
+        },
+        {
+          "imag": 0.0,
+          "real": 64.0
+        },
+        {
+          "imag": 0.0,
+          "real": 64.0
+        }
+      ]
+    ],
+    "z_ohm": [
+      [
+        [
+          {
+            "imag": 0.0,
+            "real": -63.99993896484375
+          },
+          {
+            "imag": -1.4620124035817494,
+            "real": -0.9059444880531339
+          },
+          {
+            "imag": -1.633548090454621,
+            "real": 2.761875771746604
+          }
+        ],
+        [
+          {
+            "imag": 0.0,
+            "real": 0.0
+          },
+          {
+            "imag": 0.0,
+            "real": -24.0
+          },
+          {
+            "imag": 2.3336536655587397,
+            "real": -1.2635159897326445
+          }
+        ],
+        [
+          {
+            "imag": 0.0,
+            "real": 0.0
+          },
+          {
+            "imag": 0.0,
+            "real": 0.0
+          },
+          {
+            "imag": 0.0,
+            "real": -16.0
+          }
+        ]
+      ],
+      [
+        [
+          {
+            "imag": 0.0,
+            "real": -63.99993896484375
+          },
+          {
+            "imag": -2.585013478435197,
+            "real": -1.2482490010878775
+          },
+          {
+            "imag": -0.03152969976320149,
+            "real": 1.0260292831066706
+          }
+        ],
+        [
+          {
+            "imag": 0.0,
+            "real": 0.0
+          },
+          {
+            "imag": 0.0,
+            "real": -24.0
+          },
+          {
+            "imag": -0.78082993084004,
+            "real": -0.08399180559342606
+          }
+        ],
+        [
+          {
+            "imag": 0.0,
+            "real": 0.0
+          },
+          {
+            "imag": 0.0,
+            "real": 0.0
+          },
+          {
+            "imag": 0.0,
+            "real": -16.0
+          }
+        ]
+      ],
+      [
+        [
+          {
+            "imag": 0.0,
+            "real": -63.99993896484375
+          },
+          {
+            "imag": -3.8672899617511423,
+            "real": -1.96430654397114
+          },
+          {
+            "imag": -1.1150335643010292,
+            "real": 2.266555943266824
+          }
+        ],
+        [
+          {
+            "imag": 0.0,
+            "real": 0.0
+          },
+          {
+            "imag": 0.0,
+            "real": -24.0
+          },
+          {
+            "imag": 0.8239982430068555,
+            "real": 0.20807052136522583
+          }
+        ],
+        [
+          {
+            "imag": 0.0,
+            "real": 0.0
+          },
+          {
+            "imag": 0.0,
+            "real": 0.0
+          },
+          {
+            "imag": 0.0,
+            "real": -16.0
+          }
+        ]
+      ]
+    ]
+  },
+  "metadata": {
+    "case_id": "power_wave_z_to_s_three_port_near_singular_real_equal_z0",
+    "near_singular": {
+      "binary_exponent": -20,
+      "determinant": 4.470348358154297e-07,
+      "determinant_factors": [
+        9.5367431640625e-07,
+        0.625,
+        0.75
+      ],
+      "determinant_factors_nonzero": true,
+      "matrix_structure": "upper_triangular",
+      "small_diagonal_port": 0,
+      "small_diagonal_value": 9.5367431640625e-07,
+      "system_matrix": "(Z+z0 I)/z0"
+    },
+    "numpy_version": "2.5.1",
+    "operation": "z_to_s",
+    "random_seed": 20260928,
+    "reference_impedance": {
+      "complex": false,
+      "frequency_dependent": false,
+      "per_port": false,
+      "unit": "ohm"
+    },
+    "schema": "rfkit-rs.oracle.fixture",
+    "schema_version": 1,
+    "scikit_rf_version": "2.0.1",
+    "shape": {
+      "frequency": [
+        3
+      ],
+      "input_z": [
+        3,
+        3,
+        3
+      ],
+      "input_z0": [
+        3,
+        3
+      ],
+      "output_s": [
+        3,
+        3,
+        3
+      ]
+    },
+    "tolerance_policy": {
+      "atol": 1e-12,
+      "comparison": "abs(actual-expected) <= atol + rtol*abs(expected)",
+      "justification": "case-local strict binary64 tolerance for a deterministic three-port upper-triangular system with one diagonal factor 2^-20=9.5367431640625e-07; this factor is non-zero, comfortably above scikit-rf EIG_COND=1e-9, and intentionally much smaller than the diagonal factors in the well-conditioned fixtures. The resulting finite outputs are O(10^8 ohm) for S-to-Z and O(10^6) for Z-to-S; the existing 1e-12 relative/absolute policy therefore allows binary64 solve round-off at the amplified scale while still catching material disagreement. No platform-sensitive condition number is recorded.",
+      "regeneration": "canonical UTF-8 JSON serialization; s is checked with the case-local recorded numeric tolerance",
+      "rtol": 1e-12
+    },
+    "wave_definition": "power"
+  }
+}

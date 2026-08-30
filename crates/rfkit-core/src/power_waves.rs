@@ -563,6 +563,10 @@ mod tests {
                 "../../../tools/oracle/fixtures/power_wave_s_to_z_three_port_reciprocal_real_equal_z0.json"
             ),
         ),
+        (
+            "power_wave_s_to_z_three_port_near_singular_real_equal_z0",
+            NEAR_SINGULAR_S_TO_Z_FIXTURE,
+        ),
     ];
     const MATRIX_Z_TO_S_FIXTURES: &[(&str, &str)] = &[
         (
@@ -595,6 +599,10 @@ mod tests {
                 "../../../tools/oracle/fixtures/power_wave_z_to_s_three_port_reciprocal_real_equal_z0.json"
             ),
         ),
+        (
+            "power_wave_z_to_s_three_port_near_singular_real_equal_z0",
+            NEAR_SINGULAR_Z_TO_S_FIXTURE,
+        ),
     ];
     const ACTIVE_S_TO_Z_FIXTURE: &str = include_str!(
         "../../../tools/oracle/fixtures/power_wave_s_to_z_three_port_active_real_equal_z0.json"
@@ -604,6 +612,12 @@ mod tests {
     );
     const ACTIVE_RENORMALIZE_FIXTURE: &str = include_str!(
         "../../../tools/oracle/fixtures/power_wave_renormalize_three_port_active_real_equal_z0.json"
+    );
+    const NEAR_SINGULAR_S_TO_Z_FIXTURE: &str = include_str!(
+        "../../../tools/oracle/fixtures/power_wave_s_to_z_three_port_near_singular_real_equal_z0.json"
+    );
+    const NEAR_SINGULAR_Z_TO_S_FIXTURE: &str = include_str!(
+        "../../../tools/oracle/fixtures/power_wave_z_to_s_three_port_near_singular_real_equal_z0.json"
     );
     const ACTIVE_S_TO_Z_FIXTURES: &[(&str, &str)] = &[(
         "power_wave_s_to_z_three_port_active_real_equal_z0",
@@ -783,6 +797,8 @@ mod tests {
         #[serde(default)]
         active_network: Option<ActiveNetworkMetadata>,
         #[serde(default)]
+        near_singular: Option<NearSingularMetadata>,
+        #[serde(default)]
         passive_network: Option<PassiveNetworkMetadata>,
         case_id: String,
         numpy_version: String,
@@ -824,6 +840,19 @@ mod tests {
         justification: String,
         regeneration: String,
         rtol: f64,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct NearSingularMetadata {
+        binary_exponent: i32,
+        determinant: f64,
+        determinant_factors: Vec<f64>,
+        determinant_factors_nonzero: bool,
+        matrix_structure: String,
+        small_diagonal_port: usize,
+        small_diagonal_value: f64,
+        system_matrix: String,
     }
 
     #[derive(Debug, Deserialize)]
@@ -1047,6 +1076,17 @@ mod tests {
                 reciprocal: false,
                 passive: false,
                 active: true,
+            },
+            "power_wave_s_to_z_three_port_near_singular_real_equal_z0"
+            | "power_wave_z_to_s_three_port_near_singular_real_equal_z0" => MatrixCaseSpec {
+                nfreq: 3,
+                nport: 3,
+                complex_z0: false,
+                frequency_dependent_z0: false,
+                per_port_z0: false,
+                reciprocal: false,
+                passive: false,
+                active: false,
             },
             _ => panic!("unexpected power-wave matrix case id: {case_id}"),
         }
@@ -1377,6 +1417,147 @@ mod tests {
         );
     }
 
+    /// Validate the near-singular construction from fixture inputs alone.
+    ///
+    /// The generator records the exact diagonal factors and their product, but
+    /// this contract test independently rebuilds the conversion system from
+    /// the serialized S or Z input.  It therefore certifies an explicitly
+    /// nonsingular upper-triangular construction without a platform-sensitive
+    /// condition-number calculation or a round-trip through the expected
+    /// output.
+    fn validate_near_singular_fixture_contract(
+        metadata: Option<&NearSingularMetadata>,
+        expected_case_id: &str,
+        expected_operation: &str,
+        random_seed: u64,
+        data: &MatrixFixtureData,
+    ) {
+        let is_near_singular = expected_case_id.contains("_near_singular_");
+        if !is_near_singular {
+            assert!(
+                metadata.is_none(),
+                "non-near-singular fixture must not grow near-singular metadata"
+            );
+            return;
+        }
+
+        let expected_system = match expected_operation {
+            "s_to_z" => "I-S",
+            "z_to_s" => "(Z+z0 I)/z0",
+            _ => panic!("unexpected near-singular operation: {expected_operation}"),
+        };
+        let expected_seed = match expected_operation {
+            "s_to_z" => 20_260_927,
+            "z_to_s" => 20_260_928,
+            _ => unreachable!(),
+        };
+        assert_eq!(random_seed, expected_seed);
+        let near = metadata.expect("near-singular fixture must record construction metadata");
+        assert_eq!(near.system_matrix, expected_system);
+        assert_eq!(near.matrix_structure, "upper_triangular");
+        assert_eq!(near.binary_exponent, -20);
+        assert_eq!(near.small_diagonal_port, 0);
+        let expected_small_diagonal = (2.0_f64).powi(-20);
+        assert_eq!(near.small_diagonal_value, expected_small_diagonal);
+        assert!(near.small_diagonal_value > 1e-9);
+        assert!(near.small_diagonal_value < 0.625);
+
+        let expected_factors = vec![expected_small_diagonal, 0.625, 0.75];
+        assert_eq!(near.determinant_factors, expected_factors);
+        assert!(near.determinant_factors_nonzero);
+        assert!(
+            near.determinant_factors
+                .iter()
+                .all(|factor| { factor.is_finite() && *factor != 0.0 })
+        );
+        let expected_determinant = expected_factors.iter().product::<f64>();
+        assert_eq!(near.determinant, expected_determinant);
+        assert!(near.determinant.is_finite() && near.determinant != 0.0);
+
+        assert_eq!(data.frequency_hz.len(), 3);
+        assert_eq!(
+            data.frequency_hz,
+            vec![770_000_000.0, 1_080_000_000.0, 1_390_000_000.0]
+        );
+        assert_eq!(data.z0_ohm.len(), 3);
+        assert!(data.z0_ohm.iter().all(|row| row.len() == 3));
+        for row in &data.z0_ohm {
+            for value in row {
+                let impedance = matrix_complex(value);
+                assert_eq!(impedance, Complex64::new(64.0, 0.0));
+                assert!(is_finite(impedance));
+            }
+        }
+
+        let input = if expected_operation == "s_to_z" {
+            &data.s
+        } else {
+            &data.z_ohm
+        };
+        assert_eq!(input.len(), 3);
+        assert!(
+            input
+                .iter()
+                .all(|matrix| { matrix.len() == 3 && matrix.iter().all(|row| row.len() == 3) })
+        );
+
+        for (frequency, matrix) in input.iter().enumerate() {
+            let mut has_nonzero_upper_off_diagonal = false;
+            for (row, row_values) in matrix.iter().enumerate().take(3) {
+                for (column, value) in row_values.iter().enumerate().take(3) {
+                    let input_value = matrix_complex(value);
+                    assert!(
+                        is_finite(input_value),
+                        "{expected_case_id} input is non-finite at ({frequency},{row},{column})"
+                    );
+                    let system_value = if expected_operation == "s_to_z" {
+                        let identity = if row == column { 1.0 } else { 0.0 };
+                        Complex64::new(identity, 0.0) - input_value
+                    } else {
+                        let mut value = input_value;
+                        let impedance = matrix_complex(&data.z0_ohm[frequency][row]);
+                        if row == column {
+                            value += impedance;
+                        }
+                        value / impedance
+                    };
+                    assert!(
+                        is_finite(system_value),
+                        "{expected_case_id} system is non-finite at ({frequency},{row},{column})"
+                    );
+                    if row > column {
+                        assert_eq!(
+                            system_value, ZERO,
+                            "{expected_case_id} system must be upper triangular"
+                        );
+                    } else if row == column {
+                        assert_eq!(
+                            system_value,
+                            Complex64::new(expected_factors[row], 0.0),
+                            "{expected_case_id} diagonal factor differs"
+                        );
+                    } else if system_value != ZERO {
+                        has_nonzero_upper_off_diagonal = true;
+                    }
+                }
+            }
+            assert!(
+                has_nonzero_upper_off_diagonal,
+                "{expected_case_id} frequency {frequency} must exercise upper off-diagonal coupling"
+            );
+        }
+
+        let output = if expected_operation == "s_to_z" {
+            &data.z_ohm
+        } else {
+            &data.s
+        };
+        assert!(output.iter().flatten().flatten().all(|value| {
+            let complex = matrix_complex(value);
+            is_finite(complex)
+        }));
+    }
+
     fn validate_renormalization_fixture_contract(
         fixture: &RenormalizationFixtureDocument,
         expected_case_id: &str,
@@ -1587,6 +1768,13 @@ mod tests {
         } = spec;
         let metadata = &fixture.metadata;
         let data = &fixture.data;
+        validate_near_singular_fixture_contract(
+            metadata.near_singular.as_ref(),
+            expected_case_id,
+            expected_operation,
+            metadata.random_seed,
+            data,
+        );
         let active_network = validate_active_network_metadata(
             metadata.active_network.as_ref(),
             expected_active,
@@ -1813,6 +2001,10 @@ mod tests {
                 for column in 0..nport {
                     let expected_value = matrix_complex(&expected[frequency][row][column]);
                     let actual_value = actual[[frequency, row, column]];
+                    assert!(
+                        is_finite(actual_value),
+                        "{case_id} output[{frequency},{row},{column}] is non-finite"
+                    );
                     let difference = (actual_value - expected_value).norm();
                     let tolerance = atol + rtol * expected_value.norm();
                     assert!(

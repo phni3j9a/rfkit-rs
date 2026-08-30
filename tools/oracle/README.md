@@ -8,7 +8,10 @@ the original three-port fixture and registers an additional eight-case
 S↔Z power-wave conformance matrix, a four-case S renormalization matrix, and
 reciprocal and active three-port cases for each existing operation. The three
 existing reciprocal cases also carry optional passive-network evidence; no
-new fixture or operation case is introduced.
+new reciprocal fixture or operation case is introduced. Two near-singular
+three-port operation cases are also registered; they exercise the existing
+exact-pivot kernels at a deterministic nonsingular boundary without changing
+production semantics.
 
 ## Clean-checkout setup
 
@@ -28,7 +31,7 @@ fails clearly instead of silently regenerating a fixture with another version.
 
 ## Generate and verify
 
-The harness has twenty-one registered canonical cases. The original three cases
+The harness has twenty-three registered canonical cases. The original three cases
 remain unchanged:
 
 - `three_port_complex_z0` — the representative four-frequency, three-port
@@ -143,6 +146,38 @@ metadata explicitly identifies `s_input` as the relevant matrix, so the
 recorded 1.2 lower bound is not confused with a classification of the
 renormalized output.
 
+The near-singular S↔Z cases are registered separately. Each case has three
+frequency samples, three ports, and a real positive 64 Ω reference impedance
+expanded equally across every port and frequency. The S-to-Z case constructs S
+directly so that the input system `I-S` is upper triangular. The Z-to-S case
+constructs Z independently so that the normalized input system
+`(Z+z0 I)/z0` is upper triangular; its expected S is obtained only through the
+public `Network.from_z(..., s_def="power").s` path. The directions use distinct
+local NumPy `default_rng` seeds and no expected output or round-trip is used to
+construct either input.
+
+Both systems use the exact binary64 factor `2^-20 =
+9.5367431640625e-7` at diagonal port 0, with the other diagonal factors
+`0.625` and `0.75`. Their determinant is therefore the explicit non-zero
+product `4.470348358154297e-7`; reducing that first factor to zero reaches the
+exact-singular boundary. The upper off-diagonal entries come from each case's
+recorded local seed and a fixed normal distribution, while the lower triangle
+is exactly zero. `metadata.near_singular` records the system name, structure,
+binary exponent/value, diagonal factors, and determinant evidence. Generator
+and Rust/Python contract tests reconstruct the system from serialized inputs
+and verify these facts directly; no platform-sensitive condition number is
+recorded or used for acceptance.
+
+| Direction | Ports | Reference impedance | Seed | System | Case id |
+| --- | ---: | --- | ---: | --- | --- |
+| S→Z | 3 | real, equal 64 Ω | `20260927` | `I-S` | `power_wave_s_to_z_three_port_near_singular_real_equal_z0` |
+| Z→S | 3 | real, equal 64 Ω | `20260928` | `(Z+z0 I)/z0` | `power_wave_z_to_s_three_port_near_singular_real_equal_z0` |
+
+The near-singular cases retain the existing strict case-local `rtol=1e-12`
+policy with `atol_ohm=1e-12` for S→Z and `atol=1e-12` for Z→S. The policy is
+recorded in each fixture with the binary64 and `2^-20` proximity rationale;
+the outputs are checked to be finite before comparison.
+
 All registered cases are checked by default against a fresh scikit-rf run; the
 default command checks every case:
 
@@ -232,6 +267,19 @@ inputs pass the existing conservative diagonal-dominance guards; for active
 renormalization, the underlying source-referenced Z is explicitly checked
 against the target-stage Z+G guard before the public renormalization call.
 
+The two near-singular cases use dedicated local NumPy `default_rng` seeds
+`20260927` and `20260928`. For S→Z, each frequency's direct S is defined as
+`I-A`, where A is an upper-triangular matrix with diagonal
+`[2^-20, 0.625, 0.75]`. For Z→S, each frequency's direct Z is defined from a
+separately generated upper-triangular U as `z0 * (U-I)`, so the normalized
+system `(Z+z0 I)/z0` is U. The two local RNG streams are independent and the
+expected outputs are obtained solely from public scikit-rf properties. The
+generator and tests verify the exact lower-triangle zeros, binary diagonal
+factors, and product-of-diagonal determinant evidence directly from the input
+configuration. These checks intentionally do not calculate or record a
+condition number. Every source and expected output is checked for finite
+values; the first factor is non-zero and above scikit-rf's `EIG_COND=1e-9`.
+
 The JSON representation is deliberately machine-readable and byte-stable:
 
 - UTF-8 encoding, `sort_keys=True`, two-space indentation, and one final LF;
@@ -247,7 +295,11 @@ The JSON representation is deliberately machine-readable and byte-stable:
   `observed_maximum`; active cases additionally record a
   concise `active_network` contract with `criterion`, `matrix_field`,
   `required_minimum`, and the NumPy-SVD `observed_minimum`; existing fixtures
-  omit each optional evidence field when it does not apply;
+  omit each optional evidence field when it does not apply. Near-singular
+  operation cases additionally record a `near_singular` contract containing
+  `system_matrix`, `matrix_structure`, `binary_exponent`,
+  `small_diagonal_port`, `small_diagonal_value`, `determinant_factors`,
+  `determinant`, and `determinant_factors_nonzero`;
 - The `three_port_complex_z0` network case retains an exact canonical UTF-8
   byte comparison.
 - Every operation case requires strict JSON parsing (including finite
