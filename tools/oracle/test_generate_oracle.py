@@ -8,6 +8,7 @@ import math
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import generate_oracle as oracle
 
@@ -423,6 +424,31 @@ IMPEDANCE_ADMITTANCE_CASE_SPECS = {
     },
 }
 
+POWER_WAVE_ADMITTANCE_CASE_SPECS = {
+    "power_wave_s_to_y_three_port_complex_z0": {
+        "operation": "s_to_y",
+        "ports": 3,
+        "frequencies": 3,
+        "input": "s",
+        "output": "y_s",
+        "input_unit": "dimensionless",
+        "output_unit": "S",
+        "seed": 20_260_937,
+        "absolute_tolerance": "atol_s",
+    },
+    "power_wave_y_to_s_three_port_complex_z0": {
+        "operation": "y_to_s",
+        "ports": 3,
+        "frequencies": 3,
+        "input": "y_s",
+        "output": "s",
+        "input_unit": "S",
+        "output_unit": "dimensionless",
+        "seed": 20_260_938,
+        "absolute_tolerance": "atol",
+    },
+}
+
 
 class MatrixRegistrationAndCheckerTests(unittest.TestCase):
     """Protect registration, z0-pattern, and output-only checker semantics."""
@@ -440,10 +466,12 @@ class MatrixRegistrationAndCheckerTests(unittest.TestCase):
             + len(RENORMALIZATION_CASE_SPECS)
             + len(RECIPROCAL_CASE_SPECS)
             + len(ACTIVE_CASE_SPECS)
-            + len(IMPEDANCE_ADMITTANCE_CASE_SPECS),
+            + len(IMPEDANCE_ADMITTANCE_CASE_SPECS)
+            + len(POWER_WAVE_ADMITTANCE_CASE_SPECS),
         )
         self.assertTrue(set(MATRIX_CASE_SPECS).issubset(registered))
         self.assertTrue(set(IMPEDANCE_ADMITTANCE_CASE_SPECS).issubset(registered))
+        self.assertTrue(set(POWER_WAVE_ADMITTANCE_CASE_SPECS).issubset(registered))
         for case_id, spec in MATRIX_CASE_SPECS.items():
             case = registered[case_id]
             self.assertEqual(case.comparison, "numeric_output")
@@ -1797,6 +1825,255 @@ class ImpedanceAdmittanceRegistrationAndCheckerTests(unittest.TestCase):
                         ),
                         1,
                     )
+
+
+class PowerWaveAdmittanceRegistrationAndCheckerTests(unittest.TestCase):
+    """Protect direct S↔Y registration, z0 profiles, and checker semantics."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.np, cls.skrf = oracle._load_dependencies()
+
+    @staticmethod
+    def _complex(value: dict[str, float]) -> complex:
+        return complex(value["real"], value["imag"])
+
+    def _nested_complex_equal(self, values: object, expected: object) -> None:
+        if isinstance(expected, list):
+            if not isinstance(values, list):
+                raise AssertionError("serialized complex array is not a list")
+            self.assertEqual(len(values), len(expected))
+            for actual_item, expected_item in zip(values, expected):
+                self._nested_complex_equal(actual_item, expected_item)
+            return
+
+        if not isinstance(values, dict) or not isinstance(expected, complex):
+            raise AssertionError("serialized complex leaf has an unexpected shape")
+        self.assertEqual(self._complex(values), expected)
+
+    def _check_document(
+        self,
+        case: object,
+        fixture: dict[str, object],
+        document: dict[str, object],
+        output_key: str,
+    ) -> int:
+        # The case object is only used for its stable fixture filename.  Keep
+        # this helper local to the test class so checker mutations are always
+        # compared against the regenerated canonical contract.
+        path = case.path  # type: ignore[attr-defined]
+        with tempfile.TemporaryDirectory() as directory:
+            temporary_path = Path(directory) / path.name
+            temporary_path.write_bytes(oracle._canonical_bytes(document))
+            return oracle._check_numeric_fixture(temporary_path, fixture, output_key)
+
+    def test_all_cases_are_registered_with_direction_specific_outputs(self) -> None:
+        registered = {case.case_id: case for case in oracle._CASES}
+        expected_paths = {
+            "power_wave_s_to_y_three_port_complex_z0": oracle.POWER_WAVE_S_TO_Y_FIXTURE,
+            "power_wave_y_to_s_three_port_complex_z0": oracle.POWER_WAVE_Y_TO_S_FIXTURE,
+        }
+        self.assertEqual(
+            set(POWER_WAVE_ADMITTANCE_CASE_SPECS),
+            set(expected_paths),
+        )
+        self.assertEqual(
+            len(
+                {
+                    spec["seed"] for spec in POWER_WAVE_ADMITTANCE_CASE_SPECS.values()
+                }
+            ),
+            2,
+        )
+        for case_id, spec in POWER_WAVE_ADMITTANCE_CASE_SPECS.items():
+            with self.subTest(case_id=case_id):
+                case = registered[case_id]
+                self.assertEqual(case.path, expected_paths[case_id])
+                self.assertEqual(case.path.stem, case_id)
+                self.assertEqual(case.comparison, "numeric_output")
+                self.assertEqual(case.numeric_output_key, spec["output"])
+
+    def test_fixture_contracts_reconstruct_independent_direct_inputs(self) -> None:
+        registered = {case.case_id: case for case in oracle._CASES}
+        reconstructed_inputs: dict[str, object] = {}
+        for case_id, spec in POWER_WAVE_ADMITTANCE_CASE_SPECS.items():
+            with self.subTest(case_id=case_id):
+                case = registered[case_id]
+                fixture = oracle._read_canonical_json(case.path)
+                metadata = fixture["metadata"]
+                data = fixture["data"]
+                self.assertIsInstance(metadata, dict)
+                self.assertIsInstance(data, dict)
+                self.assertEqual(metadata["case_id"], case_id)
+                self.assertEqual(metadata["operation"], spec["operation"])
+                self.assertEqual(metadata["numpy_version"], "2.5.1")
+                self.assertEqual(metadata["scikit_rf_version"], "2.0.1")
+                self.assertEqual(metadata["wave_definition"], "power")
+                self.assertEqual(metadata["random_seed"], spec["seed"])
+                self.assertEqual(metadata["input_unit"], spec["input_unit"])
+                self.assertEqual(metadata["output_unit"], spec["output_unit"])
+                self.assertEqual(
+                    metadata["reference_impedance"],
+                    {
+                        "complex": True,
+                        "frequency_dependent": True,
+                        "per_port": True,
+                        "unit": "ohm",
+                    },
+                )
+                self.assertEqual(
+                    metadata["shape"],
+                    {
+                        "frequency": [3],
+                        f"input_{'s' if spec['operation'] == 's_to_y' else 'y'}": [
+                            3,
+                            3,
+                            3,
+                        ],
+                        "input_z0": [3, 3],
+                        f"output_{'y' if spec['operation'] == 's_to_y' else 's'}": [
+                            3,
+                            3,
+                            3,
+                        ],
+                    },
+                )
+                self.assertEqual(metadata["tolerance_policy"]["rtol"], 1e-12)
+                self.assertEqual(
+                    metadata["tolerance_policy"][spec["absolute_tolerance"]],
+                    1e-12,
+                )
+                self.assertIn(
+                    "binary64",
+                    metadata["tolerance_policy"]["justification"],
+                )
+
+                quantity = "s" if spec["operation"] == "s_to_y" else "y"
+                direct_frequency, direct_input, direct_z0 = (
+                    oracle._power_wave_admittance_inputs(
+                        self.np,
+                        quantity=quantity,
+                        seed=spec["seed"],
+                    )
+                )
+                self.assertEqual(
+                    data["frequency_hz"],
+                    [float(value) for value in direct_frequency],
+                )
+                self._nested_complex_equal(data[spec["input"]], direct_input.tolist())
+                self._nested_complex_equal(data["z0_ohm"], direct_z0.tolist())
+                reconstructed_inputs[case_id] = direct_input
+
+                input_values = data[spec["input"]]
+                output_values = data[spec["output"]]
+                self.assertEqual(len(input_values), 3)
+                self.assertEqual(len(output_values), 3)
+                self.assertEqual(len(data["z0_ohm"]), 3)
+                self.assertTrue(
+                    all(
+                        math.isfinite(self._complex(value).real)
+                        and math.isfinite(self._complex(value).imag)
+                        for matrix in input_values
+                        for row in matrix
+                        for value in row
+                    )
+                )
+                self.assertTrue(
+                    all(
+                        math.isfinite(self._complex(value).real)
+                        and math.isfinite(self._complex(value).imag)
+                        for matrix in output_values
+                        for row in matrix
+                        for value in row
+                    )
+                )
+                z0_values = [
+                    self._complex(value)
+                    for row in data["z0_ohm"]
+                    for value in row
+                ]
+                self.assertTrue(all(value.real != 0.0 for value in z0_values))
+                self.assertTrue(all(value.imag != 0.0 for value in z0_values))
+                self.assertNotEqual(data["z0_ohm"][0], data["z0_ohm"][1])
+                self.assertTrue(
+                    any(
+                        data["z0_ohm"][0][port]
+                        != data["z0_ohm"][0][0]
+                        for port in range(1, 3)
+                    )
+                )
+
+        self.assertFalse(
+            self.np.array_equal(
+                reconstructed_inputs[
+                    "power_wave_s_to_y_three_port_complex_z0"
+                ],
+                reconstructed_inputs["power_wave_y_to_s_three_port_complex_z0"],
+            )
+        )
+
+    def test_public_builders_receive_explicit_power_definition(self) -> None:
+        registered = {case.case_id: case for case in oracle._CASES}
+        for case_id, spec in POWER_WAVE_ADMITTANCE_CASE_SPECS.items():
+            case = registered[case_id]
+            if spec["operation"] == "s_to_y":
+                with mock.patch.object(
+                    self.skrf.network,
+                    "s2y",
+                    wraps=self.skrf.network.s2y,
+                ) as conversion:
+                    case.builder(self.np, self.skrf)
+                self.assertEqual(conversion.call_args.kwargs["s_def"], "power")
+            else:
+                with mock.patch.object(
+                    self.skrf.network,
+                    "y2s",
+                    wraps=self.skrf.network.y2s,
+                ) as conversion:
+                    case.builder(self.np, self.skrf)
+                self.assertEqual(conversion.call_args.kwargs["s_def"], "power")
+
+    def test_checker_tolerates_only_computed_output_for_both_cases(self) -> None:
+        registered = {case.case_id: case for case in oracle._CASES}
+        for case_id, spec in POWER_WAVE_ADMITTANCE_CASE_SPECS.items():
+            with self.subTest(case_id=case_id):
+                case = registered[case_id]
+                fixture = oracle._read_canonical_json(case.path)
+                adjusted = copy.deepcopy(fixture)
+                adjusted["data"][spec["output"]][0][0][0]["real"] += 1e-13
+                self.assertEqual(
+                    self._check_document(
+                        case,
+                        fixture,
+                        adjusted,
+                        spec["output"],
+                    ),
+                    0,
+                )
+
+                drifted_input = copy.deepcopy(fixture)
+                drifted_input["data"][spec["input"]][0][0][0]["real"] += 1e-3
+                self.assertEqual(
+                    self._check_document(
+                        case,
+                        fixture,
+                        drifted_input,
+                        spec["output"],
+                    ),
+                    1,
+                )
+
+                drifted_z0 = copy.deepcopy(fixture)
+                drifted_z0["data"]["z0_ohm"][0][0]["real"] += 1.0
+                self.assertEqual(
+                    self._check_document(
+                        case,
+                        fixture,
+                        drifted_z0,
+                        spec["output"],
+                    ),
+                    1,
+                )
 
 
 if __name__ == "__main__":

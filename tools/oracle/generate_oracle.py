@@ -15,6 +15,9 @@ implementation so it can serve as a stable numerical reference for the
 internal conversion kernels.  The impedance/admittance fixtures use the
 public ``skrf.network.z2y`` and ``skrf.network.y2z`` functions for expected
 outputs, with direct Z and Y inputs constructed independently for each
+direction.  The power-wave S/Y fixtures use the public
+``skrf.network.s2y`` and ``skrf.network.y2s`` functions with explicit
+``s_def="power"`` and independently constructed direct inputs in each
 direction.
 """
 
@@ -311,6 +314,34 @@ IMPEDANCE_ADMITTANCE_NEAR_TOLERANCE_JUSTIFICATION = (
     "and non-zero, and pinned NumPy matrix_rank reports full rank. The "
     "determinant product is recorded from the input diagonal factors, with "
     "no condition number used for acceptance."
+)
+
+# The power-wave S/Y cases use direct, direction-specific inputs.  They share
+# only the explicit non-50-ohm complex per-port/frequency-dependent z0 profile;
+# neither direction is built from the other direction's expected output.
+POWER_WAVE_S_TO_Y_FIXTURE = (
+    Path(__file__).resolve().parent
+    / "fixtures"
+    / "power_wave_s_to_y_three_port_complex_z0.json"
+)
+POWER_WAVE_Y_TO_S_FIXTURE = (
+    Path(__file__).resolve().parent
+    / "fixtures"
+    / "power_wave_y_to_s_three_port_complex_z0.json"
+)
+POWER_WAVE_S_TO_Y_RANDOM_SEED = 20_260_937
+POWER_WAVE_Y_TO_S_RANDOM_SEED = 20_260_938
+POWER_WAVE_ADMITTANCE_NFREQ = 3
+POWER_WAVE_ADMITTANCE_NPORTS = 3
+POWER_WAVE_S_TO_Y_RTOL = 1e-12
+POWER_WAVE_S_TO_Y_ATOL_S = 1e-12
+POWER_WAVE_Y_TO_S_RTOL = 1e-12
+POWER_WAVE_Y_TO_S_ATOL = 1e-12
+POWER_WAVE_ADMITTANCE_TOLERANCE_JUSTIFICATION = (
+    "Strict binary64 tolerance for a well-conditioned, modest-magnitude, "
+    "deterministic complex N-port case; generation-time diagonal-dominance and "
+    "finite-output guards keep direct public scikit-rf conversion away from "
+    "singularity while allowing normal cross-language solve round-off."
 )
 
 
@@ -1784,6 +1815,218 @@ def _z_to_s_fixture(np: Any, skrf: Any) -> dict[str, Any]:
     }
 
 
+def _power_wave_admittance_inputs(
+    np: Any,
+    *,
+    quantity: str,
+    seed: int,
+) -> tuple[Any, Any, Any]:
+    """Build one direct S or Y input and the shared explicit complex z0.
+
+    The two operation builders call this helper with independent seeds.  The
+    helper never derives one parameter matrix from the other, so a fixture
+    cannot accidentally certify a round-trip instead of the requested direct
+    public scikit-rf operation.
+    """
+
+    if quantity not in {"s", "y"}:
+        raise ValueError(f"unknown power-wave admittance quantity: {quantity!r}")
+
+    frequency_hz, _constructor_z0, expanded_z0 = _matrix_frequency_and_z0(
+        np,
+        nfreq=POWER_WAVE_ADMITTANCE_NFREQ,
+        nports=POWER_WAVE_ADMITTANCE_NPORTS,
+        z0_profile="complex_per_port_frequency_dependent",
+    )
+    if expanded_z0.shape != (
+        POWER_WAVE_ADMITTANCE_NFREQ,
+        POWER_WAVE_ADMITTANCE_NPORTS,
+    ):
+        raise ValueError("power-wave S/Y z0 has an unexpected shape")
+    if not np.isfinite(expanded_z0).all() or not (expanded_z0.real != 0.0).all():
+        raise ValueError("power-wave S/Y z0 must be finite with non-zero real parts")
+    if not (expanded_z0.imag != 0.0).all():
+        raise ValueError("power-wave S/Y z0 must be genuinely complex")
+    if np.array_equal(expanded_z0[0], expanded_z0[1]):
+        raise ValueError("power-wave S/Y z0 must vary by frequency")
+    if np.array_equal(expanded_z0[:, 0], expanded_z0[:, 1]):
+        raise ValueError("power-wave S/Y z0 must vary by port")
+
+    rng = np.random.default_rng(seed)
+    if quantity == "s":
+        scale = 0.012
+        diagonal_base = 0.14
+        diagonal_step = 0.012
+        name = "direct power-wave S input"
+    else:
+        scale = 0.0002
+        diagonal_base = 0.022
+        diagonal_step = 0.0018
+        name = "direct power-wave Y input"
+    matrix = (
+        rng.normal(
+            loc=0.0,
+            scale=scale,
+            size=(
+                POWER_WAVE_ADMITTANCE_NFREQ,
+                POWER_WAVE_ADMITTANCE_NPORTS,
+                POWER_WAVE_ADMITTANCE_NPORTS,
+            ),
+        )
+        + 1j
+        * rng.normal(
+            loc=0.0,
+            scale=scale,
+            size=(
+                POWER_WAVE_ADMITTANCE_NFREQ,
+                POWER_WAVE_ADMITTANCE_NPORTS,
+                POWER_WAVE_ADMITTANCE_NPORTS,
+            ),
+        )
+    ).astype(np.complex128)
+    for frequency in range(POWER_WAVE_ADMITTANCE_NFREQ):
+        for port in range(POWER_WAVE_ADMITTANCE_NPORTS):
+            matrix[frequency, port, port] += complex(
+                diagonal_base + diagonal_step * frequency + 0.0015 * port,
+                0.004 + 0.0007 * frequency - 0.0003 * port,
+            )
+
+    _assert_non_symmetric(np, matrix, name=name)
+    _assert_parameter_diagonal_dominance(
+        np,
+        matrix,
+        name=name,
+        margin=0.25 * diagonal_base,
+    )
+    if not np.isfinite(matrix).all():
+        raise ValueError(f"{name} must be finite")
+    for frequency in range(POWER_WAVE_ADMITTANCE_NFREQ):
+        if np.linalg.matrix_rank(matrix[frequency]) != POWER_WAVE_ADMITTANCE_NPORTS:
+            raise ValueError(f"{name} must have full pinned-NumPy matrix rank")
+
+    return frequency_hz, matrix, expanded_z0
+
+
+def _power_wave_admittance_fixture(
+    np: Any,
+    skrf: Any,
+    *,
+    case_id: str,
+    operation: str,
+    seed: int,
+) -> dict[str, Any]:
+    """Build one direct S↔Y fixture through explicit public scikit-rf APIs."""
+
+    if operation == "s_to_y":
+        input_quantity = "s"
+        input_key = "s"
+        output_key = "y_s"
+        input_unit = "dimensionless"
+        output_unit = "S"
+        absolute_tolerance_key = "atol_s"
+        absolute_tolerance = POWER_WAVE_S_TO_Y_ATOL_S
+        rtol = POWER_WAVE_S_TO_Y_RTOL
+    elif operation == "y_to_s":
+        input_quantity = "y"
+        input_key = "y_s"
+        output_key = "s"
+        input_unit = "S"
+        output_unit = "dimensionless"
+        absolute_tolerance_key = "atol"
+        absolute_tolerance = POWER_WAVE_Y_TO_S_ATOL
+        rtol = POWER_WAVE_Y_TO_S_RTOL
+    else:
+        raise ValueError(f"unknown power-wave S/Y operation: {operation!r}")
+
+    frequency_hz, direct_input, expanded_z0 = _power_wave_admittance_inputs(
+        np,
+        quantity=input_quantity,
+        seed=seed,
+    )
+    if operation == "s_to_y":
+        # Keep the wave definition explicit even though power is the current
+        # scikit-rf default; this is the behavior contract for the Rust kernel.
+        expected_output = skrf.network.s2y(
+            direct_input,
+            z0=expanded_z0,
+            s_def="power",
+        )
+    else:
+        expected_output = skrf.network.y2s(
+            direct_input,
+            z0=expanded_z0,
+            s_def="power",
+        )
+    expected_output = np.asarray(expected_output, dtype=np.complex128)
+    if not np.isfinite(expected_output).all():
+        raise ValueError(f"{case_id} output must be finite")
+
+    reference_impedance = _matrix_reference_impedance_flags(
+        "complex_per_port_frequency_dependent"
+    )
+    input_shape_key = f"input_{input_quantity}"
+    output_shape_key = f"output_{output_key.removesuffix('_s')}"
+    data = {
+        "frequency_hz": [float(value) for value in frequency_hz],
+        input_key: _complex_array(direct_input),
+        "z0_ohm": _complex_array(expanded_z0),
+        output_key: _complex_array(expected_output),
+    }
+    metadata = {
+        "case_id": case_id,
+        "input_unit": input_unit,
+        "numpy_version": np.__version__,
+        "operation": operation,
+        "output_unit": output_unit,
+        "random_seed": seed,
+        "reference_impedance": reference_impedance,
+        "schema": "rfkit-rs.oracle.fixture",
+        "schema_version": SCHEMA_VERSION,
+        "scikit_rf_version": skrf.__version__,
+        "shape": {
+            "frequency": list(frequency_hz.shape),
+            input_shape_key: list(direct_input.shape),
+            "input_z0": list(expanded_z0.shape),
+            output_shape_key: list(expected_output.shape),
+        },
+        "tolerance_policy": {
+            absolute_tolerance_key: absolute_tolerance,
+            "comparison": (
+                f"abs(actual-expected) <= {absolute_tolerance_key} + "
+                "rtol*abs(expected)"
+            ),
+            "justification": POWER_WAVE_ADMITTANCE_TOLERANCE_JUSTIFICATION,
+            "regeneration": (
+                f"canonical UTF-8 JSON serialization; {output_key} is checked "
+                "with the recorded numeric tolerance"
+            ),
+            "rtol": rtol,
+        },
+        "wave_definition": "power",
+    }
+    return {"metadata": metadata, "data": data}
+
+
+def _power_wave_s_to_y_fixture(np: Any, skrf: Any) -> dict[str, Any]:
+    return _power_wave_admittance_fixture(
+        np,
+        skrf,
+        case_id="power_wave_s_to_y_three_port_complex_z0",
+        operation="s_to_y",
+        seed=POWER_WAVE_S_TO_Y_RANDOM_SEED,
+    )
+
+
+def _power_wave_y_to_s_fixture(np: Any, skrf: Any) -> dict[str, Any]:
+    return _power_wave_admittance_fixture(
+        np,
+        skrf,
+        case_id="power_wave_y_to_s_three_port_complex_z0",
+        operation="y_to_s",
+        seed=POWER_WAVE_Y_TO_S_RANDOM_SEED,
+    )
+
+
 def _matrix_reference_impedance_flags(z0_profile: str) -> dict[str, Any]:
     """Return the contract flags for one matrix-case z0 profile."""
 
@@ -2951,6 +3194,20 @@ _CASES = (
         "power_wave_z_to_s_three_port_complex_z0",
         Z_TO_S_FIXTURE,
         _z_to_s_fixture,
+        "numeric_output",
+        "s",
+    ),
+    _OracleCase(
+        "power_wave_s_to_y_three_port_complex_z0",
+        POWER_WAVE_S_TO_Y_FIXTURE,
+        _power_wave_s_to_y_fixture,
+        "numeric_output",
+        "y_s",
+    ),
+    _OracleCase(
+        "power_wave_y_to_s_three_port_complex_z0",
+        POWER_WAVE_Y_TO_S_FIXTURE,
+        _power_wave_y_to_s_fixture,
         "numeric_output",
         "s",
     ),
