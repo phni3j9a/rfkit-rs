@@ -10,6 +10,7 @@ use thiserror::Error;
 
 mod impedance_admittance;
 mod linalg;
+mod power_wave_admittance;
 mod power_waves;
 
 /// Errors produced while constructing or manipulating RF network data.
