@@ -18,7 +18,10 @@ outputs, with direct Z and Y inputs constructed independently for each
 direction.  The power-wave S/Y fixtures use the public
 ``skrf.network.s2y`` and ``skrf.network.y2s`` functions with explicit
 ``s_def="power"`` and independently constructed direct inputs in each
-direction.
+direction.  The matched-junction fixture uses independent three-port and
+four-port inputs and the public ``skrf.network.connect`` operation with
+explicit power-wave Network constructors; its output-only comparison leaves
+inputs, z0, and port-order metadata exact.
 """
 
 from __future__ import annotations
@@ -342,6 +345,31 @@ POWER_WAVE_ADMITTANCE_TOLERANCE_JUSTIFICATION = (
     "deterministic complex N-port case; generation-time diagonal-dominance and "
     "finite-output guards keep direct public scikit-rf conversion away from "
     "singularity while allowing normal cross-language solve round-off."
+)
+
+# Matched-junction connection is intentionally kept as one standalone oracle
+# case.  A and B use independent local generators so the fixture exercises all
+# four N-port blocks rather than certifying a symmetric or identity shortcut.
+CONNECT_FIXTURE = (
+    Path(__file__).resolve().parent
+    / "fixtures"
+    / "power_wave_connect_matched_three_to_four_port_real_frequency_dependent_z0.json"
+)
+CONNECT_CASE_ID = "power_wave_connect_matched_three_to_four_port_real_frequency_dependent_z0"
+CONNECT_RANDOM_SEED_A = 20_260_939
+CONNECT_RANDOM_SEED_B = 20_260_940
+CONNECT_NFREQ = 3
+CONNECT_NPORTS_A = 3
+CONNECT_NPORTS_B = 4
+CONNECT_PORT_A = 1
+CONNECT_PORT_B = 2
+CONNECT_RTOL = 1e-12
+CONNECT_ATOL = 1e-12
+CONNECT_TOLERANCE_JUSTIFICATION = (
+    "Strict binary64 tolerance for a finite, well-conditioned matched-junction "
+    "three-to-four-port case; the output is checked with the recorded numeric "
+    "bound while frequencies, inputs, z0, ordering metadata, and all other "
+    "contract fields remain exact."
 )
 
 
@@ -1670,6 +1698,217 @@ def _network_fixture(np: Any, skrf: Any) -> dict[str, Any]:
             "frequency_hz": [float(value) for value in frequency],
             "s": _complex_array(network_s),
             "z0_ohm": _complex_array(network_z0),
+        },
+    }
+
+
+def _connect_matched_inputs(
+    np: Any,
+    *,
+    seed_a: int,
+    seed_b: int,
+) -> tuple[Any, Any, Any, Any, Any, Any]:
+    """Build independent finite S/z0 inputs for the matched connection case."""
+
+    frequency_hz = np.array(
+        [0.79e9, 1.23e9, 1.91e9],
+        dtype=np.float64,
+    )
+    rng_a = np.random.default_rng(seed_a)
+    rng_b = np.random.default_rng(seed_b)
+
+    def random_s(rng: Any, nports: int, *, diagonal_base: float) -> Any:
+        scale = 0.021
+        matrix = (
+            rng.normal(
+                loc=0.0,
+                scale=scale,
+                size=(CONNECT_NFREQ, nports, nports),
+            )
+            + 1j
+            * rng.normal(
+                loc=0.0,
+                scale=scale,
+                size=(CONNECT_NFREQ, nports, nports),
+            )
+        ).astype(np.complex128)
+        for frequency in range(CONNECT_NFREQ):
+            for port in range(nports):
+                matrix[frequency, port, port] += complex(
+                    diagonal_base
+                    + 0.013 * frequency
+                    + 0.006 * port,
+                    0.011 + 0.002 * frequency - 0.001 * port,
+                )
+        return matrix
+
+    s_a = random_s(rng_a, CONNECT_NPORTS_A, diagonal_base=0.115)
+    s_b = random_s(rng_b, CONNECT_NPORTS_B, diagonal_base=0.145)
+    _assert_non_symmetric(np, s_a, name="matched-connection A S input")
+    _assert_non_symmetric(np, s_b, name="matched-connection B S input")
+    _assert_s_conditioning(s_a)
+    _assert_s_conditioning(s_b)
+
+    # The junction value is frequency-dependent, finite, real, positive, and
+    # copied exactly into both input arrays.  Every surviving port gets a
+    # distinct real value that also varies by frequency, making ordering and
+    # z0 propagation visible in the fixture rather than metadata alone.
+    junction_z0 = np.array([61.25, 73.5, 89.75], dtype=np.float64)
+    frequency_index_a = np.arange(CONNECT_NFREQ, dtype=np.float64)[:, None]
+    frequency_index_b = np.arange(CONNECT_NFREQ, dtype=np.float64)[:, None]
+    port_index_a = np.arange(CONNECT_NPORTS_A, dtype=np.float64)[None, :]
+    port_index_b = np.arange(CONNECT_NPORTS_B, dtype=np.float64)[None, :]
+    z0_a = (
+        42.0
+        + 2.35 * port_index_a
+        + 1.65 * frequency_index_a
+    ).astype(np.complex128)
+    z0_b = (
+        86.0
+        + 3.15 * port_index_b
+        + 2.25 * frequency_index_b
+    ).astype(np.complex128)
+    z0_a[:, CONNECT_PORT_A] = junction_z0
+    z0_b[:, CONNECT_PORT_B] = junction_z0
+
+    if not np.isfinite(frequency_hz).all():
+        raise ValueError("matched-connection frequencies must be finite")
+    if not np.isfinite(s_a).all() or not np.isfinite(s_b).all():
+        raise ValueError("matched-connection S inputs must be finite")
+    if not np.isfinite(z0_a).all() or not np.isfinite(z0_b).all():
+        raise ValueError("matched-connection z0 inputs must be finite")
+    if not (z0_a[:, CONNECT_PORT_A].imag == 0.0).all() or not (
+        z0_b[:, CONNECT_PORT_B].imag == 0.0
+    ).all():
+        raise ValueError("matched-connection junction z0 must be real")
+    if not (z0_a[:, CONNECT_PORT_A] == z0_b[:, CONNECT_PORT_B]).all():
+        raise ValueError("matched-connection junction z0 must match exactly")
+    if not (z0_a[:, CONNECT_PORT_A].real > 0.0).all():
+        raise ValueError("matched-connection junction z0 must be positive")
+    if np.array_equal(z0_a[0], z0_a[1]) or np.array_equal(z0_b[0], z0_b[1]):
+        raise ValueError("matched-connection z0 must vary by frequency")
+    if np.array_equal(z0_a[:, 0], z0_a[:, 2]) or np.array_equal(
+        z0_b[:, 0], z0_b[:, 1]
+    ):
+        raise ValueError("matched-connection external z0 must vary by port")
+
+    return frequency_hz, s_a, z0_a, s_b, z0_b, junction_z0
+
+
+def _connect_matched_fixture(np: Any, skrf: Any) -> dict[str, Any]:
+    """Build the matched-junction fixture through public scikit-rf connect."""
+
+    (
+        frequency_hz,
+        source_s_a,
+        source_z0_a,
+        source_s_b,
+        source_z0_b,
+        _junction_z0,
+    ) = _connect_matched_inputs(
+        np,
+        seed_a=CONNECT_RANDOM_SEED_A,
+        seed_b=CONNECT_RANDOM_SEED_B,
+    )
+    case_id = CONNECT_CASE_ID
+    network_a = skrf.Network(
+        f=frequency_hz,
+        s=source_s_a,
+        z0=source_z0_a,
+        s_def="power",
+        name=f"{case_id}_a",
+    )
+    network_b = skrf.Network(
+        f=frequency_hz,
+        s=source_s_b,
+        z0=source_z0_b,
+        s_def="power",
+        name=f"{case_id}_b",
+    )
+
+    # scikit-rf 2.0.1 exposes this operation as skrf.network.connect.  Keep
+    # the expected result exclusively on that public behavior path; the Rust
+    # implementation is an independent matched-junction rewrite.
+    connected = skrf.network.connect(
+        network_a,
+        CONNECT_PORT_A,
+        network_b,
+        CONNECT_PORT_B,
+    )
+    frequency = np.asarray(connected.f, dtype=np.float64)
+    connected_s = np.asarray(connected.s, dtype=np.complex128)
+    connected_z0 = np.asarray(connected.z0, dtype=np.complex128)
+    if not np.array_equal(frequency, frequency_hz):
+        raise ValueError("matched-connection output frequency changed")
+    if not np.isfinite(connected_s).all() or not np.isfinite(connected_z0).all():
+        raise ValueError("matched-connection output must be finite")
+
+    a_survivors = [port for port in range(CONNECT_NPORTS_A) if port != CONNECT_PORT_A]
+    b_survivors = [port for port in range(CONNECT_NPORTS_B) if port != CONNECT_PORT_B]
+    output_order = [
+        *({"network": "A", "port": port} for port in a_survivors),
+        *({"network": "B", "port": port} for port in b_survivors),
+    ]
+    shape = {
+        "frequency": list(frequency.shape),
+        "input_s_a": list(source_s_a.shape),
+        "input_s_b": list(source_s_b.shape),
+        "input_z0_a": list(source_z0_a.shape),
+        "input_z0_b": list(source_z0_b.shape),
+        "output_s": list(connected_s.shape),
+        "output_z0": list(connected_z0.shape),
+    }
+    return {
+        "metadata": {
+            "case_id": case_id,
+            "junction_ports": {"a": CONNECT_PORT_A, "b": CONNECT_PORT_B},
+            "numpy_version": np.__version__,
+            "operation": "connect_matched",
+            "port_order": {
+                "a_survivors": a_survivors,
+                "b_survivors": b_survivors,
+                "description": (
+                    "A unconnected ports in original order, followed by B "
+                    "unconnected ports in original order"
+                ),
+                "output": output_order,
+            },
+            "random_seeds": {
+                "a": CONNECT_RANDOM_SEED_A,
+                "b": CONNECT_RANDOM_SEED_B,
+            },
+            "reference_impedance": {
+                "external_complex_allowed": True,
+                "junction_exactly_equal": True,
+                "junction_frequency_dependent": True,
+                "junction_real_strictly_positive": True,
+                "unit": "ohm",
+            },
+            "schema": "rfkit-rs.oracle.fixture",
+            "schema_version": SCHEMA_VERSION,
+            "scikit_rf_version": skrf.__version__,
+            "shape": shape,
+            "tolerance_policy": {
+                "atol": CONNECT_ATOL,
+                "comparison": "abs(actual-expected) <= atol + rtol*abs(expected)",
+                "justification": CONNECT_TOLERANCE_JUSTIFICATION,
+                "regeneration": (
+                    "canonical UTF-8 JSON serialization; s_connected is checked "
+                    "with the recorded numeric tolerance; z0/order/inputs are "
+                    "checked exactly"
+                ),
+                "rtol": CONNECT_RTOL,
+            },
+            "wave_definition": connected.s_def,
+        },
+        "data": {
+            "frequency_hz": [float(value) for value in frequency],
+            "s_a": _complex_array(source_s_a),
+            "s_b": _complex_array(source_s_b),
+            "s_connected": _complex_array(connected_s),
+            "z0_a_ohm": _complex_array(source_z0_a),
+            "z0_b_ohm": _complex_array(source_z0_b),
+            "z0_connected_ohm": _complex_array(connected_z0),
         },
     }
 
@@ -3182,6 +3421,13 @@ _CASES = (
         DEFAULT_FIXTURE,
         _network_fixture,
         "exact",
+    ),
+    _OracleCase(
+        CONNECT_CASE_ID,
+        CONNECT_FIXTURE,
+        _connect_matched_fixture,
+        "numeric_output",
+        "s_connected",
     ),
     _OracleCase(
         "power_wave_s_to_z_three_port_complex_z0",

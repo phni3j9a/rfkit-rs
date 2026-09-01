@@ -449,6 +449,22 @@ POWER_WAVE_ADMITTANCE_CASE_SPECS = {
     },
 }
 
+MATCHED_CONNECTION_CASE_SPECS = {
+    "power_wave_connect_matched_three_to_four_port_real_frequency_dependent_z0": {
+        "operation": "connect_matched",
+        "ports_a": 3,
+        "ports_b": 4,
+        "frequencies": 3,
+        "input_a": "s_a",
+        "input_b": "s_b",
+        "output": "s_connected",
+        "junction_port_a": 1,
+        "junction_port_b": 2,
+        "seed_a": 20_260_939,
+        "seed_b": 20_260_940,
+    },
+}
+
 
 class MatrixRegistrationAndCheckerTests(unittest.TestCase):
     """Protect registration, z0-pattern, and output-only checker semantics."""
@@ -467,7 +483,8 @@ class MatrixRegistrationAndCheckerTests(unittest.TestCase):
             + len(RECIPROCAL_CASE_SPECS)
             + len(ACTIVE_CASE_SPECS)
             + len(IMPEDANCE_ADMITTANCE_CASE_SPECS)
-            + len(POWER_WAVE_ADMITTANCE_CASE_SPECS),
+            + len(POWER_WAVE_ADMITTANCE_CASE_SPECS)
+            + len(MATCHED_CONNECTION_CASE_SPECS),
         )
         self.assertTrue(set(MATRIX_CASE_SPECS).issubset(registered))
         self.assertTrue(set(IMPEDANCE_ADMITTANCE_CASE_SPECS).issubset(registered))
@@ -477,6 +494,160 @@ class MatrixRegistrationAndCheckerTests(unittest.TestCase):
             self.assertEqual(case.comparison, "numeric_output")
             self.assertEqual(case.numeric_output_key, spec["output"])
             self.assertEqual(case.path.stem, case_id)
+
+
+class MatchedConnectionRegistrationAndCheckerTests(unittest.TestCase):
+    """Protect public-connect oracle semantics and exact contract checking."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.np, cls.skrf = oracle._load_dependencies()
+
+    def test_case_is_registered_with_matched_connection_contract(self) -> None:
+        case_id = next(iter(MATCHED_CONNECTION_CASE_SPECS))
+        spec = MATCHED_CONNECTION_CASE_SPECS[case_id]
+        registered = {case.case_id: case for case in oracle._CASES}
+        self.assertIn(case_id, registered)
+        case = registered[case_id]
+        self.assertEqual(case.path, oracle.CONNECT_FIXTURE)
+        self.assertEqual(case.path.stem, case_id)
+        self.assertEqual(case.comparison, "numeric_output")
+        self.assertEqual(case.numeric_output_key, spec["output"])
+
+        fixture = oracle._read_canonical_json(case.path)
+        metadata = fixture["metadata"]
+        self.assertEqual(metadata["case_id"], case_id)
+        self.assertEqual(metadata["operation"], spec["operation"])
+        self.assertEqual(metadata["wave_definition"], "power")
+        self.assertEqual(metadata["numpy_version"], oracle.EXPECTED_NUMPY_VERSION)
+        self.assertEqual(
+            metadata["scikit_rf_version"], oracle.EXPECTED_SCIKIT_RF_VERSION
+        )
+        self.assertEqual(
+            metadata["random_seeds"],
+            {"a": spec["seed_a"], "b": spec["seed_b"]},
+        )
+        self.assertEqual(
+            metadata["junction_ports"],
+            {"a": spec["junction_port_a"], "b": spec["junction_port_b"]},
+        )
+        self.assertEqual(metadata["shape"]["frequency"], [spec["frequencies"]])
+        self.assertEqual(
+            metadata["shape"]["input_s_a"],
+            [spec["frequencies"], spec["ports_a"], spec["ports_a"]],
+        )
+        self.assertEqual(
+            metadata["shape"]["input_s_b"],
+            [spec["frequencies"], spec["ports_b"], spec["ports_b"]],
+        )
+        self.assertEqual(
+            metadata["shape"]["output_s"],
+            [
+                spec["frequencies"],
+                spec["ports_a"] + spec["ports_b"] - 2,
+                spec["ports_a"] + spec["ports_b"] - 2,
+            ],
+        )
+        self.assertEqual(
+            metadata["port_order"]["output"],
+            [
+                {"network": "A", "port": 0},
+                {"network": "A", "port": 2},
+                {"network": "B", "port": 0},
+                {"network": "B", "port": 1},
+                {"network": "B", "port": 3},
+            ],
+        )
+        data = fixture["data"]
+        self.assertEqual(
+            [value["real"] for value in data["z0_a_ohm"][0]],
+            [42.0, 61.25, 46.7],
+        )
+        self.assertEqual(
+            [value["real"] for value in data["z0_b_ohm"][0]],
+            [86.0, 89.15, 61.25, 95.45],
+        )
+        for frequency in range(spec["frequencies"]):
+            junction_a = data["z0_a_ohm"][frequency][spec["junction_port_a"]]
+            junction_b = data["z0_b_ohm"][frequency][spec["junction_port_b"]]
+            self.assertEqual(junction_a, junction_b)
+            self.assertGreater(junction_a["real"], 0.0)
+            self.assertEqual(junction_a["imag"], 0.0)
+            self.assertNotEqual(junction_a["real"], 50.0)
+        self.assertTrue(
+            any(
+                value["imag"] != 0.0
+                for matrix in data["s_a"] + data["s_b"]
+                for row in matrix
+                for value in row
+            )
+        )
+
+    def test_builder_uses_public_connect_and_explicit_power_networks(self) -> None:
+        case_id = next(iter(MATCHED_CONNECTION_CASE_SPECS))
+        case = next(case for case in oracle._CASES if case.case_id == case_id)
+        with mock.patch.object(
+            self.skrf,
+            "Network",
+            wraps=self.skrf.Network,
+        ) as network_constructor, mock.patch.object(
+            self.skrf.network,
+            "connect",
+            wraps=self.skrf.network.connect,
+        ) as connect:
+            case.builder(self.np, self.skrf)
+
+        self.assertEqual(network_constructor.call_count, 2)
+        for call in network_constructor.call_args_list:
+            self.assertEqual(call.kwargs["s_def"], "power")
+        self.assertEqual(connect.call_count, 1)
+        self.assertEqual(connect.call_args.args[1], oracle.CONNECT_PORT_A)
+        self.assertEqual(connect.call_args.args[3], oracle.CONNECT_PORT_B)
+
+    def test_checker_tolerates_only_connected_s_output(self) -> None:
+        case_id = next(iter(MATCHED_CONNECTION_CASE_SPECS))
+        case = next(case for case in oracle._CASES if case.case_id == case_id)
+        fixture = oracle._read_canonical_json(case.path)
+        adjusted = copy.deepcopy(fixture)
+        adjusted["data"]["s_connected"][0][0][0]["real"] += 1e-13
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / case.path.name
+            path.write_bytes(oracle._canonical_bytes(adjusted))
+            self.assertEqual(
+                oracle._check_numeric_fixture(path, fixture, "s_connected"),
+                0,
+            )
+
+            for field in (
+                "frequency_hz",
+                "s_a",
+                "s_b",
+                "z0_a_ohm",
+                "z0_b_ohm",
+                "z0_connected_ohm",
+            ):
+                drifted = copy.deepcopy(fixture)
+                if field == "frequency_hz":
+                    drifted["data"][field][0] += 1.0
+                elif field.startswith("s_"):
+                    drifted["data"][field][0][0][0]["real"] += 1e-3
+                else:
+                    drifted["data"][field][0][0]["real"] += 1.0
+                path.write_bytes(oracle._canonical_bytes(drifted))
+                self.assertEqual(
+                    oracle._check_numeric_fixture(path, fixture, "s_connected"),
+                    1,
+                    field,
+                )
+
+            drifted_metadata = copy.deepcopy(fixture)
+            drifted_metadata["metadata"]["port_order"]["output"][0]["port"] = 1
+            path.write_bytes(oracle._canonical_bytes(drifted_metadata))
+            self.assertEqual(
+                oracle._check_numeric_fixture(path, fixture, "s_connected"),
+                1,
+                "port-order metadata",
+            )
 
 
 class ReciprocalRegistrationAndCheckerTests(unittest.TestCase):
