@@ -465,6 +465,20 @@ MATCHED_CONNECTION_CASE_SPECS = {
     },
 }
 
+INNER_CONNECT_CASE_SPECS = {
+    "power_wave_inner_connect_matched_five_port_real_frequency_dependent_z0": {
+        "operation": "inner_connect_matched",
+        "ports": 5,
+        "frequencies": 3,
+        "input": "s",
+        "output": "s_inner_connected",
+        "junction_port_k": 1,
+        "junction_port_l": 3,
+        "survivors": [0, 2, 4],
+        "seed": 20_260_941,
+    },
+}
+
 
 class MatrixRegistrationAndCheckerTests(unittest.TestCase):
     """Protect registration, z0-pattern, and output-only checker semantics."""
@@ -484,11 +498,13 @@ class MatrixRegistrationAndCheckerTests(unittest.TestCase):
             + len(ACTIVE_CASE_SPECS)
             + len(IMPEDANCE_ADMITTANCE_CASE_SPECS)
             + len(POWER_WAVE_ADMITTANCE_CASE_SPECS)
-            + len(MATCHED_CONNECTION_CASE_SPECS),
+            + len(MATCHED_CONNECTION_CASE_SPECS)
+            + len(INNER_CONNECT_CASE_SPECS),
         )
         self.assertTrue(set(MATRIX_CASE_SPECS).issubset(registered))
         self.assertTrue(set(IMPEDANCE_ADMITTANCE_CASE_SPECS).issubset(registered))
         self.assertTrue(set(POWER_WAVE_ADMITTANCE_CASE_SPECS).issubset(registered))
+        self.assertTrue(set(INNER_CONNECT_CASE_SPECS).issubset(registered))
         for case_id, spec in MATRIX_CASE_SPECS.items():
             case = registered[case_id]
             self.assertEqual(case.comparison, "numeric_output")
@@ -645,6 +661,149 @@ class MatchedConnectionRegistrationAndCheckerTests(unittest.TestCase):
             path.write_bytes(oracle._canonical_bytes(drifted_metadata))
             self.assertEqual(
                 oracle._check_numeric_fixture(path, fixture, "s_connected"),
+                1,
+                "port-order metadata",
+            )
+
+
+class InnerConnectRegistrationAndCheckerTests(unittest.TestCase):
+    """Protect public-innerconnect oracle semantics and exact contract checks."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.np, cls.skrf = oracle._load_dependencies()
+
+    def test_case_is_registered_with_inner_connect_contract(self) -> None:
+        case_id = next(iter(INNER_CONNECT_CASE_SPECS))
+        spec = INNER_CONNECT_CASE_SPECS[case_id]
+        registered = {case.case_id: case for case in oracle._CASES}
+        self.assertIn(case_id, registered)
+        case = registered[case_id]
+        self.assertEqual(case.path, oracle.INNER_CONNECT_FIXTURE)
+        self.assertEqual(case.path.stem, case_id)
+        self.assertEqual(case.comparison, "numeric_output")
+        self.assertEqual(case.numeric_output_key, spec["output"])
+
+        fixture = oracle._read_canonical_json(case.path)
+        metadata = fixture["metadata"]
+        self.assertEqual(metadata["case_id"], case_id)
+        self.assertEqual(metadata["operation"], spec["operation"])
+        self.assertEqual(metadata["wave_definition"], "power")
+        self.assertEqual(metadata["numpy_version"], oracle.EXPECTED_NUMPY_VERSION)
+        self.assertEqual(
+            metadata["scikit_rf_version"], oracle.EXPECTED_SCIKIT_RF_VERSION
+        )
+        self.assertEqual(metadata["random_seed"], spec["seed"])
+        self.assertEqual(
+            metadata["junction_ports"],
+            {"k": spec["junction_port_k"], "l": spec["junction_port_l"]},
+        )
+        self.assertEqual(metadata["port_order"]["survivors"], spec["survivors"])
+        self.assertEqual(metadata["port_order"]["output"], spec["survivors"])
+        self.assertEqual(metadata["shape"]["frequency"], [spec["frequencies"]])
+        self.assertEqual(
+            metadata["shape"]["input_s"],
+            [spec["frequencies"], spec["ports"], spec["ports"]],
+        )
+        self.assertEqual(
+            metadata["shape"]["input_z0"], [spec["frequencies"], spec["ports"]]
+        )
+        self.assertEqual(
+            metadata["shape"]["output_s"],
+            [spec["frequencies"], len(spec["survivors"]), len(spec["survivors"])],
+        )
+        self.assertEqual(
+            metadata["shape"]["output_z0"],
+            [spec["frequencies"], len(spec["survivors"])],
+        )
+        self.assertEqual(metadata["tolerance_policy"]["rtol"], 1e-12)
+        self.assertEqual(metadata["tolerance_policy"]["atol"], 1e-12)
+        self.assertIn("binary64", metadata["tolerance_policy"]["justification"])
+
+        data = fixture["data"]
+        self.assertEqual(
+            [value["real"] for value in data["z0_ohm"][0]],
+            [34.0, 64.25, 39.2, 64.25, 44.4],
+        )
+        for frequency in range(spec["frequencies"]):
+            junction_k = data["z0_ohm"][frequency][spec["junction_port_k"]]
+            junction_l = data["z0_ohm"][frequency][spec["junction_port_l"]]
+            self.assertEqual(junction_k, junction_l)
+            self.assertGreater(junction_k["real"], 0.0)
+            self.assertEqual(junction_k["imag"], 0.0)
+            self.assertNotEqual(junction_k["real"], 50.0)
+        self.assertTrue(
+            any(
+                value["imag"] != 0.0
+                for matrix in data["s"]
+                for row in matrix
+                for value in row
+            )
+        )
+        self.assertTrue(
+            any(
+                data["s"][0][row][column]
+                != data["s"][0][column][row]
+                for row in range(spec["ports"])
+                for column in range(spec["ports"])
+                if row != column
+            )
+        )
+
+    def test_builder_uses_public_innerconnect_and_explicit_power_network(self) -> None:
+        case_id = next(iter(INNER_CONNECT_CASE_SPECS))
+        case = next(case for case in oracle._CASES if case.case_id == case_id)
+        with mock.patch.object(
+            self.skrf,
+            "Network",
+            wraps=self.skrf.Network,
+        ) as network_constructor, mock.patch.object(
+            self.skrf.network,
+            "innerconnect",
+            wraps=self.skrf.network.innerconnect,
+        ) as innerconnect:
+            case.builder(self.np, self.skrf)
+
+        self.assertEqual(network_constructor.call_count, 1)
+        self.assertEqual(network_constructor.call_args.kwargs["s_def"], "power")
+        self.assertEqual(innerconnect.call_count, 1)
+        self.assertEqual(innerconnect.call_args.args[1], oracle.INNER_CONNECT_PORT_K)
+        self.assertEqual(innerconnect.call_args.args[2], oracle.INNER_CONNECT_PORT_L)
+
+    def test_checker_tolerates_only_inner_connected_s_output(self) -> None:
+        case_id = next(iter(INNER_CONNECT_CASE_SPECS))
+        case = next(case for case in oracle._CASES if case.case_id == case_id)
+        fixture = oracle._read_canonical_json(case.path)
+        adjusted = copy.deepcopy(fixture)
+        adjusted["data"]["s_inner_connected"][0][0][0]["real"] += 1e-13
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / case.path.name
+            path.write_bytes(oracle._canonical_bytes(adjusted))
+            self.assertEqual(
+                oracle._check_numeric_fixture(path, fixture, "s_inner_connected"),
+                0,
+            )
+
+            for field in ("frequency_hz", "s", "z0_ohm", "z0_inner_connected_ohm"):
+                drifted = copy.deepcopy(fixture)
+                if field == "frequency_hz":
+                    drifted["data"][field][0] += 1.0
+                elif field == "s":
+                    drifted["data"][field][0][0][0]["real"] += 1e-3
+                else:
+                    drifted["data"][field][0][0]["real"] += 1.0
+                path.write_bytes(oracle._canonical_bytes(drifted))
+                self.assertEqual(
+                    oracle._check_numeric_fixture(path, fixture, "s_inner_connected"),
+                    1,
+                    field,
+                )
+
+            drifted_metadata = copy.deepcopy(fixture)
+            drifted_metadata["metadata"]["port_order"]["output"][0] = 4
+            path.write_bytes(oracle._canonical_bytes(drifted_metadata))
+            self.assertEqual(
+                oracle._check_numeric_fixture(path, fixture, "s_inner_connected"),
                 1,
                 "port-order metadata",
             )

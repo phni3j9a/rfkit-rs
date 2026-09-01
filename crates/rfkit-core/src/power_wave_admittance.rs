@@ -654,14 +654,28 @@ mod tests {
             })
         ));
 
-        let huge_y = Array3::from_elem((1, 1, 1), complex(f64::MAX, 0.0));
-        let error = y_to_s_power(&huge_y, &z0).expect_err("finite Y overflow must be reported");
+        // Keep the input finite while forcing a checked elimination
+        // subtraction overflow.  The tiny pivot also verifies that the
+        // shared solver does not use squared pivot magnitudes.
+        let overflow_y = Array3::from_shape_vec(
+            (1, 2, 2),
+            vec![
+                complex(1.0e-200, 0.0),
+                complex(f64::MAX, 0.0),
+                complex(1.0e-200, 0.0),
+                complex(-f64::MAX, 0.0),
+            ],
+        )
+        .unwrap();
+        let overflow_z0 = Array2::from_elem((1, 2), complex(50.0, 0.0));
+        let error = y_to_s_power(&overflow_y, &overflow_z0)
+            .expect_err("finite Y overflow must be reported");
         assert!(matches!(
             error,
             PowerWaveAdmittanceError::YToZ(ImpedanceAdmittanceError::NonFiniteComputation {
                 frequency: 0,
-                row: 0,
-                column: 0,
+                row: 1,
+                column: 1,
             })
         ));
 
