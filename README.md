@@ -35,19 +35,35 @@ The first vertical slice should make these excellent before expanding broadly:
 
 Calibration, media models, vector fitting, VNA control, and bindings come after the core conformance harness is trustworthy.
 
+The scope above is directional context rather than an ordered autonomous backlog.
+
 ## Repository layout
 
 ```text
 crates/rfkit-core/   Rust RF numerical core
 tools/oracle/        scikit-rf reference/differential-test tools
-docs/                architecture, conformance and provenance policy
+docs/                architecture, development, conformance and provenance policy
 ```
 
-## Loop engineering
+## Autonomous loop engineering
 
-The repository is designed to support a bounded ChatGPT → GitHub Issue → Codex → Pull Request maintenance loop. Scheduled automation uses explicit `loop:*` dispatch state and defaults to one implementation-ready Issue at a time rather than pre-generating a long AI roadmap.
+The repository supports a bounded GitHub-centered autonomous development loop:
 
-See `docs/LOOP_ENGINEERING.md` for the maintainer/worker roles, dispatch labels, prioritization policy, merge gates, and escalation boundary. See `docs/CODEX_AUTOMATION.md` for the one-time label setup and the recommended scheduled Codex worker instruction.
+```text
+Codex Planner → one loop:ready Issue → Codex Worker → reviewed PR → next Planner cycle
+```
+
+The default autonomous WIP is one implementation at a time. Higher timer frequency is used to reduce idle latency, not to manufacture additional Issues.
+
+ChatGPT is intentionally outside the normal scheduled execution path. It can act as a governor/auditor when the human owner asks whether recent autonomous work is producing meaningful RF capability, correctness, and leverage rather than activity for its own sake.
+
+See:
+
+- `docs/DEVELOPMENT_DIRECTION.md` for the project north star and meaningful-progress criteria;
+- `docs/LOOP_ENGINEERING.md` for Planner/Worker roles, dispatch state, WIP, merge gates, prioritization, auditing, and escalation;
+- `docs/CODEX_AUTOMATION.md` for thin scheduled `codex exec` instructions and the recommended four-cycle cadence.
+
+GitHub repository documents are the source of truth; automation prompts should not carry a duplicated long-lived roadmap or policy.
 
 ## Development
 
