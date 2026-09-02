@@ -1,128 +1,115 @@
 # Codex Automation
 
-This document defines the recommended scheduled Codex Planner and Worker for the `rfkit-rs` autonomous engineering loop.
+This document defines the host-independent execution contract for the autonomous `rfkit-rs` loop.
 
-The timer/task instructions should stay thin. GitHub documents are the source of truth:
+Repository policy decides **what** work is valid. Version-controlled prompt files in `automation/` provide the runtime role entrypoints. Systemd or another host scheduler should decide only **when and where** those prompts run.
 
-- `docs/DEVELOPMENT_DIRECTION.md` — what meaningful project progress means;
-- `docs/LOOP_ENGINEERING.md` — autonomous roles, state machine, WIP, merge and escalation policy;
-- `AGENTS.md` — repository engineering contract;
-- the dispatched GitHub Issue — the implementation contract for a Worker run.
+## Source of truth
 
-Do not copy long-lived policy into systemd units or shell prompts.
+Scheduled Codex must read and follow the current repository state, especially:
 
-## Prerequisites
+- `AGENTS.md` — engineering and numerical correctness contract;
+- `docs/DEVELOPMENT_DIRECTION.md` — project direction and meaningful-progress criteria;
+- `docs/LOOP_ENGINEERING.md` — Planner/Worker state machine, WIP, merge, prioritization, and escalation policy;
+- this document — host/execution contract;
+- `automation/planner-prompt.txt` and `automation/worker-prompt.txt` — canonical runtime role-entry prompts.
 
-Before enabling automation:
+Do not maintain divergent copies of the Planner or Worker prompt in systemd units, shell scripts, cron entries, personal notes, or external automation configuration. The files under `automation/` are the canonical prompt text.
 
-1. the repository checkout used by Codex can fetch/push and use `gh` for Issues/PRs;
-2. Planner and Worker can read the policy files above from fresh `main`;
-3. the Worker has the configured IssueFlow `issue-to-pr` skill and required Luna MAX / Sol XHIGH routing;
-4. these GitHub labels exist:
-   - `loop:ready`
-   - `loop:in-progress`
-   - `loop:blocked`
-5. each run starts from a safely isolated/clean checkout and fails closed on ambiguous local state.
+## Roles
 
-## Recommended schedule
+### Planner
 
-Once stable, run four planner/worker cycles per day:
+The scheduled Planner performs one repository-maintenance/planning cycle. It uses fresh GitHub state, prioritizes existing PRs and active work, may merge only when all autonomous merge gates are satisfied, and may dispatch at most one new implementation-ready Issue when WIP is empty and the work has meaningful marginal value.
 
-```text
-03:00 JST  planner
-03:30 JST  worker
-09:00 JST  planner
-09:30 JST  worker
-15:00 JST  planner
-15:30 JST  worker
-21:00 JST  planner
-21:30 JST  worker
-```
+The Planner does not implement product code and does not claim `loop:ready` work as a Worker.
 
-The 30-minute spacing is not a correctness requirement; it simply avoids overlapping the normal planner mutation window. Do not start a second run of the same role while the prior run is still active.
+### Worker
 
-## Planner instruction
+The scheduled Worker performs one implementation cycle. It may implement only an explicitly dispatched `loop:ready` Issue, claims exactly one Issue before work, follows the repository implementation/review/verification contract, and opens the resulting PR or surfaces a blocker.
 
-Use this as the complete scheduled `codex exec` instruction for the Planner:
+The Worker does not choose speculative roadmap work and does not claim a second Issue in the same run.
 
-```text
-Operate as the autonomous Codex Planner for phni3j9a/rfkit-rs.
+## Dispatch labels
 
-Use fresh GitHub and main state. Read docs/DEVELOPMENT_DIRECTION.md, docs/LOOP_ENGINEERING.md, AGENTS.md, and every repository document they require.
+The repository uses these machine-queryable labels:
 
-Execute exactly one Planner cycle as defined by docs/LOOP_ENGINEERING.md. Inspect main health, open PRs, CI, Issues, loop:* state, and recent relevant history before acting. Finish or resolve existing autonomous WIP before dispatching new work. When WIP is clear, choose at most one next bounded increment by marginal value and create one implementation-ready Issue with loop:ready only if worthwhile.
+- `loop:ready` — authorized for scheduled Worker implementation;
+- `loop:in-progress` — claimed by the Worker;
+- `loop:blocked` — cannot proceed without resolution.
 
-Apply the repository's merge and escalation policy exactly. A no-op run is valid. Do not manufacture work, publish a speculative roadmap, or rely on policy copied into this prompt when repository policy differs.
-```
+If required labels are missing, ambiguous state exists, or more than one ready Issue violates WIP=1, automation must fail closed rather than inventing a replacement mechanism.
 
-The Planner owns task selection and autonomous merge/readiness decisions. It must not implement the newly created Issue in the same run.
+## Recommended cadence
 
-## Worker instruction
-
-Use this as the complete scheduled `codex exec` instruction for the Worker:
+After host integration is validated, run four Planner/Worker opportunities per day:
 
 ```text
-Operate as the autonomous Codex Worker for phni3j9a/rfkit-rs.
-
-Use fresh GitHub and main state. Read AGENTS.md, docs/DEVELOPMENT_DIRECTION.md, docs/LOOP_ENGINEERING.md, and every repository document they require.
-
-Query open GitHub Issues carrying loop:ready and execute exactly one Worker cycle under docs/LOOP_ENGINEERING.md.
-
-If none exist, exit without implementing other work. If more than one exists, report the WIP invariant violation and exit. If exactly one exists, claim it by moving loop:ready to loop:in-progress before implementation; if the claim mutation fails, do not implement.
-
-Treat the Issue as the product contract. Inspect the repository, own the implementation plan, and implement end-to-end through the installed IssueFlow issue-to-pr workflow. Follow all numerical, conformance, provenance, architecture, verification, and escalation requirements. Use the configured Luna MAX implementation routing and fresh Sol XHIGH independent review; fail closed rather than silently substituting required roles.
-
-When implementation and review succeed, open a PR that closes/links the Issue and records concise verification evidence. Leave loop:in-progress while the PR awaits the next Planner cycle. Do not claim or implement a second Issue in this run.
+03:00 JST  Planner
+03:30 JST  Worker
+09:00 JST  Planner
+09:30 JST  Worker
+15:00 JST  Planner
+15:30 JST  Worker
+21:00 JST  Planner
+21:30 JST  Worker
 ```
 
-## Planner failure behavior
+This cadence reduces idle latency. It does not imply four Issues, implementations, PRs, or merges per day. No-op cycles are valid and expected.
 
-The Planner must fail closed or no-op when:
+## Runtime prompts
 
-- required policy cannot be read;
-- GitHub state is ambiguous or unavailable;
-- required loop labels are missing;
-- WIP state is inconsistent;
-- CI/review evidence needed for a merge decision is unavailable;
-- the next useful step crosses an escalation boundary;
-- all plausible new increments have low marginal value.
+Use the prompt files directly from the checked-out repository:
 
-It must never create work merely to make a scheduled run look productive.
+```text
+automation/planner-prompt.txt
+automation/worker-prompt.txt
+```
 
-## Worker failure behavior
+A host wrapper should conceptually do only enough to establish a safe checkout/non-interactive environment and then invoke the appropriate role, for example:
 
-The Worker must fail closed when:
+```sh
+codex exec "$(cat automation/planner-prompt.txt)"
+codex exec "$(cat automation/worker-prompt.txt)"
+```
 
-- GitHub dispatch labels are missing;
-- it cannot establish an unambiguous claim;
-- the working tree cannot be safely isolated from unrelated work;
-- required model/skill routing is unavailable;
-- the Issue requires unresolved product/RF/licensing policy;
-- required authoritative sources or fixtures are unavailable;
-- provenance/licensing obligations are unclear.
+Do not copy the prompt body into the unit file. Do not add host-specific strategic instructions that compete with repository policy.
 
-On a material blocker after claim, add `loop:blocked`, explain the blocker on the Issue, and stop rather than opening a misleading completion PR.
+See `automation/README.md` for host-integration requirements.
 
-## systemd operational guidance
+## Host requirements
 
-Keep service units operational rather than strategic. They should primarily:
+Before enabling scheduled execution, verify that:
 
-1. lock against overlap;
-2. enter/update the repository checkout safely;
-3. invoke `codex exec` with the thin Planner or Worker instruction;
-4. capture logs and a meaningful exit status.
+1. the checkout can fetch, push, create/update Issues and PRs, and merge when authorized;
+2. Codex can read the repository policy and runtime prompt files;
+3. required IssueFlow/model routing used by the repository workflow is available;
+4. GitHub and Codex authentication work non-interactively under the systemd service account;
+5. `HOME`, `PATH`, working directory, and other required environment are explicit enough for non-interactive execution;
+6. Planner and Worker share a host-level lock so they cannot mutate the same checkout concurrently;
+7. unrelated local user work cannot be silently reset or overwritten;
+8. stdout/stderr are retained in the systemd journal or equivalent host logs;
+9. legacy scheduled workers/maintainers are disabled so the new loop is not duplicated.
 
-Do not embed a roadmap, RF policy, acceptance criteria templates, or copied loop rules in systemd configuration. Updating GitHub policy should be sufficient to change future autonomous behavior.
+Prefer a small shell wrapper plus systemd service/timer units over introducing an additional daemon, queue, scheduler, or orchestration framework unless a demonstrated requirement cannot be met by systemd.
 
-## Observability
+## Failure behavior
 
-Retain per-run logs with role, start/end time, exit status, and Codex output so the human owner or ChatGPT auditor can distinguish:
+Planner and Worker must fail closed when safe automation cannot be established, including cases such as:
 
-- no-op due to WIP;
-- successful merge/dispatch;
-- successful Issue-to-PR implementation;
-- invariant violation;
-- blocked/escalated work;
-- infrastructure/model/tool failure.
+- missing/ambiguous dispatch state;
+- inability to establish the required claim or merge state safely;
+- unsafe/dirty checkout conditions;
+- unavailable required role/model routing;
+- unresolved material RF/product/API/architecture decisions;
+- unavailable required standards, papers, or fixtures;
+- uncertain provenance/licensing obligations;
+- authentication or GitHub mutation failures.
 
-The GitHub repository remains the authoritative development state; logs are diagnostic evidence, not a second state machine.
+A failure, blocked cycle, or no-work cycle must not mutate unrelated Issues or generate speculative backlog.
+
+## ChatGPT role
+
+Scheduled ChatGPT is not required in the normal execution path once the Codex Planner/Worker host integration is validated.
+
+ChatGPT may be used on demand as a governor/auditor to inspect whether autonomous work remains aligned with `docs/DEVELOPMENT_DIRECTION.md`, whether recent PRs represent meaningful capability/correctness progress, whether the Planner is drifting into conformance/cleanup tunnels, and whether repository policy should be adjusted.
