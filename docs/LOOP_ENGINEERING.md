@@ -1,129 +1,153 @@
 # Loop Engineering
 
-`rfkit-rs` may be grown through a semi-automated maintainer loop in which ChatGPT owns repository-level prioritization and review, GitHub Issues are the handoff contract, and Codex owns implementation planning and pull-request creation.
+`rfkit-rs` may be grown through a bounded autonomous loop in which GitHub is the shared state, a scheduled Codex Planner chooses the next increment, and a scheduled Codex Worker implements one dispatched Issue.
 
-The goal is **safe continuous improvement**, not maximum feature throughput.
+The goal is **safe meaningful continuous improvement**, not maximum activity or feature throughput.
+
+Read `docs/DEVELOPMENT_DIRECTION.md` first for the repository north star and current development horizon.
 
 ## Roles
 
-### ChatGPT Maintainer
+### Codex Planner
 
-The maintainer owns:
+The scheduled planner owns repository-level progress decisions during normal autonomous operation:
 
-- repository-health assessment;
-- pull-request review and merge readiness;
-- Issue triage;
-- deciding what should be worked on next;
-- defining what / why / done in implementation-ready Issues;
-- dispatching at most one ready Issue by default;
-- escalating decisions that require human RF/product/policy judgment.
+- inspect fresh `main`, repository policy, open PRs, Issues, CI, and loop state;
+- protect repository health before generating new work;
+- assess whether existing PR/Issue work must finish first;
+- choose the next bounded increment by marginal value;
+- define what / why / done in one implementation-ready Issue;
+- apply `loop:ready` only when the Issue is genuinely ready for implementation;
+- merge a clearly merge-ready autonomous PR when policy permits;
+- request bounded changes or mark work blocked when appropriate;
+- escalate decisions that require human RF/product/policy judgment.
 
-The maintainer does not prescribe routine repository-specific implementation details. Codex Main owns implementation planning after inspecting the repository.
+The planner decides **what should happen next**, but does not pre-prescribe routine implementation details. The worker owns repository-specific implementation planning after claiming the Issue.
 
 ### Codex Worker
 
-The scheduled Codex worker owns:
+The scheduled worker owns execution of one dispatched Issue:
 
-- finding a dispatched Issue;
-- claiming it before implementation;
-- reading `AGENTS.md` and the Issue contract;
-- repository inspection and implementation planning;
-- implementation through the configured IssueFlow `issue-to-pr` workflow;
-- deterministic verification;
-- independent review;
-- Git operations and opening the PR.
+- find exactly one `loop:ready` Issue;
+- claim it before implementation;
+- read `AGENTS.md`, repository policy, and the Issue contract;
+- inspect the repository and create the implementation plan;
+- implement through the configured IssueFlow `issue-to-pr` workflow;
+- run deterministic verification;
+- obtain independent review;
+- perform Git operations and open the PR.
+
+### ChatGPT governor / auditor
+
+ChatGPT is outside the normal scheduled loop. It does not need to generate routine Issues.
+
+When asked by the human owner, ChatGPT should inspect fresh GitHub state and recent development history to determine whether the autonomous system is making **meaningful RF progress**. The audit should look for capability growth, correctness improvement, downstream leverage, repeated low-value work, conformance tunnels, cleanup/refactor loops, over-engineering, weak Issue selection, and policy drift.
+
+If the loop is optimizing the wrong thing, ChatGPT should recommend or apply bounded policy changes rather than manually micromanaging the next few Issues.
 
 ### Human owner
 
-Human attention should normally be required only for escalated decisions such as public-API policy, ambiguous RF semantics, unavailable paid standards/papers, provenance/licensing uncertainty, major architecture changes, or release/publishing actions.
+Human attention should normally be required only for escalated decisions such as public-API policy, ambiguous RF semantics, unavailable paid standards/papers, provenance/licensing uncertainty, major architecture changes, release/publishing actions, or a deliberate change to autonomous-development policy.
 
 ## Dispatch state
 
-Use these GitHub labels as the machine-queryable handoff state:
+Use these GitHub labels as machine-queryable handoff state:
 
-- `loop:ready` — the Issue contract is ready for Codex implementation;
-- `loop:in-progress` — a Codex worker has claimed the Issue;
-- `loop:blocked` — implementation cannot currently proceed.
+- `loop:ready` — the Issue contract is ready for worker implementation;
+- `loop:in-progress` — a worker has claimed the Issue;
+- `loop:blocked` — progress cannot safely continue without resolution.
 
 The normal transition is:
 
 ```text
-open Issue
-   ↓ ChatGPT triage
-loop:ready
-   ↓ Codex claim
+fresh repository state
+   ↓ Codex Planner
+open Issue + loop:ready
+   ↓ Codex Worker claim
 loop:in-progress
-   ↓ implementation + review
+   ↓ implementation + independent review
 Pull Request
-   ↓ ChatGPT maintainer review
-merge / request changes / escalate
+   ↓ next Codex Planner cycle
+merge / request changes / block / escalate
+   ↓
+select next increment only when WIP is clear
 ```
 
-An open Issue without `loop:ready` is **not** permission for scheduled Codex implementation.
+An open Issue without `loop:ready` is **not** permission for scheduled implementation.
 
-If these labels are not present, scheduled automation must fail closed rather than silently inventing a different dispatch mechanism.
+If the required labels are missing, scheduled automation must fail closed rather than inventing another dispatch mechanism.
 
 ## Work-in-progress policy
 
-Default to **WIP = 1**.
+Default to **WIP = 1** across dispatched autonomous implementation.
 
-If a `loop:ready` or `loop:in-progress` Issue already exists, ChatGPT should not create another speculative implementation Issue.
+If a `loop:ready` or `loop:in-progress` Issue exists, or an autonomous PR is still awaiting resolution, the planner should normally finish that work before dispatching another implementation Issue.
 
-This keeps roadmap generation adaptive: after each merged increment, the next task is selected from the new `main` state rather than from a long pre-generated AI backlog.
+Existing user-reported Issues may remain open as backlog/discussion items without counting as dispatched WIP unless they carry loop state.
 
-Existing user-reported Issues may remain open as backlog or discussion items without counting as dispatched WIP unless they carry the ready/in-progress state.
+Increasing schedule frequency does **not** mean creating more work. It shortens idle latency between state transitions.
 
-## Maintainer cycle
+## Planner cycle
 
-A scheduled maintainer run should use fresh GitHub state and process work in this order:
+Every scheduled planner run must use fresh GitHub state and process work in this order:
 
-1. inspect repository policy and `main` health;
-2. inspect open PRs before generating new work;
-3. merge a clearly ready PR when authorized, or request bounded changes;
-4. triage open Issues that may take precedence;
-5. check for `loop:ready` / `loop:in-progress` work;
-6. only when the queue is empty, select one next bounded increment;
-7. create/update the Issue contract and apply `loop:ready`;
-8. report mutations and any escalation concisely.
+1. read `docs/DEVELOPMENT_DIRECTION.md`, this document, `AGENTS.md`, and referenced policy;
+2. inspect `main` health and required CI;
+3. inspect open PRs before generating new work;
+4. if one autonomous PR is clearly merge-ready, merge it when authorized by this policy;
+5. if changes are needed, keep the correction bounded to the existing work rather than generating a replacement task;
+6. inspect blocked work and relevant open Issues;
+7. check `loop:ready` / `loop:in-progress` state and unresolved autonomous PRs;
+8. only when WIP is clear, compare a small set of plausible next directions internally;
+9. create **one** implementation-ready Issue for the best bounded increment and apply `loop:ready`;
+10. report mutations or escalation concisely.
 
-A run with no mutation is valid. Do not create an Issue merely to prove that the loop ran.
+A run with no mutation is valid. Never manufacture an Issue merely because the timer fired.
 
-## rfkit-rs prioritization policy
+## Choosing the next Issue
 
-Use repository evidence and **marginal value**, rather than blindly consuming either the README scope or the conformance matrix top to bottom.
+Use `docs/DEVELOPMENT_DIRECTION.md`, repository evidence, and marginal value rather than blindly consuming README scope, scikit-rf surface area, or the conformance matrix.
 
 Prefer work in roughly this order:
 
-1. **broken main / correctness regressions** — failing required CI, wrong numerical behavior, invalid invariants, serious compatibility regressions;
-2. **blocking conformance debt** — missing or weak evidence that creates a concrete correctness risk, blocks a safe capability/API decision, or is implicated by an observed disagreement or regression;
-3. **foundational capability** — primitives that unlock several downstream RF operations while preserving the core N-port/complex-Z0 model;
-4. **high-value user-facing RF capability** — a bounded vertical increment from the project scope;
-5. **non-blocking characterization / conformance** — useful additional coverage that is not tied to a concrete blocker, defect, or imminent capability risk;
-6. **ergonomics / optimization / cleanup** — after correctness and conformance are characterized enough for the current stage.
+1. broken main / correctness regressions;
+2. concrete blocking conformance or numerical risk;
+3. foundational capability with substantial downstream leverage;
+4. high-value bounded RF capability;
+5. non-blocking characterization/conformance when justified;
+6. ergonomics, optimization, cleanup, refactor, or documentation when they unlock or protect higher-value work.
 
-Conformance debt is **not** synonymous with every dimension listed in `docs/CONFORMANCE.md` lacking an explicit dedicated fixture or Issue. Do not optimize for feature count, but also do not optimize for conformance-checkbox count.
+A good autonomous Issue is:
 
-## Avoiding conformance tunnels and diminishing returns
+- aligned with the current development horizon;
+- small enough for independent review and merge;
+- useful on its own or clearly unlocking subsequent work;
+- objectively verifiable;
+- product-complete enough that the worker need not invent externally visible behavior;
+- justified by current repository evidence;
+- free of unnecessary implementation prescriptions.
 
-`docs/CONFORMANCE.md` is a **test-design matrix, not an autonomous roadmap checklist**. Its dimensions describe evidence that should be considered where relevant; they are not instructions to create one Issue per unchecked dimension.
+Before dispatch, consider several plausible directions internally and choose one. Do not publish a speculative long roadmap.
 
-When selecting autonomous work:
+If all plausible next increments have low marginal value, do nothing and report that conclusion.
 
-- A missing coverage dimension by itself is insufficient reason for a standalone Issue. A conformance-only Issue should identify the concrete failure mode it could catch, why existing evidence is insufficient, and why that risk should be retired before the next capability increment.
-- Prefer adding proportionate conformance coverage together with the next capability when doing so keeps the change independently reviewable. Split conformance into a separate Issue when it blocks safe implementation/review, responds to observed evidence, or materially reduces a realistic numerical risk.
-- Reuse existing fixtures and proofs. Do not create a standalone Issue merely to add metadata, labels, or a second certificate for a property that existing tests already establish strongly enough for the current stage unless the new evidence can catch a materially different defect class.
-- For composed operations, test the risks introduced by the composition. Do not mechanically duplicate every lower-level edge-case matrix when the constituent kernels are already verified; use direct differential evidence, meaningful composition invariants, and coverage for composition-specific validation/failure paths in proportion to the new risk.
-- After **two consecutive merged conformance-only increments**, if `main` is healthy and there is no concrete correctness defect, blocker, or newly exposed numerical risk, the next autonomous Issue should normally advance a foundational or user-facing capability. Choosing another conformance-only increment requires a specific repository-evidence justification.
-- Before dispatching work, consider a small set of plausible candidate directions internally and choose the one with the best marginal value across **risk reduction, capability unlocked, user value, and implementation/review cost**. Do not publish a speculative long roadmap merely to record that comparison.
-- If all available next increments have low marginal value, doing nothing is preferable to manufacturing work.
+## Avoiding false progress
 
-These rules do not weaken the merge bar. They prevent high-quality verification from turning into self-perpetuating verification work that crowds out useful RF capability.
+`docs/CONFORMANCE.md` is a test-design matrix, not an autonomous roadmap checklist.
+
+A missing coverage dimension alone is insufficient reason for a standalone Issue. A conformance-only Issue must identify the materially different defect class it can catch and why that risk should be retired now.
+
+Prefer proportionate conformance coverage inside capability work when independently reviewable. Reuse existing fixtures and lower-level proofs rather than creating duplicate evidence.
+
+After two consecutive merged conformance-only increments, if `main` is healthy and no concrete blocker or newly exposed risk exists, the next autonomous Issue should normally advance capability.
+
+Likewise, repeated cleanup/refactor/documentation-only increments require concrete justification that they unlock, simplify, or protect meaningful RF development. Repository motion is not itself progress.
 
 ## Definition of merge-ready for numerical work
 
 For substantive numerical features, review against `docs/CONFORMANCE.md` and `AGENTS.md`.
 
-A PR should not be treated as complete merely because it compiles or CI is green. Where applicable, verify evidence for:
+Green CI is necessary but not sufficient. Where applicable, verify proportionate evidence for:
 
 - documented mathematical behavior;
 - deterministic Rust unit tests;
@@ -131,54 +155,60 @@ A PR should not be treated as complete merely because it compiles or CI is green
 - differential comparison against the pinned scikit-rf oracle;
 - justified tolerances;
 - N-port behavior;
-- scalar/per-port/frequency-dependent and complex reference impedances where supported by the operation;
+- scalar/per-port/frequency-dependent and complex reference impedances where supported;
 - near-singular or ill-conditioned behavior when relevant;
 - provenance/licensing requirements.
 
-Apply this list **proportionately to the risk introduced by the change**. It is not necessary for every operation or composition layer to receive a bespoke fixture for every conformance dimension when lower-level evidence plus focused end-to-end verification already establishes the relevant behavior.
+The planner should also ask whether the PR actually fulfills the Issue's intended capability or correctness outcome without unnecessary complexity.
 
-## Choosing the next Issue
+## Planner merge authority
 
-When there is no existing dispatched work, the maintainer should consider several plausible candidate directions internally, but should create **one** Issue only.
+The planner may merge an autonomous PR without human confirmation when all of the following are true:
 
-Choose by marginal value rather than by whichever unchecked README/conformance item is easiest to name. In particular, distinguish blocking conformance work from useful-but-non-blocking characterization before deciding that conformance should precede capability growth.
+- the PR implements an Issue created/dispatched under this loop;
+- required CI and deterministic verification are green;
+- independent review has no unresolved substantive finding;
+- the diff is bounded to the Issue contract;
+- no escalation condition below is triggered;
+- the change does not publish/release externally or freeze a material public-policy decision.
 
-A good next Issue is:
-
-- aligned with the current project goals;
-- small enough for independent review and merge;
-- useful on its own or clearly unlocks subsequent work;
-- objectively verifiable;
-- product-complete enough that Codex does not need to guess externally visible behavior;
-- justified by current repository evidence rather than checklist completion;
-- free of unnecessary implementation prescriptions.
-
-Avoid umbrella Issues such as "implement all Touchstone support" or "port scikit-rf" as scheduled coding tasks. Prefer a bounded vertical slice with explicit compatibility and acceptance criteria.
+Otherwise the planner must request bounded changes, mark blocked, or escalate. It must not merge merely to keep the loop moving.
 
 ## Escalation boundary
 
-ChatGPT should stop generation and ask the human owner when a material decision involves:
+Stop generation or merge and ask the human owner when a material decision involves:
 
 - breaking or freezing a public API;
-- choosing between multiple plausible RF definitions or wave conventions without a repository rule selecting one;
-- disagreement between a published standard, mathematical source, and observed scikit-rf behavior that changes externally visible semantics;
-- a paid IEEE/industry specification, paper, dataset, fixture, or other unavailable source needed to decide correctness;
+- choosing between plausible RF definitions or wave conventions without repository policy selecting one;
+- disagreement between standards/mathematics/scikit-rf that changes externally visible semantics;
+- unavailable paid specifications, papers, datasets, or fixtures needed for correctness;
 - uncertain copyright, license, attribution, or provenance obligations;
-- a major crate-boundary or repository-wide architecture change;
+- major crate-boundary or repository-wide architecture changes;
 - release, crates.io publishing, signing, or other irreversible external publication;
-- security or safety policy decisions beyond a bounded defect fix.
+- security or safety policy outside a bounded defect fix;
+- deliberate relaxation of WIP, review, or autonomous merge policy.
 
-The escalation should state the decision needed and the smallest useful set of options. Do not create implementation work that assumes an unresolved answer.
+The escalation must state the decision needed and the smallest useful set of options. Do not create implementation work that assumes an unresolved answer.
 
-## Suggested schedule
+## Recommended cadence
 
-After the initial once-daily rollout has been validated, use this cadence:
+Run planner and worker as separate systemd timers. A four-cycle daily cadence is reasonable once the loop is stable:
 
 ```text
-09:00 JST  ChatGPT maintainer cycle
-10:00 JST  Codex worker checks for one loop:ready Issue
-21:00 JST  ChatGPT maintainer cycle
-22:00 JST  Codex worker checks for one loop:ready Issue
+03:00 JST  Codex Planner
+03:30 JST  Codex Worker
+09:00 JST  Codex Planner
+09:30 JST  Codex Worker
+15:00 JST  Codex Planner
+15:30 JST  Codex Worker
+21:00 JST  Codex Planner
+21:30 JST  Codex Worker
 ```
 
-The exact clock times may change. The important invariant is **maintainer review before new generation** and **explicit Issue dispatch before Codex implementation**.
+The exact times may change. The invariants are more important than the clock:
+
+- planner evaluates fresh state before new dispatch;
+- explicit Issue dispatch precedes implementation;
+- WIP remains bounded;
+- no-op runs are normal;
+- higher cadence reduces waiting, not quality bars.
