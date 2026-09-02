@@ -6,6 +6,8 @@ This repository is intended to be developed aggressively with AI assistance, but
 
 Build a production-quality Rust-native RF/microwave network-analysis library that can eventually cover the useful functionality of scikit-rf while preserving Rust-native APIs and strong numerical verification.
 
+Read `docs/DEVELOPMENT_DIRECTION.md` for the current repository-level development horizon and the definition of meaningful autonomous progress.
+
 ## Source hierarchy
 
 Use sources in this order when resolving behavior:
@@ -60,23 +62,33 @@ Keep the numerical core independent of plotting frameworks, Python, WASM, GUI fr
 
 BSD-3-Clause permits reuse but attribution still matters. Do not erase lineage to make code appear original. If copying or closely adapting code, preserve the applicable copyright/license terms and log the source commit/path.
 
-## Scheduled loop engineering
+## Autonomous loop engineering
 
-Read `docs/LOOP_ENGINEERING.md` when operating as a scheduled maintainer or coding worker.
+Read `docs/LOOP_ENGINEERING.md` when operating as a scheduled Planner or Worker.
 
-For the scheduled Codex worker:
+For the scheduled Codex Planner:
+
+- use fresh GitHub and `main` state rather than cached assumptions;
+- protect WIP=1 and resolve existing autonomous work before dispatching new work;
+- choose at most one next Issue by marginal value under `docs/DEVELOPMENT_DIRECTION.md`;
+- treat no-op as valid when useful bounded work is unavailable;
+- do not turn README scope, scikit-rf surface area, or `docs/CONFORMANCE.md` into a mechanical backlog;
+- never implement a newly dispatched Issue in the same Planner run;
+- apply the autonomous merge and escalation gates in `docs/LOOP_ENGINEERING.md`.
+
+For the scheduled Codex Worker:
 
 - only an open Issue explicitly marked `loop:ready` is permission to start autonomous implementation;
 - do not implement arbitrary open Issues merely because they exist;
-- claim the selected Issue before implementation by moving it from `loop:ready` to `loop:in-progress` when GitHub write access is available;
-- process at most one dispatched Issue per scheduled worker run unless the human owner explicitly changes the WIP policy;
+- claim the selected Issue before implementation by moving it from `loop:ready` to `loop:in-progress`;
+- process at most one dispatched Issue per Worker run;
 - use the Issue as the product contract and own the repository-specific implementation plan after inspection;
-- follow the configured IssueFlow `issue-to-pr` workflow when available: Codex Main plans/orchestrates, Luna MAX implements bounded product-code tasks, and a fresh Sol XHIGH independently reviews the integrated candidate;
+- follow the configured IssueFlow `issue-to-pr` workflow: Codex Main plans/orchestrates, Luna MAX implements bounded product-code tasks, and a fresh Sol XHIGH independently reviews the integrated candidate;
 - Main owns deterministic verification, review-finding adjudication, Git, and PR creation;
-- do not silently substitute an unspecified child model when required role routing is unavailable;
-- if the Issue requires a material product/RF/licensing decision not settled by the Issue or repository policy, stop and surface the blocker rather than guessing.
+- do not silently substitute unspecified child models when required role routing is unavailable;
+- if a material product/RF/licensing decision is unresolved, mark blocked and surface it rather than guessing.
 
-The `loop:*` labels are dispatch state, not feature taxonomy. Keep implementation content in the Issue and PR rather than encoding design decisions in labels.
+The `loop:*` labels are dispatch state, not feature taxonomy. Keep design decisions in repository policy, Issues, and PRs rather than encoding them in labels.
 
 ## Avoid
 
@@ -87,3 +99,5 @@ The `loop:*` labels are dispatch state, not feature taxonomy. Keep implementatio
 - optimizing before correctness is characterized
 - scheduled implementation of untriaged open Issues without `loop:ready`
 - pre-generating a long autonomous roadmap when WIP=1 is configured
+- repeated conformance, cleanup, refactor, or documentation work without concrete marginal value
+- measuring autonomous-development quality by commit, Issue, PR, or test-count velocity alone
