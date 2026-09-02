@@ -1,82 +1,128 @@
 # Codex Automation
 
-This document defines the recommended scheduled Codex worker for the `rfkit-rs` loop-engineering workflow.
+This document defines the recommended scheduled Codex Planner and Worker for the `rfkit-rs` autonomous engineering loop.
 
-It is intentionally thin: GitHub Issue dispatch decides **what** work is authorized, `AGENTS.md` defines repository engineering rules, and the IssueFlow `issue-to-pr` skill owns the implementation workflow.
+The timer/task instructions should stay thin. GitHub documents are the source of truth:
+
+- `docs/DEVELOPMENT_DIRECTION.md` — what meaningful project progress means;
+- `docs/LOOP_ENGINEERING.md` — autonomous roles, state machine, WIP, merge and escalation policy;
+- `AGENTS.md` — repository engineering contract;
+- the dispatched GitHub Issue — the implementation contract for a Worker run.
+
+Do not copy long-lived policy into systemd units or shell prompts.
 
 ## Prerequisites
 
-Before enabling the worker:
+Before enabling automation:
 
-1. the repository checkout used by Codex can fetch/push and create pull requests;
-2. Codex can read `AGENTS.md` and `docs/LOOP_ENGINEERING.md`;
-3. the IssueFlow `issue-to-pr` skill is installed and its required Luna MAX / Sol XHIGH child-model routing is available;
+1. the repository checkout used by Codex can fetch/push and use `gh` for Issues/PRs;
+2. Planner and Worker can read the policy files above from fresh `main`;
+3. the Worker has the configured IssueFlow `issue-to-pr` skill and required Luna MAX / Sol XHIGH routing;
 4. these GitHub labels exist:
    - `loop:ready`
    - `loop:in-progress`
    - `loop:blocked`
-
-One-time label setup with GitHub CLI can be done from an authenticated checkout:
-
-```bash
-gh label create 'loop:ready' --description 'Ready for scheduled Codex implementation' --color '0E8A16'
-gh label create 'loop:in-progress' --description 'Claimed by the scheduled Codex worker' --color '1D76DB'
-gh label create 'loop:blocked' --description 'Loop work is blocked and requires attention' --color 'D73A4A'
-```
-
-If a label already exists, do not recreate or rename it during a normal worker run.
+5. each run starts from a safely isolated/clean checkout and fails closed on ambiguous local state.
 
 ## Recommended schedule
 
-After the initial once-daily rollout has been validated, run the worker twice per day:
+Once stable, run four planner/worker cycles per day:
 
 ```text
-10:00 JST daily
-22:00 JST daily
+03:00 JST  planner
+03:30 JST  worker
+09:00 JST  planner
+09:30 JST  worker
+15:00 JST  planner
+15:30 JST  worker
+21:00 JST  planner
+21:30 JST  worker
 ```
 
-Pair each worker run with an earlier ChatGPT maintainer cycle, for example at 09:00 JST and 21:00 JST. Each maintainer cycle can review pull requests and prepare at most one `loop:ready` Issue before the next worker checks the queue. If an existing Issue or PR still occupies the WIP=1 slot, do not dispatch another Issue for the later run.
+The 30-minute spacing is not a correctness requirement; it simply avoids overlapping the normal planner mutation window. Do not start a second run of the same role while the prior run is still active.
 
-## Automation instruction
+## Planner instruction
 
-Use the following instruction as the Codex Automation task body:
+Use this as the complete scheduled `codex exec` instruction for the Planner:
 
 ```text
-Operate as the scheduled implementation worker for phni3j9a/rfkit-rs.
+Operate as the autonomous Codex Planner for phni3j9a/rfkit-rs.
 
-Read AGENTS.md and docs/LOOP_ENGINEERING.md before taking action. Use fresh GitHub state.
+Use fresh GitHub and main state. Read docs/DEVELOPMENT_DIRECTION.md, docs/LOOP_ENGINEERING.md, AGENTS.md, and every repository document they require.
 
-Query open GitHub Issues carrying label loop:ready.
+Execute exactly one Planner cycle as defined by docs/LOOP_ENGINEERING.md. Inspect main health, open PRs, CI, Issues, loop:* state, and recent relevant history before acting. Finish or resolve existing autonomous WIP before dispatching new work. When WIP is clear, choose at most one next bounded increment by marginal value and create one implementation-ready Issue with loop:ready only if worthwhile.
 
-- If none exist, report that there is no dispatched work and exit without implementing any other open Issue.
-- If more than one exists, treat this as a WIP=1 invariant violation. Report the conflicting Issue numbers and exit without choosing silently.
-- If exactly one exists, claim it before implementation by removing loop:ready and adding loop:in-progress. If the claim write fails, do not implement.
-
-After a successful claim, implement that Issue end-to-end using the installed IssueFlow issue-to-pr skill.
-
-The GitHub Issue is the product contract. Codex Main owns repository inspection, implementation planning, task decomposition, integration, deterministic verification, review-finding adjudication, Git, and PR creation. Delegate bounded product-code implementation to Luna MAX and independently review the integrated candidate with a fresh Sol XHIGH reviewer as defined by the installed skill. Do not silently substitute unspecified child models if required routing is unavailable.
-
-Follow all rfkit-rs numerical, conformance, provenance, and architecture requirements in AGENTS.md. Do not guess a material RF/product/licensing decision that the Issue and repository policy leave unresolved. If such a blocker appears, add loop:blocked, explain the blocker on the Issue, and stop without opening a misleading completion PR.
-
-When implementation and review succeed, open a PR that links/closes the claimed Issue and includes concise verification evidence. Leave loop:in-progress in place while the PR is awaiting maintainer review; the next ChatGPT maintainer cycle owns merge/readiness judgment. Do not claim a second Issue in the same run.
+Apply the repository's merge and escalation policy exactly. A no-op run is valid. Do not manufacture work, publish a speculative roadmap, or rely on policy copied into this prompt when repository policy differs.
 ```
 
-## Failure behavior
+The Planner owns task selection and autonomous merge/readiness decisions. It must not implement the newly created Issue in the same run.
 
-The worker must fail closed when:
+## Worker instruction
+
+Use this as the complete scheduled `codex exec` instruction for the Worker:
+
+```text
+Operate as the autonomous Codex Worker for phni3j9a/rfkit-rs.
+
+Use fresh GitHub and main state. Read AGENTS.md, docs/DEVELOPMENT_DIRECTION.md, docs/LOOP_ENGINEERING.md, and every repository document they require.
+
+Query open GitHub Issues carrying loop:ready and execute exactly one Worker cycle under docs/LOOP_ENGINEERING.md.
+
+If none exist, exit without implementing other work. If more than one exists, report the WIP invariant violation and exit. If exactly one exists, claim it by moving loop:ready to loop:in-progress before implementation; if the claim mutation fails, do not implement.
+
+Treat the Issue as the product contract. Inspect the repository, own the implementation plan, and implement end-to-end through the installed IssueFlow issue-to-pr workflow. Follow all numerical, conformance, provenance, architecture, verification, and escalation requirements. Use the configured Luna MAX implementation routing and fresh Sol XHIGH independent review; fail closed rather than silently substituting required roles.
+
+When implementation and review succeed, open a PR that closes/links the Issue and records concise verification evidence. Leave loop:in-progress while the PR awaits the next Planner cycle. Do not claim or implement a second Issue in this run.
+```
+
+## Planner failure behavior
+
+The Planner must fail closed or no-op when:
+
+- required policy cannot be read;
+- GitHub state is ambiguous or unavailable;
+- required loop labels are missing;
+- WIP state is inconsistent;
+- CI/review evidence needed for a merge decision is unavailable;
+- the next useful step crosses an escalation boundary;
+- all plausible new increments have low marginal value.
+
+It must never create work merely to make a scheduled run look productive.
+
+## Worker failure behavior
+
+The Worker must fail closed when:
 
 - GitHub dispatch labels are missing;
-- it cannot atomically establish a clear claim state;
-- the working tree cannot be safely isolated from unrelated user work;
-- required Luna MAX / Sol XHIGH routing is unavailable;
-- the Issue requires unresolved product or RF semantics;
-- required standards/papers/fixtures are unavailable;
-- provenance or licensing obligations are unclear.
+- it cannot establish an unambiguous claim;
+- the working tree cannot be safely isolated from unrelated work;
+- required model/skill routing is unavailable;
+- the Issue requires unresolved product/RF/licensing policy;
+- required authoritative sources or fixtures are unavailable;
+- provenance/licensing obligations are unclear.
 
-A failed or no-work run should not mutate unrelated Issues or generate speculative backlog.
+On a material blocker after claim, add `loop:blocked`, explain the blocker on the Issue, and stop rather than opening a misleading completion PR.
 
-## Review ownership
+## systemd operational guidance
 
-The Codex worker produces a reviewed PR, but it does not replace the next maintainer cycle.
+Keep service units operational rather than strategic. They should primarily:
 
-The ChatGPT maintainer remains responsible for deciding whether the PR should merge under the repository's product intent and conformance policy. If changes are requested, the existing PR/Issue should be completed before new work is dispatched under WIP=1.
+1. lock against overlap;
+2. enter/update the repository checkout safely;
+3. invoke `codex exec` with the thin Planner or Worker instruction;
+4. capture logs and a meaningful exit status.
+
+Do not embed a roadmap, RF policy, acceptance criteria templates, or copied loop rules in systemd configuration. Updating GitHub policy should be sufficient to change future autonomous behavior.
+
+## Observability
+
+Retain per-run logs with role, start/end time, exit status, and Codex output so the human owner or ChatGPT auditor can distinguish:
+
+- no-op due to WIP;
+- successful merge/dispatch;
+- successful Issue-to-PR implementation;
+- invariant violation;
+- blocked/escalated work;
+- infrastructure/model/tool failure.
+
+The GitHub repository remains the authoritative development state; logs are diagnostic evidence, not a second state machine.
