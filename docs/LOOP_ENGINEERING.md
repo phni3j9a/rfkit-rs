@@ -19,7 +19,7 @@ The scheduled planner owns repository-level progress decisions during normal aut
 - define what / why / done in one implementation-ready Issue;
 - apply `loop:ready` only when the Issue is genuinely ready for implementation;
 - merge a clearly merge-ready autonomous PR when policy permits;
-- request bounded changes or mark work blocked when appropriate;
+- request bounded changes and re-dispatch the same linked Issue for a correction pass, or mark work blocked when appropriate;
 - escalate decisions that require human RF/product/policy judgment.
 
 The planner decides **what should happen next**, but does not pre-prescribe routine implementation details. The worker owns repository-specific implementation planning after claiming the Issue.
@@ -28,8 +28,9 @@ The planner decides **what should happen next**, but does not pre-prescribe rout
 
 The scheduled worker owns execution of one dispatched Issue:
 
-- find exactly one `loop:ready` Issue;
+- find exactly one `loop:ready` Issue authorizing either initial implementation or a correction pass;
 - claim it before implementation;
+- update its existing autonomous PR rather than opening a duplicate when the dispatch is for bounded corrections;
 - read `AGENTS.md`, repository policy, and the Issue contract;
 - inspect the repository and create the implementation plan;
 - implement through the configured IssueFlow `issue-to-pr` workflow;
@@ -53,9 +54,11 @@ Human attention should normally be required only for escalated decisions such as
 
 Use these GitHub labels as machine-queryable handoff state:
 
-- `loop:ready` — the Issue contract is ready for worker implementation;
-- `loop:in-progress` — a worker has claimed the Issue;
+- `loop:ready` — the Issue is authorized for the next Worker pass, either initial implementation or bounded correction of its existing autonomous PR;
+- `loop:in-progress` — a Worker has claimed the currently authorized implementation or correction pass;
 - `loop:blocked` — progress cannot safely continue without resolution.
+
+These state labels are mutually exclusive on an open Issue. An Issue carrying more than one of them is ambiguous and must not authorize implementation.
 
 The normal transition is:
 
@@ -68,9 +71,13 @@ loop:in-progress
    ↓ implementation + independent review
 Pull Request
    ↓ next Codex Planner cycle
-merge / request changes / block / escalate
-   ↓
-select next increment only when WIP is clear
+   ├─ merge ──────────────────────────────→ WIP clears
+   ├─ bounded change request
+   │      ↓ re-dispatch the same Issue as loop:ready
+   │   Worker correction pass
+   │      ↓ update the same Pull Request
+   │   next Codex Planner cycle
+   └─ block / escalate
 ```
 
 An open Issue without `loop:ready` is **not** permission for scheduled implementation.
@@ -95,7 +102,7 @@ Every scheduled planner run must use fresh GitHub state and process work in this
 2. inspect `main` health and required CI;
 3. inspect open PRs before generating new work;
 4. if one autonomous PR is clearly merge-ready, merge it when authorized by this policy;
-5. if changes are needed, keep the correction bounded to the existing work rather than generating a replacement task;
+5. if implementation-ready changes are needed, keep the correction bounded to the existing work and re-dispatch its linked Issue under the correction-loop rules below rather than generating a replacement task;
 6. inspect blocked work and relevant open Issues;
 7. check `loop:ready` / `loop:in-progress` state and unresolved autonomous PRs;
 8. only when WIP is clear, compare a small set of plausible next directions internally;
@@ -103,6 +110,39 @@ Every scheduled planner run must use fresh GitHub state and process work in this
 10. report mutations or escalation concisely.
 
 A run with no mutation is valid. Never manufacture an Issue merely because the timer fired.
+
+## Correction loop for an existing pull request
+
+A bounded change request on an autonomous PR is unfinished work within the same WIP slot. It must be able to return to the Worker without creating another Issue or PR.
+
+The Planner may re-dispatch a correction pass only when all of the following are true:
+
+- exactly one open loop Issue is unambiguously linked to exactly one open autonomous PR through GitHub's closing-reference relationship;
+- no closed/unmerged PR is associated with that Issue;
+- that Issue carries only `loop:in-progress`, or already carries only `loop:ready` because this same re-dispatch completed earlier;
+- the Issue and PR are the existing WIP, not unrelated backlog or a new increment;
+- the required changes are bounded by the existing Issue contract and do not require a human escalation decision;
+- the Planner has independently accepted a concrete unresolved change request for the head commit it inspected;
+- the PR targets `main`, and its head is a branch in this repository that the Worker can update without force-pushing.
+
+When those conditions hold, the Planner must:
+
+1. create a concise change request if the current head does not already have an adequate one;
+2. reuse an adequate unresolved request for an unchanged head instead of posting a duplicate comment or review;
+3. replace `loop:in-progress` with `loop:ready` on the same Issue, preserving WIP=1;
+4. verify that the post-transition Issue has exactly `loop:ready`, not `loop:in-progress` or `loop:blocked`.
+
+If the Issue is already in that verified ready state, the Planner leaves it unchanged. A partially applied or ambiguous label transition must fail closed and be reported; it is not permission to create replacement work. Multiple linked PRs, a fork or otherwise unwritable head, an unclear change request, or product/RF/policy ambiguity must be blocked or escalated instead of re-dispatched.
+
+After selecting exactly one `loop:ready` Issue, the Worker must verify that it carries no other loop state and that no other `loop:ready` or `loop:in-progress` Issue or unresolved autonomous PR violates WIP=1. It must then determine the pass type from fresh GitHub state before editing:
+
+- with no current or historical PR associated with the Issue, perform the initial implementation and create one PR;
+- with exactly one closing-linked open autonomous PR, perform a correction pass against that PR;
+- with an ambiguous Issue-to-PR relationship, more than one linked open PR, or any closed/unmerged historical PR whether or not an open PR also exists, fail closed without choosing a target.
+
+For a correction pass, the Worker must verify the current-head change request, claim the Issue by replacing `loop:ready` with `loop:in-progress`, and re-read the Issue, PR, head SHA, change request, base, and branch ownership before editing. It then fetches and checks out the exact existing head and applies only the requested bounded correction through the normal IssueFlow implementation, verification, and independent-review workflow. Main commits and pushes normally to the same branch so the same PR is updated. The Worker must not force-push, open a replacement PR, or broaden the Issue contract. If fresh revalidation differs from the claimed state or the remote head changes after inspection, the Worker must stop rather than overwrite concurrent work and let a later Planner cycle decide the next safe transition.
+
+After the PR is updated, the Issue remains `loop:in-progress` until the next Planner cycle merges, re-dispatches another bounded correction, blocks, or escalates it.
 
 ## Choosing the next Issue
 
