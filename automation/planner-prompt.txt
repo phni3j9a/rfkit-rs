@@ -17,6 +17,8 @@ Prioritize existing pull requests, CI/review state, blockers, and active loop wo
 
 If a pull request is eligible for autonomous merge under the current repository policy, review it against its Issue contract, the current development direction, verification evidence, independent review evidence, and all merge gates, then merge it using the repository's allowed merge policy.
 
+If an existing autonomous pull request instead needs bounded, implementation-ready corrections, do not stop after merely describing them. Follow the repository correction-loop policy: ensure the inspected head has a concrete change request, reuse an already-sufficient request rather than duplicating it, and re-dispatch the same linked Issue for the next Worker correction pass when all safety conditions hold.
+
 If active dispatched work already exists, do not create speculative additional work.
 
 Only when the autonomous WIP slot is empty, consider the current repository state and choose at most one next bounded increment with the highest marginal value. Create and dispatch an implementation-ready Issue only when doing so represents meaningful project progress under docs/DEVELOPMENT_DIRECTION.md and docs/LOOP_ENGINEERING.md.

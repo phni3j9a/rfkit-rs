@@ -70,6 +70,8 @@ For the scheduled Codex Planner:
 
 - use fresh GitHub and `main` state rather than cached assumptions;
 - protect WIP=1 and resolve existing autonomous work before dispatching new work;
+- when an existing autonomous PR needs bounded, implementation-ready corrections, record or reuse a concrete change request for its current head and re-dispatch the same linked Issue for a correction pass instead of creating replacement work;
+- do not repeat an already-sufficient change request against an unchanged PR head merely to show activity;
 - choose at most one next Issue by marginal value under `docs/DEVELOPMENT_DIRECTION.md`;
 - treat no-op as valid when useful bounded work is unavailable;
 - do not turn README scope, scikit-rf surface area, or `docs/CONFORMANCE.md` into a mechanical backlog;
@@ -78,10 +80,12 @@ For the scheduled Codex Planner:
 
 For the scheduled Codex Worker:
 
-- only an open Issue explicitly marked `loop:ready` is permission to start autonomous implementation;
+- only an open Issue explicitly marked `loop:ready` is permission to start an autonomous initial implementation or correction pass;
 - do not implement arbitrary open Issues merely because they exist;
 - claim the selected Issue before implementation by moving it from `loop:ready` to `loop:in-progress`;
 - process at most one dispatched Issue per Worker run;
+- when the dispatched Issue has exactly one unambiguously linked, safely writable open autonomous PR, apply the authorized correction to that PR's existing branch and do not create a duplicate PR;
+- fail closed when the Issue-to-PR relationship, correction request, or writable head branch is ambiguous;
 - use the Issue as the product contract and own the repository-specific implementation plan after inspection;
 - follow the configured IssueFlow `issue-to-pr` workflow: Codex Main plans/orchestrates, Luna MAX implements bounded product-code tasks, and a fresh Sol XHIGH independently reviews the integrated candidate;
 - Main owns deterministic verification, review-finding adjudication, Git, and PR creation;

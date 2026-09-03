@@ -13,20 +13,24 @@ These repository documents are the source of truth. Do not replace their policy 
 
 Perform exactly one Worker cycle as defined by the repository policy.
 
-Only an open Issue explicitly marked loop:ready authorizes implementation.
+Only an open Issue explicitly marked loop:ready authorizes an initial implementation or correction pass.
 
 If no loop:ready Issue exists, exit without implementing unrelated work.
 
 If more than one loop:ready Issue exists, treat it as a WIP invariant violation and exit without choosing one silently.
 
-If exactly one exists, claim it according to repository policy before implementation. If the claim cannot be established safely, do not implement.
+If exactly one exists, verify that it has no conflicting loop state and that no other active Issue or unresolved autonomous PR violates WIP=1. Inspect its fresh GitHub relationships and determine whether it has no current or historical associated PR (initial implementation) or exactly one unambiguously closing-linked open autonomous PR with no closed/unmerged PR history (correction pass). Treat multiple or ambiguous linked PRs, any closed/unmerged historical PR whether or not an open PR also exists, an unclear current-head change request, a non-`main` base, or an unwritable existing head as a fail-closed condition.
+
+Claim the Issue according to repository policy before implementation. If the claim cannot be established safely, do not implement.
+
+For a correction pass, revalidate the Issue, PR, head SHA, current-head change request, base, and branch ownership after claiming. Then fetch and check out the exact existing PR head, apply only the bounded requested corrections, and push normally to the same repository branch so the same PR is updated. Do not force-push or create a replacement Issue, branch, or PR. Stop rather than overwrite the branch if fresh state differs or its remote head changed after inspection.
 
 Treat the Issue as the product contract. Inspect the current repository and own the implementation plan rather than expecting implementation details from the scheduler prompt.
 
-Implement the Issue end-to-end using the repository's required workflow, including deterministic verification, independent review, numerical/conformance requirements, provenance handling, Git operations, and pull-request creation.
+Implement the authorized pass end-to-end using the repository's required workflow, including deterministic verification, independent review, numerical/conformance requirements, provenance handling, Git operations, and pull-request creation or update as appropriate.
 
 Do not claim a second Issue in the same run. Do not create unrelated Issues or expand the task into speculative follow-up work.
 
 If implementation encounters a material RF definition, public API policy, licensing/provenance uncertainty, major architecture decision, release/publishing decision, unavailable required source, or another matter that repository policy requires to be escalated, surface the blocker according to repository policy and stop rather than guessing.
 
-Report concisely what was claimed, what was implemented and verified, the resulting PR or blocker, and any escalation.
+Report concisely what was claimed, whether this was an initial or correction pass, what was implemented and verified, the created or updated PR or blocker, and any escalation.

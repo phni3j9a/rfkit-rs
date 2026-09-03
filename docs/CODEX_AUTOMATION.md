@@ -20,13 +20,13 @@ Do not maintain divergent copies of the Planner or Worker prompt in systemd unit
 
 ### Planner
 
-The scheduled Planner performs one repository-maintenance/planning cycle. It uses fresh GitHub state, prioritizes existing PRs and active work, may merge only when all autonomous merge gates are satisfied, and may dispatch at most one new implementation-ready Issue when WIP is empty and the work has meaningful marginal value.
+The scheduled Planner performs one repository-maintenance/planning cycle. It uses fresh GitHub state, prioritizes existing PRs and active work, may merge only when all autonomous merge gates are satisfied, may re-dispatch the Issue linked to an existing autonomous PR for a bounded correction pass, and may dispatch at most one new implementation-ready Issue when WIP is empty and the work has meaningful marginal value.
 
 The Planner does not implement product code and does not claim `loop:ready` work as a Worker.
 
 ### Worker
 
-The scheduled Worker performs one implementation cycle. It may implement only an explicitly dispatched `loop:ready` Issue, claims exactly one Issue before work, follows the repository implementation/review/verification contract, and opens the resulting PR or surfaces a blocker.
+The scheduled Worker performs one implementation cycle. It may implement only an explicitly dispatched `loop:ready` Issue, claims exactly one Issue before work, follows the repository implementation/review/verification contract, and either creates its initial PR or updates its one unambiguously linked existing PR for a dispatched correction pass.
 
 The Worker does not choose speculative roadmap work and does not claim a second Issue in the same run.
 
@@ -34,9 +34,11 @@ The Worker does not choose speculative roadmap work and does not claim a second 
 
 The repository uses these machine-queryable labels:
 
-- `loop:ready` — authorized for scheduled Worker implementation;
-- `loop:in-progress` — claimed by the Worker;
+- `loop:ready` — authorized for the next scheduled Worker pass, including bounded correction of an existing autonomous PR;
+- `loop:in-progress` — the currently authorized initial or correction pass has been claimed by the Worker;
 - `loop:blocked` — cannot proceed without resolution.
+
+The three loop state labels are mutually exclusive on an open Issue. Conflicting state labels are ambiguous and do not authorize implementation.
 
 If required labels are missing, ambiguous state exists, or more than one ready Issue violates WIP=1, automation must fail closed rather than inventing a replacement mechanism.
 
