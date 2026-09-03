@@ -184,68 +184,154 @@ fn pivot_score(value: Complex64) -> f64 {
     value.re.abs().max(value.im.abs())
 }
 
-/// Divide finite complex values with component scaling.
+/// Divide finite complex values without forming overflowing or underflowing
+/// scalar products.
 ///
-/// `num_complex::Complex64` division uses `re*re + im*im` as its denominator,
-/// which can underflow for a non-zero tiny pivot (or overflow for a large
-/// finite pivot) even though the quotient is representable.  Scaling both
-/// operands by their largest component keeps the denominator in a small finite
-/// range and preserves the solver's exact-zero singularity policy.  Callers
-/// still perform the finite-result check, so a quotient that is genuinely
-/// outside the finite `f64` range is reported as a non-finite computation.
+/// The quotient is evaluated from the standard formula
+///
+/// ```text
+/// (a + i b) / (c + i d)
+///   = ((a c + b d) + i (b c - a d)) / (c² + d²).
+/// ```
+///
+/// Each scalar product is kept as a signed mantissa and a binary exponent.
+/// Consequently, a product such as `2^900 * 1` and one such as `2^-900 * 1`
+/// remain distinct until the final quotient is rounded.  In particular, the
+/// numerator is never normalized by its largest component, which would erase
+/// a representable component with a much smaller exponent.  Callers still
+/// perform the finite-result check, so a quotient that is genuinely outside
+/// the finite `f64` range is returned as an infinity and reported as
+/// `SolveError::NonFinite` by the solver.
 fn divide_complex(left: Complex64, right: Complex64) -> Complex64 {
-    let left_scale = left.re.abs().max(left.im.abs());
-    if left_scale == 0.0 {
-        return ZERO;
-    }
-    let right_scale = right.re.abs().max(right.im.abs());
-    debug_assert!(
-        right_scale > 0.0,
-        "divide_complex requires a non-zero divisor"
+    debug_assert!(is_finite(left) && is_finite(right));
+
+    let denominator = Scaled::add(
+        Scaled::product(right.re, right.re),
+        Scaled::product(right.im, right.im),
+    )
+    .expect("a non-zero complex divisor has a positive squared magnitude");
+
+    let real_numerator = Scaled::add(
+        Scaled::product(left.re, right.re),
+        Scaled::product(left.im, right.im),
     );
-    let left_re = left.re / left_scale;
-    let left_im = left.im / left_scale;
-    let right_re = right.re / right_scale;
-    let right_im = right.im / right_scale;
-    let denominator = right_re * right_re + right_im * right_im;
-    let quotient_re = (left_re * right_re + left_im * right_im) / denominator;
-    let quotient_im = (left_im * right_re - left_re * right_im) / denominator;
+    let imaginary_numerator = Scaled::subtract(
+        Scaled::product(left.im, right.re),
+        Scaled::product(left.re, right.im),
+    );
+
     Complex64::new(
-        scale_quotient(quotient_re, left_scale, right_scale),
-        scale_quotient(quotient_im, left_scale, right_scale),
+        divide_scaled(real_numerator, denominator),
+        divide_scaled(imaginary_numerator, denominator),
     )
 }
 
-/// Apply `value * left_scale / right_scale` without rounding the scale ratio.
+/// A finite non-zero value represented as `mantissa * 2^exponent`.
 ///
-/// Each positive factor is represented as a mantissa in `[0.5, 1)` and an
-/// integer power of two.  The bounded mantissas are combined before the
-/// exponent is applied, so neither a ratio overflow nor a ratio underflow can
-/// erase a finite result.  Subnormal results are rounded by one final IEEE
-/// multiplication with the corresponding power of two.
-fn scale_quotient(value: f64, left_scale: f64, right_scale: f64) -> f64 {
-    if value == 0.0 {
-        return value;
+/// The mantissa is signed and lies in `[-1, -0.5] ∪ [0.5, 1)`.  Keeping the
+/// exponent separate is what lets the division kernel add or subtract terms
+/// without first materializing an out-of-range `f64` product.
+#[derive(Clone, Copy, Debug)]
+struct Scaled {
+    mantissa: f64,
+    exponent: i32,
+}
+
+impl Scaled {
+    /// Decompose a finite scalar, treating either signed zero as no term.
+    fn from_f64(value: f64) -> Option<Self> {
+        if value == 0.0 {
+            return None;
+        }
+
+        let (mantissa, exponent) = decompose_positive(value.abs());
+        Some(Self {
+            mantissa: if value.is_sign_negative() {
+                -mantissa
+            } else {
+                mantissa
+            },
+            exponent,
+        })
     }
 
-    let negative = value.is_sign_negative();
-    let (value_mantissa, value_exponent) = decompose_positive(value.abs());
-    let (left_mantissa, left_exponent) = decompose_positive(left_scale);
-    let (right_mantissa, right_exponent) = decompose_positive(right_scale);
-
-    let mut mantissa = value_mantissa * left_mantissa / right_mantissa;
-    let mut exponent = value_exponent + left_exponent - right_exponent;
-    while mantissa >= 1.0 {
-        mantissa *= 0.5;
-        exponent += 1;
-    }
-    while mantissa < 0.5 {
-        mantissa *= 2.0;
-        exponent -= 1;
+    /// Form a scalar product without allowing the value itself to overflow
+    /// or underflow.
+    fn product(left: f64, right: f64) -> Option<Self> {
+        let left = Self::from_f64(left)?;
+        let right = Self::from_f64(right)?;
+        Self::normalize(
+            left.mantissa * right.mantissa,
+            left.exponent + right.exponent,
+        )
     }
 
-    let result = scale_by_power_of_two(mantissa, exponent);
-    if negative { -result } else { result }
+    /// Add two scaled terms after aligning the lower exponent.
+    fn add(left: Option<Self>, right: Option<Self>) -> Option<Self> {
+        let (Some(mut larger), Some(mut smaller)) = (left, right) else {
+            return left.or(right);
+        };
+
+        if larger.exponent < smaller.exponent {
+            std::mem::swap(&mut larger, &mut smaller);
+        }
+
+        let exponent_delta = larger.exponent - smaller.exponent;
+        let mut smaller_mantissa = scale_by_power_of_two(smaller.mantissa.abs(), -exponent_delta);
+        if smaller.mantissa.is_sign_negative() {
+            smaller_mantissa = -smaller_mantissa;
+        }
+
+        Self::normalize(larger.mantissa + smaller_mantissa, larger.exponent)
+    }
+
+    /// Subtract two scaled terms, retaining cancellation before rounding.
+    fn subtract(left: Option<Self>, right: Option<Self>) -> Option<Self> {
+        Self::add(
+            left,
+            right.map(|term| Self {
+                mantissa: -term.mantissa,
+                ..term
+            }),
+        )
+    }
+
+    /// Normalize a finite signed mantissa into the representation invariant.
+    fn normalize(mantissa: f64, exponent: i32) -> Option<Self> {
+        if mantissa == 0.0 {
+            return None;
+        }
+
+        let negative = mantissa.is_sign_negative();
+        let (mantissa, mantissa_exponent) = decompose_positive(mantissa.abs());
+        let mantissa = if negative { -mantissa } else { mantissa };
+
+        Some(Self {
+            mantissa,
+            exponent: exponent + mantissa_exponent,
+        })
+    }
+}
+
+/// Divide a scaled numerator by a positive scaled denominator and materialize
+/// the result only once, at the final `f64` boundary.
+fn divide_scaled(numerator: Option<Scaled>, denominator: Scaled) -> f64 {
+    let Some(numerator) = numerator else {
+        return 0.0;
+    };
+
+    let quotient = Scaled::normalize(
+        numerator.mantissa / denominator.mantissa,
+        numerator.exponent - denominator.exponent,
+    )
+    .expect("a non-zero scaled numerator has a non-zero quotient");
+
+    let result = scale_by_power_of_two(quotient.mantissa.abs(), quotient.exponent);
+    if quotient.mantissa.is_sign_negative() {
+        -result
+    } else {
+        result
+    }
 }
 
 /// Decompose a finite positive number as `mantissa * 2^exponent`.
@@ -371,6 +457,32 @@ mod tests {
             ),
             Complex64::new(minimum_subnormal, 0.0)
         );
+    }
+
+    #[test]
+    fn solves_extreme_dynamic_range_complex_quotient_without_component_loss() {
+        let huge = 2.0_f64.powi(900);
+        let tiny = 2.0_f64.powi(-900);
+        let mut a = [Complex64::new(0.0, 1.0)];
+        let mut b = [Complex64::new(huge, tiny)];
+
+        solve_multiple_rhs(&mut a, &mut b, 1).expect("unit imaginary pivot is valid");
+
+        assert_eq!(b[0], Complex64::new(tiny, -huge));
+    }
+
+    #[test]
+    fn scaled_subtraction_renormalizes_deep_cancellation() {
+        let large = 2.0_f64.powi(900);
+        let difference = 2.0_f64.powi(850);
+        let slightly_smaller = large - difference;
+
+        let actual = Scaled::subtract(Scaled::from_f64(large), Scaled::from_f64(slightly_smaller))
+            .expect("non-identical scaled terms have a non-zero difference");
+        let expected = Scaled::from_f64(difference).expect("difference is non-zero");
+
+        assert_eq!(actual.mantissa, expected.mantissa);
+        assert_eq!(actual.exponent, expected.exponent);
     }
 
     #[test]
