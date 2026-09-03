@@ -1,12 +1,12 @@
 //! Internal matched-junction connection for frequency-major S-parameter stacks.
 //!
-//! This module implements one narrowly scoped operation: connect one port of
-//! an A network to one port of a B network through a matched real junction.
-//! The operation is intentionally private while the crate's public network
-//! model is still being established.  Both inputs use the Kurokawa
-//! power-wave convention.  The connected reference impedances must be finite,
-//! real, strictly positive, and exactly equal at each frequency; external
-//! reference impedances may be any finite complex values.
+//! This module implements two narrowly scoped operations: connect one port of
+//! an A network to one port of a B network, or connect two ports of one network,
+//! through a matched real junction.  The operations are intentionally private
+//! while the crate's public network model is still being established.  Inputs
+//! use the Kurokawa power-wave convention.  The connected reference impedances
+//! must be finite, real, strictly positive, and exactly equal at each
+//! frequency; external reference impedances may be any finite complex values.
 //!
 //! If `k` and `l` are the connected A and B ports, respectively, and `EA` and
 //! `EB` are the surviving ports in their original order, the eliminated
@@ -19,6 +19,10 @@
 //! C_BA = S_B[EB,l] S_A[k,EA] / D
 //! C_BB = S_B[EB,EB] + S_B[EB,l] S_A[k,k] S_B[l,EB] / D.
 //! ```
+//!
+//! For same-network inner connection, with internal ports `I = [k, l]`, the
+//! matched junction exchange matrix is `P = [[0, 1], [1, 0]]` and elimination
+//! uses `S_out = S_EE + S_EI (I - P S_II)^-1 P S_IE`.
 //!
 //! A denominator is singular only when the computed complex value is exactly
 //! zero.  No near-singular cutoff, regularization, or mismatch renormalization
@@ -104,6 +108,12 @@ pub(crate) enum ConnectionError {
         nports: usize,
     },
 
+    #[error("inner-connect port {port} is out of range for {nports} ports")]
+    InvalidInnerPort { port: usize, nports: usize },
+
+    #[error("inner-connect requires two distinct ports, got {port_a} and {port_b}")]
+    IdenticalInnerPorts { port_a: usize, port_b: usize },
+
     #[error(
         "{network:?} connected reference impedance is not finite, real, and strictly positive at frequency {frequency}, port {port}: {value:?}"
     )]
@@ -146,6 +156,197 @@ pub(crate) struct ConnectedNetwork {
     pub(crate) s: Array3<Complex64>,
     /// Connected frequency-major reference impedances in output-port order.
     pub(crate) z0: Array2<Complex64>,
+}
+
+/// Connect two distinct ports of one network through a matched real junction.
+///
+/// The result contains every port except `port_k` and `port_l`, in the input's
+/// original order.  The two selected ports are ordered internally as
+/// `I = [port_k, port_l]`; the matched junction exchanges their incident waves
+/// with `P = [[0, 1], [1, 0]]`.  Eliminating those internal waves therefore
+/// gives
+///
+/// ```text
+/// S_out = S_EE + S_EI (I - P S_II)^-1 P S_IE.
+/// ```
+///
+/// This is intentionally an internal raw-array operation.  It uses the same
+/// Kurokawa power-wave and matched-junction contract as [`connect_matched`]:
+/// selected reference impedances must be finite, real, strictly positive, and
+/// exactly equal at every frequency.  No renormalization or near-singular
+/// classification is performed.
+#[allow(clippy::too_many_arguments, dead_code)]
+pub(crate) fn inner_connect_matched(
+    frequency: &[f64],
+    s: &Array3<Complex64>,
+    z0: &Array2<Complex64>,
+    port_k: usize,
+    port_l: usize,
+) -> Result<ConnectedNetwork, ConnectionError> {
+    let shape = validate_input(NetworkSide::A, frequency, s, z0)?;
+
+    // Validate both indices before applying the distinct-port rule.  This
+    // keeps an out-of-range request deterministic even for a one-port input.
+    if port_k >= shape.nports {
+        return Err(ConnectionError::InvalidInnerPort {
+            port: port_k,
+            nports: shape.nports,
+        });
+    }
+    if port_l >= shape.nports {
+        return Err(ConnectionError::InvalidInnerPort {
+            port: port_l,
+            nports: shape.nports,
+        });
+    }
+    if port_k == port_l {
+        return Err(ConnectionError::IdenticalInnerPorts {
+            port_a: port_k,
+            port_b: port_l,
+        });
+    }
+
+    let external = inner_survivors(shape.nports, port_k, port_l);
+    let n_external = shape
+        .nports
+        .checked_sub(2)
+        .ok_or(ConnectionError::NoExternalPorts)?;
+    if n_external == 0 {
+        return Err(ConnectionError::NoExternalPorts);
+    }
+
+    // Validate the junction contract before allocating or evaluating any
+    // arithmetic.  validate_input has already rejected non-finite z0 values.
+    for frequency_index in 0..shape.nfreq {
+        let junction_k = z0[[frequency_index, port_k]];
+        let junction_l = z0[[frequency_index, port_l]];
+        if junction_k.re <= 0.0 || junction_k.im != 0.0 {
+            return Err(ConnectionError::InvalidJunctionZ0 {
+                network: NetworkSide::A,
+                frequency: frequency_index,
+                port: port_k,
+                value: junction_k,
+            });
+        }
+        if junction_l.re <= 0.0 || junction_l.im != 0.0 {
+            return Err(ConnectionError::InvalidJunctionZ0 {
+                network: NetworkSide::A,
+                frequency: frequency_index,
+                port: port_l,
+                value: junction_l,
+            });
+        }
+        if junction_k != junction_l {
+            return Err(ConnectionError::MismatchedJunctionZ0 {
+                frequency: frequency_index,
+                a: junction_k,
+                b: junction_l,
+            });
+        }
+    }
+
+    let mut output_s = Array3::from_elem((shape.nfreq, n_external, n_external), ZERO);
+    let mut output_z0 = Array2::from_elem((shape.nfreq, n_external), ZERO);
+
+    for frequency_index in 0..shape.nfreq {
+        for (output_port, &input_port) in external.iter().enumerate() {
+            output_z0[[frequency_index, output_port]] = z0[[frequency_index, input_port]];
+        }
+
+        // Construct A = I - P S_II and B = P, then solve A X = B.  The
+        // row-major layout is the same layout required by the shared N-port
+        // solver.  S_II uses internal order [port_k, port_l].
+        let s_kk = s[[frequency_index, port_k, port_k]];
+        let s_kl = s[[frequency_index, port_k, port_l]];
+        let s_lk = s[[frequency_index, port_l, port_k]];
+        let s_ll = s[[frequency_index, port_l, port_l]];
+        let mut a = vec![ZERO; 4];
+        a[0] = checked_sub(ONE, s_lk, frequency_index, 0, 0)?;
+        a[1] = checked_neg(s_ll, frequency_index, 0, 1)?;
+        a[2] = checked_neg(s_kk, frequency_index, 1, 0)?;
+        a[3] = checked_sub(ONE, s_kl, frequency_index, 1, 1)?;
+        let mut x = vec![ZERO, ONE, ONE, ZERO];
+        match linalg::solve_multiple_rhs(&mut a, &mut x, 2) {
+            Ok(()) => {}
+            Err(linalg::SolveError::InvalidStorage { .. }) => {
+                unreachable!("inner matched-connect solver storage is fixed 2x2")
+            }
+            Err(linalg::SolveError::Singular { .. }) => {
+                return Err(ConnectionError::Singular {
+                    frequency: frequency_index,
+                });
+            }
+            Err(linalg::SolveError::NonFinite { row, column }) => {
+                return Err(ConnectionError::NonFiniteComputation {
+                    frequency: frequency_index,
+                    row,
+                    column,
+                });
+            }
+        }
+
+        for (output_row, &row) in external.iter().enumerate() {
+            for (output_column, &column) in external.iter().enumerate() {
+                let mut correction = ZERO;
+                for internal_row in 0..2 {
+                    let left_port = if internal_row == 0 { port_k } else { port_l };
+                    let left = s[[frequency_index, row, left_port]];
+                    for internal_column in 0..2 {
+                        let right_port = if internal_column == 0 { port_k } else { port_l };
+                        let right = s[[frequency_index, right_port, column]];
+                        let term = checked_mul(
+                            left,
+                            x[internal_row * 2 + internal_column],
+                            frequency_index,
+                            output_row,
+                            output_column,
+                        )?;
+                        let term =
+                            checked_mul(term, right, frequency_index, output_row, output_column)?;
+                        correction = checked_add(
+                            correction,
+                            term,
+                            frequency_index,
+                            output_row,
+                            output_column,
+                        )?;
+                    }
+                }
+                output_s[[frequency_index, output_row, output_column]] = checked_add(
+                    s[[frequency_index, row, column]],
+                    correction,
+                    frequency_index,
+                    output_row,
+                    output_column,
+                )?;
+            }
+        }
+    }
+
+    for (index, &value) in output_s.indexed_iter() {
+        if !is_finite(value) {
+            return Err(ConnectionError::NonFiniteComputation {
+                frequency: index.0,
+                row: index.1,
+                column: index.2,
+            });
+        }
+    }
+    for (index, &value) in output_z0.indexed_iter() {
+        if !is_finite(value) {
+            return Err(ConnectionError::NonFiniteComputation {
+                frequency: index.0,
+                row: index.1,
+                column: index.1,
+            });
+        }
+    }
+
+    Ok(ConnectedNetwork {
+        frequency_hz: frequency.to_vec(),
+        s: output_s,
+        z0: output_z0,
+    })
 }
 
 /// Connect A port `port_a` to B port `port_b` through a matched real junction.
@@ -482,6 +683,12 @@ fn survivors(nports: usize, connected: usize) -> Vec<usize> {
     (0..nports).filter(|&port| port != connected).collect()
 }
 
+fn inner_survivors(nports: usize, port_k: usize, port_l: usize) -> Vec<usize> {
+    (0..nports)
+        .filter(|&port| port != port_k && port != port_l)
+        .collect()
+}
+
 fn checked_mul(
     left: Complex64,
     right: Complex64,
@@ -510,6 +717,15 @@ fn checked_sub(
     column: usize,
 ) -> Result<Complex64, ConnectionError> {
     checked_value(left - right, frequency, row, column)
+}
+
+fn checked_neg(
+    value: Complex64,
+    frequency: usize,
+    row: usize,
+    column: usize,
+) -> Result<Complex64, ConnectionError> {
+    checked_value(-value, frequency, row, column)
 }
 
 fn checked_div(
@@ -552,6 +768,9 @@ mod tests {
     const CONNECT_FIXTURE_JSON: &str = include_str!(
         "../../../tools/oracle/fixtures/power_wave_connect_matched_three_to_four_port_real_frequency_dependent_z0.json"
     );
+    const INNER_CONNECT_FIXTURE_JSON: &str = include_str!(
+        "../../../tools/oracle/fixtures/power_wave_inner_connect_matched_five_port_real_frequency_dependent_z0.json"
+    );
 
     fn complex(real: f64, imag: f64) -> Complex64 {
         Complex64::new(real, imag)
@@ -590,6 +809,247 @@ mod tests {
             ideal_tee(2),
             valid_z0(2, 3),
         )
+    }
+
+    fn two_ideal_tees(nfreq: usize) -> Array3<Complex64> {
+        Array3::from_shape_fn((nfreq, 6, 6), |(_, row, column)| {
+            if row / 3 != column / 3 {
+                ZERO
+            } else if row == column {
+                complex(-1.0 / 3.0, 0.0)
+            } else {
+                complex(2.0 / 3.0, 0.0)
+            }
+        })
+    }
+
+    #[test]
+    fn inner_connects_block_diagonal_ideal_tees_to_known_four_port() {
+        let frequency = vec![1.0e9, 1.7e9];
+        let s = two_ideal_tees(frequency.len());
+        let z0 = Array2::from_shape_vec(
+            (2, 6),
+            vec![
+                complex(41.0, 1.0),
+                complex(73.5, 0.0),
+                complex(83.0, -2.0),
+                complex(101.0, 3.0),
+                complex(73.5, 0.0),
+                complex(107.0, -1.0),
+                complex(44.0, 1.5),
+                complex(86.25, 0.0),
+                complex(97.0, -2.5),
+                complex(111.0, 3.5),
+                complex(86.25, 0.0),
+                complex(117.0, -1.5),
+            ],
+        )
+        .expect("fixed inner-connect z0 shape must be valid");
+
+        // Connect one port from each isolated ideal tee.  The surviving order
+        // is [0, 2, 3, 5], and the analytically known result is an ideal
+        // four-port with -1/2 on the diagonal and +1/2 off-diagonal.
+        let result = inner_connect_matched(&frequency, &s, &z0, 1, 4)
+            .expect("ideal tee inner connection must succeed");
+
+        assert_eq!(result.frequency_hz, frequency);
+        assert_eq!(result.s.dim(), (2, 4, 4));
+        for frequency_index in 0..2 {
+            for row in 0..4 {
+                for column in 0..4 {
+                    let expected = if row == column { -0.5 } else { 0.5 };
+                    assert!((result.s[[frequency_index, row, column]].re - expected).abs() < 1e-13);
+                    assert_eq!(result.s[[frequency_index, row, column]].im, 0.0);
+                }
+            }
+        }
+        assert_eq!(
+            result.z0,
+            Array2::from_shape_vec(
+                (2, 4),
+                vec![
+                    complex(41.0, 1.0),
+                    complex(83.0, -2.0),
+                    complex(101.0, 3.0),
+                    complex(107.0, -1.0),
+                    complex(44.0, 1.5),
+                    complex(97.0, -2.5),
+                    complex(111.0, 3.5),
+                    complex(117.0, -1.5),
+                ],
+            )
+            .expect("fixed output z0 shape must be valid")
+        );
+    }
+
+    #[test]
+    fn inner_connect_supports_a_single_survivor() {
+        let frequency = [2.4e9];
+        let mut s = Array3::zeros((1, 3, 3));
+        s[[0, 1, 1]] = complex(0.1, -0.02);
+        s[[0, 1, 0]] = complex(0.2, 0.0);
+        s[[0, 2, 1]] = complex(0.3, 0.0);
+        let z0 = valid_z0(1, 3);
+
+        let result = inner_connect_matched(&frequency, &s, &z0, 0, 2)
+            .expect("three-port inner connection must leave one survivor");
+
+        assert_eq!(result.s.dim(), (1, 1, 1));
+        // With S_II=0, (I-P S_II)^-1 P=P.  Only the k->survivor and
+        // survivor->l paths are populated, so the correction is 0.2*0.3.
+        assert_eq!(result.s[[0, 0, 0]], complex(0.16, -0.02));
+        assert_eq!(result.z0, Array2::from_elem((1, 1), complex(61.25, 0.0)));
+    }
+
+    #[test]
+    fn inner_connect_rejects_invalid_port_selection_and_zero_survivors() {
+        let frequency = [1.0e9];
+        let s = Array3::zeros((1, 3, 3));
+        let z0 = valid_z0(1, 3);
+
+        assert_eq!(
+            inner_connect_matched(&frequency, &s, &z0, 1, 1).unwrap_err(),
+            ConnectionError::IdenticalInnerPorts {
+                port_a: 1,
+                port_b: 1
+            }
+        );
+        assert_eq!(
+            inner_connect_matched(&frequency, &s, &z0, 3, 1).unwrap_err(),
+            ConnectionError::InvalidInnerPort { port: 3, nports: 3 }
+        );
+        assert_eq!(
+            inner_connect_matched(&frequency, &s, &z0, 1, 3).unwrap_err(),
+            ConnectionError::InvalidInnerPort { port: 3, nports: 3 }
+        );
+
+        let two_port_s = Array3::zeros((1, 2, 2));
+        let two_port_z0 = valid_z0(1, 2);
+        assert_eq!(
+            inner_connect_matched(&frequency, &two_port_s, &two_port_z0, 0, 1).unwrap_err(),
+            ConnectionError::NoExternalPorts
+        );
+    }
+
+    #[test]
+    fn inner_connect_enforces_matched_real_positive_junction_contract() {
+        let frequency = [1.0e9, 1.7e9];
+        let s = Array3::zeros((2, 3, 3));
+        let z0 = valid_z0(2, 3);
+
+        let mut imaginary = z0.clone();
+        imaginary[[0, 0]] = complex(61.25, 1.0);
+        assert!(matches!(
+            inner_connect_matched(&frequency, &s, &imaginary, 0, 2),
+            Err(ConnectionError::InvalidJunctionZ0 {
+                network: NetworkSide::A,
+                frequency: 0,
+                port: 0,
+                ..
+            })
+        ));
+
+        for invalid in [0.0, -1.0] {
+            let mut invalid_z0 = z0.clone();
+            invalid_z0[[0, 0]] = complex(invalid, 0.0);
+            assert!(matches!(
+                inner_connect_matched(&frequency, &s, &invalid_z0, 0, 2),
+                Err(ConnectionError::InvalidJunctionZ0 {
+                    network: NetworkSide::A,
+                    frequency: 0,
+                    port: 0,
+                    ..
+                })
+            ));
+        }
+
+        let mut mismatched = z0.clone();
+        mismatched[[1, 2]] = complex(62.0, 0.0);
+        assert_eq!(
+            inner_connect_matched(&frequency, &s, &mismatched, 0, 2).unwrap_err(),
+            ConnectionError::MismatchedJunctionZ0 {
+                frequency: 1,
+                a: complex(61.25, 0.0),
+                b: complex(62.0, 0.0),
+            }
+        );
+    }
+
+    #[test]
+    fn inner_connect_rejects_nonfinite_values_and_reports_nonfinite_computation() {
+        let frequency = [1.0e9];
+        let s = Array3::zeros((1, 3, 3));
+        let z0 = valid_z0(1, 3);
+
+        let mut nonfinite_frequency = frequency;
+        nonfinite_frequency[0] = f64::NAN;
+        assert!(matches!(
+            inner_connect_matched(&nonfinite_frequency, &s, &z0, 0, 2),
+            Err(ConnectionError::NonFiniteFrequency {
+                network: NetworkSide::A,
+                index: 0,
+                value,
+            }) if value.is_nan()
+        ));
+
+        let mut nonfinite_s = s.clone();
+        nonfinite_s[[0, 1, 0]] = complex(f64::INFINITY, 0.0);
+        assert_eq!(
+            inner_connect_matched(&frequency, &nonfinite_s, &z0, 0, 2).unwrap_err(),
+            ConnectionError::NonFiniteS {
+                network: NetworkSide::A,
+                frequency: 0,
+                row: 1,
+                column: 0,
+            }
+        );
+
+        let mut nonfinite_z0 = z0.clone();
+        nonfinite_z0[[0, 1]] = complex(50.0, f64::NAN);
+        assert_eq!(
+            inner_connect_matched(&frequency, &s, &nonfinite_z0, 0, 2).unwrap_err(),
+            ConnectionError::NonFiniteZ0 {
+                network: NetworkSide::A,
+                frequency: 0,
+                port: 1,
+            }
+        );
+
+        // Keep the internal system safe (`S_II=0`) and trigger overflow in the
+        // external correction with finite operands instead.  This verifies
+        // the operation's checked multiplication rather than solver pivot
+        // ranking behavior.
+        let mut overflowing = s.clone();
+        overflowing[[0, 1, 0]] = complex(f64::MAX, 0.0);
+        overflowing[[0, 2, 1]] = complex(2.0, 0.0);
+        assert_eq!(
+            inner_connect_matched(&frequency, &overflowing, &z0, 0, 2).unwrap_err(),
+            ConnectionError::NonFiniteComputation {
+                frequency: 0,
+                row: 0,
+                column: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn inner_connect_rejects_exact_singularity_but_accepts_nonzero_near_singularity() {
+        let frequency = [1.0e9];
+        let mut s = Array3::zeros((1, 3, 3));
+        let z0 = valid_z0(1, 3);
+        s[[0, 2, 0]] = complex(1.0, 0.0);
+        assert_eq!(
+            inner_connect_matched(&frequency, &s, &z0, 0, 2).unwrap_err(),
+            ConnectionError::Singular { frequency: 0 }
+        );
+
+        s[[0, 2, 0]] = complex(1.0 - 2.0_f64.powi(-40), 0.0);
+        s[[0, 1, 0]] = complex(1.0e-6, 0.0);
+        s[[0, 2, 1]] = complex(1.0e-6, 0.0);
+        let result = inner_connect_matched(&frequency, &s, &z0, 0, 2)
+            .expect("non-zero near-singular internal system must not be cut off");
+        assert!(result.s.iter().all(|value| is_finite(*value)));
+        assert_ne!(result.s[[0, 0, 0]], ZERO);
     }
 
     #[test]
@@ -968,6 +1428,49 @@ mod tests {
     }
 
     #[test]
+    fn inner_connect_handles_zero_leading_pivot_with_tiny_nonzero_candidate() {
+        let frequency = [1.0e9];
+        let mut s = Array3::zeros((1, 3, 3));
+        let z0 = valid_z0(1, 3);
+
+        // For k=0 and l=2, the internal system is
+        // [[0, -1], [-1e-200, 1]].  It is invertible, but a norm_sqr-based
+        // pivot ranking would underflow the non-zero first-column candidate.
+        s[[0, 0, 0]] = complex(1.0e-200, 0.0);
+        s[[0, 2, 0]] = complex(1.0, 0.0);
+        s[[0, 2, 2]] = complex(1.0, 0.0);
+        s[[0, 1, 1]] = complex(0.125, -0.25);
+
+        let result = inner_connect_matched(&frequency, &s, &z0, 0, 2)
+            .expect("tiny non-zero pivot candidate must not be treated as singular");
+        assert_eq!(result.s.dim(), (1, 1, 1));
+        // All external coupling terms are zero, so elimination preserves the
+        // independently known S_EE value exactly.
+        assert_eq!(result.s[[0, 0, 0]], complex(0.125, -0.25));
+        assert!(result.s.iter().all(|value| is_finite(*value)));
+    }
+
+    #[test]
+    fn inner_connect_preserves_minimum_subnormal_correction() {
+        let frequency = [1.0e9];
+        let minimum_subnormal = f64::from_bits(1);
+        let mut s = Array3::zeros((1, 3, 3));
+        let z0 = valid_z0(1, 3);
+
+        // With k=0 and l=2, A = I - P S_II is
+        // [[1, 0], [-m-im, 2+i]].  The only non-zero correction is
+        // X[1,1] = (m+i m)/(2+i), which rounds to (m, 0).
+        s[[0, 0, 0]] = complex(minimum_subnormal, minimum_subnormal);
+        s[[0, 0, 2]] = complex(-1.0, -1.0);
+        s[[0, 1, 2]] = complex(1.0, 0.0);
+        s[[0, 2, 1]] = complex(1.0, 0.0);
+
+        let result = inner_connect_matched(&frequency, &s, &z0, 0, 2)
+            .expect("minimum subnormal correction must remain finite");
+        assert_eq!(result.s[[0, 0, 0]], complex(minimum_subnormal, 0.0));
+    }
+
+    #[test]
     fn reports_finite_input_arithmetic_overflow() {
         let frequency = [1.0e9];
         let mut s_a = Array3::zeros((1, 2, 2));
@@ -1091,6 +1594,66 @@ mod tests {
         justification: String,
         regeneration: String,
         rtol: f64,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct InnerConnectFixture {
+        data: InnerConnectData,
+        metadata: InnerConnectMetadata,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct InnerConnectData {
+        frequency_hz: Vec<f64>,
+        s: Vec<Vec<Vec<ComplexValue>>>,
+        s_inner_connected: Vec<Vec<Vec<ComplexValue>>>,
+        z0_ohm: Vec<Vec<ComplexValue>>,
+        z0_inner_connected_ohm: Vec<Vec<ComplexValue>>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct InnerConnectMetadata {
+        case_id: String,
+        junction_ports: InnerJunctionPorts,
+        numpy_version: String,
+        operation: String,
+        port_order: InnerPortOrder,
+        random_seed: u64,
+        reference_impedance: ReferenceImpedance,
+        schema: String,
+        schema_version: u32,
+        scikit_rf_version: String,
+        shape: InnerConnectShape,
+        tolerance_policy: TolerancePolicy,
+        wave_definition: String,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct InnerJunctionPorts {
+        k: usize,
+        l: usize,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct InnerPortOrder {
+        description: String,
+        output: Vec<usize>,
+        survivors: Vec<usize>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct InnerConnectShape {
+        frequency: Vec<usize>,
+        input_s: Vec<usize>,
+        input_z0: Vec<usize>,
+        output_s: Vec<usize>,
+        output_z0: Vec<usize>,
     }
 
     fn fixture_array3(values: &[Vec<Vec<ComplexValue>>]) -> Array3<Complex64> {
@@ -1219,6 +1782,97 @@ mod tests {
                 fixture.metadata.tolerance_policy.rtol,
                 fixture.metadata.tolerance_policy.atol,
             );
+        }
+    }
+
+    #[test]
+    fn matches_checked_in_inner_connect_oracle_and_contract_metadata() {
+        let fixture: InnerConnectFixture =
+            serde_json::from_str(INNER_CONNECT_FIXTURE_JSON).expect("fixture must parse");
+        assert_eq!(
+            fixture.metadata.case_id,
+            "power_wave_inner_connect_matched_five_port_real_frequency_dependent_z0"
+        );
+        assert_eq!(fixture.metadata.operation, "inner_connect_matched");
+        assert_eq!(fixture.metadata.wave_definition, "power");
+        assert_eq!(fixture.metadata.schema, "rfkit-rs.oracle.fixture");
+        assert_eq!(fixture.metadata.schema_version, 1);
+        assert_eq!(fixture.metadata.numpy_version, "2.5.1");
+        assert_eq!(fixture.metadata.scikit_rf_version, "2.0.1");
+        assert_eq!(fixture.metadata.random_seed, 20_260_941);
+        assert_eq!(fixture.metadata.junction_ports.k, 1);
+        assert_eq!(fixture.metadata.junction_ports.l, 3);
+        assert!(
+            fixture
+                .metadata
+                .reference_impedance
+                .external_complex_allowed
+        );
+        assert!(fixture.metadata.reference_impedance.junction_exactly_equal);
+        assert!(
+            fixture
+                .metadata
+                .reference_impedance
+                .junction_frequency_dependent
+        );
+        assert!(
+            fixture
+                .metadata
+                .reference_impedance
+                .junction_real_strictly_positive
+        );
+        assert_eq!(fixture.metadata.reference_impedance.unit, "ohm");
+        assert_eq!(fixture.metadata.port_order.survivors, vec![0, 2, 4]);
+        assert_eq!(fixture.metadata.port_order.output, vec![0, 2, 4]);
+        assert_eq!(
+            fixture.metadata.port_order.description,
+            "Input ports excluding k and l, in original order"
+        );
+        assert_eq!(fixture.metadata.shape.frequency, vec![3]);
+        assert_eq!(fixture.metadata.shape.input_s, vec![3, 5, 5]);
+        assert_eq!(fixture.metadata.shape.input_z0, vec![3, 5]);
+        assert_eq!(fixture.metadata.shape.output_s, vec![3, 3, 3]);
+        assert_eq!(fixture.metadata.shape.output_z0, vec![3, 3]);
+        assert_eq!(fixture.metadata.tolerance_policy.rtol, 1e-12);
+        assert_eq!(fixture.metadata.tolerance_policy.atol, 1e-12);
+        assert_eq!(
+            fixture.metadata.tolerance_policy.comparison,
+            "abs(actual-expected) <= atol + rtol*abs(expected)"
+        );
+        assert!(!fixture.metadata.tolerance_policy.justification.is_empty());
+        assert!(!fixture.metadata.tolerance_policy.regeneration.is_empty());
+
+        let s = fixture_array3(&fixture.data.s);
+        let z0 = fixture_array2(&fixture.data.z0_ohm);
+        let expected_s = fixture_array3(&fixture.data.s_inner_connected);
+        let expected_z0 = fixture_array2(&fixture.data.z0_inner_connected_ohm);
+        let result = inner_connect_matched(
+            &fixture.data.frequency_hz,
+            &s,
+            &z0,
+            fixture.metadata.junction_ports.k,
+            fixture.metadata.junction_ports.l,
+        )
+        .expect("oracle inner connection must succeed");
+
+        assert_eq!(result.frequency_hz, fixture.data.frequency_hz);
+        assert_eq!(result.z0, expected_z0, "output z0/order must be exact");
+        assert_eq!(result.s.dim(), expected_s.dim());
+        for (actual, expected) in result.s.iter().zip(expected_s.iter()) {
+            assert_close(
+                *actual,
+                *expected,
+                fixture.metadata.tolerance_policy.rtol,
+                fixture.metadata.tolerance_policy.atol,
+            );
+        }
+        for frequency in 0..fixture.data.frequency_hz.len() {
+            let junction_k = z0[[frequency, fixture.metadata.junction_ports.k]];
+            let junction_l = z0[[frequency, fixture.metadata.junction_ports.l]];
+            assert_eq!(junction_k, junction_l);
+            assert!(junction_k.re > 0.0);
+            assert_eq!(junction_k.im, 0.0);
+            assert_ne!(junction_k.re, 50.0);
         }
     }
 }

@@ -23,6 +23,12 @@ frequency-dependent real-positive junction impedance that is exactly equal on
 both sides, and non-trivial frequency/port-dependent external reference
 impedances. Its expected output comes from public
 `skrf.network.connect(network_a, port_a, network_b, port_b)` behavior.
+One same-network inner-connect case is also registered: an independent
+five-port input uses explicit `s_def="power"`, two non-adjacent ports, and a
+frequency-dependent real-positive junction impedance that is exactly equal at
+the selected ports. Its expected output comes from public
+`skrf.network.innerconnect(network, k, l)` behavior, and the three surviving
+ports are recorded in their original order.
 
 ## Clean-checkout setup
 
@@ -42,7 +48,7 @@ fails clearly instead of silently regenerating a fixture with another version.
 
 ## Generate and verify
 
-The harness has thirty registered canonical cases. The original three cases
+The harness has thirty-one registered canonical cases. The original three cases
 remain unchanged:
 
 - `three_port_complex_z0` — the representative four-frequency, three-port
@@ -250,6 +256,19 @@ metadata are checked exactly by the Rust and Python contract tests.
 | --- | ---: | --- | --- | --- |
 | A + B → connected network | 3 + 4 | A[1] ↔ B[2] | A[0], A[2], B[0], B[1], B[3] | `power_wave_connect_matched_three_to_four_port_real_frequency_dependent_z0` |
 
+The same-network inner-connect case uses one five-port network at three
+exactly serialized frequencies. Ports 1 and 3 are connected through a
+finite, real, strictly positive, frequency-dependent non-50 Ω junction, and
+the resulting three-port order is `[0, 2, 4]`. The input S matrix is generated
+from local seed `20260941` and is non-symmetric/non-reciprocal. The expected
+`s_inner_connected` output comes only from
+`skrf.network.innerconnect(network, 1, 3)` on the explicit power-wave
+Network; output z0 and order metadata are checked exactly.
+
+| Direction | Input ports | Junction ports | Output order | Case id |
+| --- | ---: | --- | --- | --- |
+| Inner connection | 5 | 1 ↔ 3 | 0, 2, 4 | `power_wave_inner_connect_matched_five_port_real_frequency_dependent_z0` |
+
 All registered cases are checked by default against a fresh scikit-rf run; the
 default command checks every case:
 
@@ -376,6 +395,17 @@ or round-trip is fed into the opposite direction. S→Y records `input_unit:
 dimensionless`, `output_unit: S`, and `atol_s`; Y→S records `input_unit: S`,
 `output_unit: dimensionless`, and `atol`.
 
+The inner-connect fixture uses an independent direct five-port S/z0
+construction with seed `20260941`. Its expected S output is obtained only
+through public `skrf.network.innerconnect(network, 1, 3)` on an explicit
+power-wave Network. Every fixture z0 is real, and the selected pair is also
+exactly equal, so the pinned helper's internal power/pseudo conversion is
+numerically equivalent to the Rust matched power-wave elimination for this
+case; no mismatch renormalization or complex junction policy is encoded in the
+fixture. The checker removes only
+`s_inner_connected` for numeric comparison and checks output z0 and survivor
+order exactly.
+
 The JSON representation is deliberately machine-readable and byte-stable:
 
 - UTF-8 encoding, `sort_keys=True`, two-space indentation, and one final LF;
@@ -408,17 +438,19 @@ The JSON representation is deliberately machine-readable and byte-stable:
   equality for metadata, schema, dependency versions, shapes, frequency,
   inputs, z0, and every other field except the computed output (`z_ohm` for
   S→Z, `s` for Z→S or Y→S, `y_s` for Z→Y or S→Y, `z_ohm` for Y→Z, or
-  `s_renormalized` for S renormalization). The output's
+  `s_renormalized` for S renormalization, or `s_inner_connected` for inner
+  connection). The output's
   recursively validated complex array is
   compared with the recorded
   `abs(actual-expected) <= atol + rtol*abs(expected)` policy. S→Z uses
   `rtol=1e-12` and `atol_ohm=1e-12`; Z→S and S renormalization use
   `rtol=1e-12` and `atol=1e-12`; Z→Y uses `rtol=1e-12` and `atol_s=1e-12`,
   Y→Z uses `rtol=1e-12` and `atol_ohm=1e-12`; S→Y uses `rtol=1e-12` and
-  `atol_s=1e-12`, and Y→S uses `rtol=1e-12` and `atol=1e-12`.
-  These are strict binary64 tolerances for the well-conditioned,
-  modest-magnitude deterministic cases: they allow normal cross-language
-  linear-algebra rounding while catching material disagreement.
+  `atol_s=1e-12`, Y→S uses `rtol=1e-12` and `atol=1e-12`, and inner-connect
+  uses `rtol=1e-12` and `atol=1e-12`. These are strict binary64 tolerances for
+  the well-conditioned, modest-magnitude deterministic cases: they allow
+  normal cross-language linear-algebra rounding while catching material
+  disagreement.
 - The checker removes exactly one computed output field for the contract
   projection. It never tolerates drift in inputs, z0, dimensions, metadata,
   or any unknown/missing complex field, and it never widens a recorded

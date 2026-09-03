@@ -372,6 +372,32 @@ CONNECT_TOLERANCE_JUSTIFICATION = (
     "contract fields remain exact."
 )
 
+# Same-network inner-connect is kept as a separate oracle case.  The direct
+# input uses one local RNG and connects two non-adjacent ports, leaving three
+# survivors in their original order.  Its selected junction impedances are
+# real, positive, frequency-dependent, and intentionally non-50 ohm.
+INNER_CONNECT_FIXTURE = (
+    Path(__file__).resolve().parent
+    / "fixtures"
+    / "power_wave_inner_connect_matched_five_port_real_frequency_dependent_z0.json"
+)
+INNER_CONNECT_CASE_ID = (
+    "power_wave_inner_connect_matched_five_port_real_frequency_dependent_z0"
+)
+INNER_CONNECT_RANDOM_SEED = 20_260_941
+INNER_CONNECT_NFREQ = 3
+INNER_CONNECT_NPORTS = 5
+INNER_CONNECT_PORT_K = 1
+INNER_CONNECT_PORT_L = 3
+INNER_CONNECT_RTOL = 1e-12
+INNER_CONNECT_ATOL = 1e-12
+INNER_CONNECT_TOLERANCE_JUSTIFICATION = (
+    "Strict binary64 tolerance for a finite, well-conditioned matched-junction "
+    "five-port case; the output is checked with the recorded numeric bound while "
+    "frequencies, inputs, z0, ordering metadata, and all other contract fields "
+    "remain exact."
+)
+
 
 class _OracleCase(NamedTuple):
     """A registered fixture, builder, and case-specific check strategy."""
@@ -1913,6 +1939,170 @@ def _connect_matched_fixture(np: Any, skrf: Any) -> dict[str, Any]:
     }
 
 
+def _inner_connect_inputs(np: Any, *, seed: int) -> tuple[Any, Any, Any, Any]:
+    """Build independent finite S/z0 input for the inner-connect case."""
+
+    frequency_hz = np.array(
+        [0.71e9, 1.17e9, 1.89e9],
+        dtype=np.float64,
+    )
+    rng = np.random.default_rng(seed)
+    s = (
+        rng.normal(
+            loc=0.0,
+            scale=0.021,
+            size=(INNER_CONNECT_NFREQ, INNER_CONNECT_NPORTS, INNER_CONNECT_NPORTS),
+        )
+        + 1j
+        * rng.normal(
+            loc=0.0,
+            scale=0.021,
+            size=(INNER_CONNECT_NFREQ, INNER_CONNECT_NPORTS, INNER_CONNECT_NPORTS),
+        )
+    ).astype(np.complex128)
+    for frequency in range(INNER_CONNECT_NFREQ):
+        for port in range(INNER_CONNECT_NPORTS):
+            s[frequency, port, port] += complex(
+                0.12 + 0.014 * frequency + 0.006 * port,
+                0.009 + 0.002 * frequency - 0.001 * port,
+            )
+
+    # External z0 values are deliberately varied by both frequency and port;
+    # the selected pair is overwritten with the exact matched junction profile.
+    frequency_index = np.arange(INNER_CONNECT_NFREQ, dtype=np.float64)[:, None]
+    port_index = np.arange(INNER_CONNECT_NPORTS, dtype=np.float64)[None, :]
+    z0 = (
+        34.0
+        + 2.6 * port_index
+        + 1.8 * frequency_index
+    ).astype(np.complex128)
+    junction_z0 = np.array([64.25, 77.5, 93.75], dtype=np.float64)
+    z0[:, INNER_CONNECT_PORT_K] = junction_z0
+    z0[:, INNER_CONNECT_PORT_L] = junction_z0
+
+    if not np.isfinite(frequency_hz).all():
+        raise ValueError("inner-connect frequencies must be finite")
+    if not np.isfinite(s).all():
+        raise ValueError("inner-connect S input must be finite")
+    if not np.isfinite(z0).all():
+        raise ValueError("inner-connect z0 input must be finite")
+    if not (z0[:, INNER_CONNECT_PORT_K].imag == 0.0).all() or not (
+        z0[:, INNER_CONNECT_PORT_L].imag == 0.0
+    ).all():
+        raise ValueError("inner-connect junction z0 must be real")
+    if not np.array_equal(
+        z0[:, INNER_CONNECT_PORT_K], z0[:, INNER_CONNECT_PORT_L]
+    ):
+        raise ValueError("inner-connect junction z0 must match exactly")
+    if not (z0[:, INNER_CONNECT_PORT_K].real > 0.0).all():
+        raise ValueError("inner-connect junction z0 must be positive")
+    if np.array_equal(z0[0], z0[1]):
+        raise ValueError("inner-connect z0 must vary by frequency")
+    if np.array_equal(z0[:, 0], z0[:, 2]):
+        raise ValueError("inner-connect external z0 must vary by port")
+    _assert_non_symmetric(np, s, name="inner-connect S input")
+    _assert_s_conditioning(s)
+
+    return frequency_hz, s, z0, junction_z0
+
+
+def _inner_connect_fixture(np: Any, skrf: Any) -> dict[str, Any]:
+    """Build the inner-connect fixture through public scikit-rf behavior."""
+
+    frequency_hz, source_s, source_z0, _junction_z0 = _inner_connect_inputs(
+        np,
+        seed=INNER_CONNECT_RANDOM_SEED,
+    )
+    case_id = INNER_CONNECT_CASE_ID
+    network = skrf.Network(
+        f=frequency_hz,
+        s=source_s,
+        z0=source_z0,
+        s_def="power",
+        name=case_id,
+    )
+
+    # Use only the public same-network innerconnect behavior for expected S.
+    # The Rust kernel is an independent rewrite of the matched power-wave
+    # elimination equation.  Every fixture z0 is real (with the selected pair
+    # also exactly equal), so scikit-rf's internal power/pseudo conversion is
+    # numerically equivalent here.
+    connected = skrf.network.innerconnect(
+        network,
+        INNER_CONNECT_PORT_K,
+        INNER_CONNECT_PORT_L,
+    )
+    frequency = np.asarray(connected.f, dtype=np.float64)
+    connected_s = np.asarray(connected.s, dtype=np.complex128)
+    connected_z0 = np.asarray(connected.z0, dtype=np.complex128)
+    if not np.array_equal(frequency, frequency_hz):
+        raise ValueError("inner-connect output frequency changed")
+    if not np.isfinite(connected_s).all() or not np.isfinite(connected_z0).all():
+        raise ValueError("inner-connect output must be finite")
+
+    survivors = [
+        port
+        for port in range(INNER_CONNECT_NPORTS)
+        if port not in (INNER_CONNECT_PORT_K, INNER_CONNECT_PORT_L)
+    ]
+    shape = {
+        "frequency": list(frequency.shape),
+        "input_s": list(source_s.shape),
+        "input_z0": list(source_z0.shape),
+        "output_s": list(connected_s.shape),
+        "output_z0": list(connected_z0.shape),
+    }
+    return {
+        "metadata": {
+            "case_id": case_id,
+            "junction_ports": {"k": INNER_CONNECT_PORT_K, "l": INNER_CONNECT_PORT_L},
+            "numpy_version": np.__version__,
+            "operation": "inner_connect_matched",
+            "port_order": {
+                "survivors": survivors,
+                "output": survivors,
+                "description": "Input ports excluding k and l, in original order",
+            },
+            "random_seed": INNER_CONNECT_RANDOM_SEED,
+            "reference_impedance": {
+                "external_complex_allowed": True,
+                "junction_exactly_equal": True,
+                "junction_frequency_dependent": True,
+                "junction_real_strictly_positive": True,
+                "unit": "ohm",
+            },
+            "schema": "rfkit-rs.oracle.fixture",
+            "schema_version": SCHEMA_VERSION,
+            "scikit_rf_version": skrf.__version__,
+            "shape": shape,
+            "tolerance_policy": {
+                "atol": INNER_CONNECT_ATOL,
+                "comparison": "abs(actual-expected) <= atol + rtol*abs(expected)",
+                "justification": INNER_CONNECT_TOLERANCE_JUSTIFICATION,
+                "regeneration": (
+                    "canonical UTF-8 JSON serialization; s_inner_connected is "
+                    "checked with the recorded numeric tolerance; z0/order/inputs "
+                    "are checked exactly"
+                ),
+                "rtol": INNER_CONNECT_RTOL,
+            },
+            # The input is explicitly constructed with s_def="power".  The
+            # pinned public helper currently returns a pseudo-labelled object
+            # after its internal conversion, but the fixture's all-real z0
+            # profile leaves the expected numeric S values identical to the
+            # power-wave result.
+            "wave_definition": network.s_def,
+        },
+        "data": {
+            "frequency_hz": [float(value) for value in frequency],
+            "s": _complex_array(source_s),
+            "s_inner_connected": _complex_array(connected_s),
+            "z0_ohm": _complex_array(source_z0),
+            "z0_inner_connected_ohm": _complex_array(connected_z0),
+        },
+    }
+
+
 def _s_to_z_fixture(np: Any, skrf: Any) -> dict[str, Any]:
     """Build the power-wave S-to-Z operation fixture from the shared Network."""
 
@@ -3428,6 +3618,13 @@ _CASES = (
         _connect_matched_fixture,
         "numeric_output",
         "s_connected",
+    ),
+    _OracleCase(
+        INNER_CONNECT_CASE_ID,
+        INNER_CONNECT_FIXTURE,
+        _inner_connect_fixture,
+        "numeric_output",
+        "s_inner_connected",
     ),
     _OracleCase(
         "power_wave_s_to_z_three_port_complex_z0",

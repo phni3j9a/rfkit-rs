@@ -594,16 +594,26 @@ mod tests {
             })
         );
 
-        // The input components themselves are finite, but the pivot
-        // magnitude calculation overflows.  That intermediate is also a
-        // deterministic non-finite computation, not an exact singularity.
-        let huge = Array3::from_shape_vec((1, 1, 1), vec![complex(f64::MAX, f64::MAX)]).unwrap();
+        // Finite operands can still overflow during elimination.  Keep the
+        // tiny pivot to exercise scale-safe ranking, then subtract two
+        // f64::MAX values with opposite row signs so checked arithmetic
+        // reports a computation failure rather than an exact singularity.
+        let overflow = Array3::from_shape_vec(
+            (1, 2, 2),
+            vec![
+                complex(1.0e-200, 0.0),
+                complex(f64::MAX, 0.0),
+                complex(1.0e-200, 0.0),
+                complex(-f64::MAX, 0.0),
+            ],
+        )
+        .unwrap();
         assert_eq!(
-            z_to_y(&huge),
+            z_to_y(&overflow),
             Err(ImpedanceAdmittanceError::NonFiniteComputation {
                 frequency: 0,
-                row: 0,
-                column: 0,
+                row: 1,
+                column: 1,
             })
         );
     }
