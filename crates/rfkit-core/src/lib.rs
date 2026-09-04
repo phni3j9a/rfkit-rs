@@ -10,6 +10,7 @@ use thiserror::Error;
 
 mod connection;
 mod impedance_admittance;
+mod interpolation;
 mod linalg;
 mod power_wave_admittance;
 mod power_waves;

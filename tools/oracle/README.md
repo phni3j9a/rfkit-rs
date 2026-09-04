@@ -2,8 +2,9 @@
 
 This directory contains the reproducible Python oracle harness for `rfkit-rs`.
 It generates checked-in JSON fixtures through `scikit-rf==2.0.1`, with
-`numpy==2.5.1` pinned directly. scikit-rf is an oracle for numerical behavior
-here, not the public API specification for the Rust library. The harness keeps
+`numpy==2.5.1` and `scipy==1.18.1` pinned directly. scikit-rf is an oracle for
+numerical behavior here, not the public API specification for the Rust library.
+The harness keeps
 the original three-port fixture and registers an additional eight-case
 S↔Z power-wave conformance matrix, a four-case S renormalization matrix, and
 reciprocal and active three-port cases for each existing operation. The three
@@ -29,6 +30,13 @@ frequency-dependent real-positive junction impedance that is exactly equal at
 the selected ports. Its expected output comes from public
 `skrf.network.innerconnect(network, k, l)` behavior, and the three surviving
 ports are recorded in their original order.
+One Cartesian linear interpolation case is also registered: an independent
+three-port S/z0 input uses irregular source and target grids, exact endpoints
+and a source knot, nonreciprocal complex S data, and non-50 Ω complex,
+per-port, frequency-dependent z0. Its expected S and z0 arrays come from the
+public `Network.interpolate(..., basis="s", coords="cart", kind="linear")`
+behavior. The interpolation fixture records the exact SciPy version used by
+that delegated numerical operation.
 
 ## Clean-checkout setup
 
@@ -43,12 +51,13 @@ python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
-The harness checks both imported versions before doing any work. A mismatch
-fails clearly instead of silently regenerating a fixture with another version.
+The harness checks all three imported versions before doing any work. A
+mismatch fails clearly instead of silently regenerating a fixture with another
+version.
 
 ## Generate and verify
 
-The harness has thirty-one registered canonical cases. The original three cases
+The harness has thirty-two registered canonical cases. The original three cases
 remain unchanged:
 
 - `three_port_complex_z0` — the representative four-frequency, three-port
@@ -61,6 +70,12 @@ remain unchanged:
   non-symmetric, diagonally dominant complex Z input with frequency-dependent
   per-port `z0`; the complete expected power-wave Z-to-S result is obtained
   from public `Network.from_z(..., s_def="power").s`.
+
+The additional interpolation case is:
+
+- `interpolation_cartesian_linear_three_port_complex_z0` — direct irregular
+  source/target grids with independent complex S and z0 inputs; expected S and
+  z0 are obtained from public Cartesian linear `Network.interpolate` behavior.
 
 The eight existing S↔Z matrix cases are registered individually as follows.
 Each row has multiple frequency samples, and every multiport input matrix is
@@ -406,6 +421,19 @@ fixture. The checker removes only
 `s_inner_connected` for numeric comparison and checks output z0 and survivor
 order exactly.
 
+The interpolation fixture uses an independent local NumPy generator with seed
+`20260942`. It serializes `source_frequency_hz`, `target_frequency_hz`,
+`s_input`, and `z0_input_ohm` exactly, then obtains both numeric outputs (`s`
+and `z0_ohm`) only through public
+`Network.interpolate(target, basis="s", coords="cart", kind="linear")`.
+The source grid has five irregular samples and the target grid has six samples,
+including both endpoints and the exact source knot at 1.11 GHz. Its metadata
+records `scikit_rf_version`, `numpy_version`, and the actually used
+`scipy_version` (`1.18.1`), plus the explicit interpolation basis, coordinates,
+kind, shapes, and `rtol=1e-12`/`atol=1e-12` policy. Both computed outputs are
+numeric-tolerance fields; source/target grids, direct inputs, and all metadata
+remain exact.
+
 The JSON representation is deliberately machine-readable and byte-stable:
 
 - UTF-8 encoding, `sort_keys=True`, two-space indentation, and one final LF;
@@ -425,7 +453,9 @@ The JSON representation is deliberately machine-readable and byte-stable:
   operation cases additionally record a `near_singular` contract containing
   `system_matrix`, `matrix_structure`, `binary_exponent`,
   `small_diagonal_port`, `small_diagonal_value`, `determinant_factors`,
-  `determinant`, and `determinant_factors_nonzero`;
+  `determinant`, and `determinant_factors_nonzero`; the interpolation case
+  additionally records its explicit `basis`, `coords`, `kind`, source/target
+  frequency shapes, and the actually used `scipy_version`;
 - direct impedance/admittance and power-wave S/Y cases record `input_unit` and
   `output_unit`,
   use `y_s` for Z→Y outputs and `z_ohm` for Y→Z outputs, and use exactly one
@@ -439,7 +469,7 @@ The JSON representation is deliberately machine-readable and byte-stable:
   inputs, z0, and every other field except the computed output (`z_ohm` for
   S→Z, `s` for Z→S or Y→S, `y_s` for Z→Y or S→Y, `z_ohm` for Y→Z, or
   `s_renormalized` for S renormalization, or `s_inner_connected` for inner
-  connection). The output's
+  connection; interpolation removes both `s` and `z0_ohm`. The output's
   recursively validated complex array is
   compared with the recorded
   `abs(actual-expected) <= atol + rtol*abs(expected)` policy. S→Z uses
@@ -447,14 +477,16 @@ The JSON representation is deliberately machine-readable and byte-stable:
   `rtol=1e-12` and `atol=1e-12`; Z→Y uses `rtol=1e-12` and `atol_s=1e-12`,
   Y→Z uses `rtol=1e-12` and `atol_ohm=1e-12`; S→Y uses `rtol=1e-12` and
   `atol_s=1e-12`, Y→S uses `rtol=1e-12` and `atol=1e-12`, and inner-connect
-  uses `rtol=1e-12` and `atol=1e-12`. These are strict binary64 tolerances for
+  uses `rtol=1e-12` and `atol=1e-12`; interpolation uses `rtol=1e-12` and
+  `atol=1e-12` for both outputs. These are strict binary64 tolerances for
   the well-conditioned, modest-magnitude deterministic cases: they allow
   normal cross-language linear-algebra rounding while catching material
   disagreement.
-- The checker removes exactly one computed output field for the contract
-  projection. It never tolerates drift in inputs, z0, dimensions, metadata,
-  or any unknown/missing complex field, and it never widens a recorded
-  tolerance.
+- The checker removes exactly the registered computed output field(s) for the
+  contract projection. Existing cases register one output; interpolation
+  registers both `s` and `z0_ohm`. It never tolerates drift in inputs, z0,
+  dimensions, metadata, or any unknown/missing complex field, and it never
+  widens a recorded tolerance.
 
 ## Adding a future case
 

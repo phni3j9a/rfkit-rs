@@ -4,3 +4,4 @@
 # recorded numeric tolerance.
 numpy==2.5.1
 scikit-rf==2.0.1
+scipy==1.18.1
