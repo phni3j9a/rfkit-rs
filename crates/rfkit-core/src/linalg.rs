@@ -202,7 +202,7 @@ fn pivot_score(value: Complex64) -> f64 {
 /// perform the finite-result check, so a quotient that is genuinely outside
 /// the finite `f64` range is returned as an infinity and reported as
 /// `SolveError::NonFinite` by the solver.
-fn divide_complex(left: Complex64, right: Complex64) -> Complex64 {
+pub(crate) fn divide_complex(left: Complex64, right: Complex64) -> Complex64 {
     debug_assert!(is_finite(left) && is_finite(right));
 
     let denominator = Scaled::add(
@@ -469,6 +469,21 @@ mod tests {
         solve_multiple_rhs(&mut a, &mut b, 1).expect("unit imaginary pivot is valid");
 
         assert_eq!(b[0], Complex64::new(tiny, -huge));
+    }
+
+    #[test]
+    fn divides_issue_44_extreme_components_exactly() {
+        let huge = 2.0_f64.powi(1000);
+        let tiny = 2.0_f64.powi(-1000);
+        let expected_tiny = f64::from_bits(1_u64 << 49);
+
+        assert_eq!(
+            divide_complex(
+                Complex64::new(huge, tiny),
+                Complex64::new(0.0, 2.0_f64.powi(25)),
+            ),
+            Complex64::new(expected_tiny, -2.0_f64.powi(975))
+        );
     }
 
     #[test]

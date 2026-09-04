@@ -735,7 +735,7 @@ fn checked_div(
     row: usize,
     column: usize,
 ) -> Result<Complex64, ConnectionError> {
-    checked_value(left / right, frequency, row, column)
+    checked_value(linalg::divide_complex(left, right), frequency, row, column)
 }
 
 fn checked_value(
@@ -1486,6 +1486,55 @@ mod tests {
                 frequency: 0,
                 row: 0,
                 column: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn connect_matched_preserves_issue_44_extreme_components_exactly() {
+        let frequency = [1.0e9];
+        let huge = 2.0_f64.powi(1000);
+        let tiny = 2.0_f64.powi(-1000);
+        let expected_tiny = f64::from_bits(1_u64 << 49);
+
+        let mut s_a = Array3::zeros((1, 2, 2));
+        s_a[[0, 0, 1]] = complex(huge, tiny);
+        s_a[[0, 1, 1]] = complex(2.0_f64.powi(500), 0.0);
+
+        let mut s_b = Array3::zeros((1, 2, 2));
+        s_b[[0, 0, 0]] = complex(2.0_f64.powi(-500), -2.0_f64.powi(-475));
+        s_b[[0, 0, 1]] = complex(1.0, 0.0);
+
+        let z0_a = valid_z0(1, 2);
+        let z0_b = valid_z0(1, 2);
+        let result = connect_matched(&frequency, &s_a, &z0_a, 1, &frequency, &s_b, &z0_b, 0)
+            .expect("Issue #44 extreme quotient must remain finite");
+
+        assert_eq!(
+            result.s[[0, 0, 1]],
+            complex(expected_tiny, -2.0_f64.powi(975))
+        );
+    }
+
+    #[test]
+    fn rejects_unrepresentable_complex_quotient_as_nonfinite_computation() {
+        let frequency = [1.0e9];
+        let mut s_a = Array3::zeros((1, 2, 2));
+        s_a[[0, 0, 1]] = complex(f64::MAX, 0.0);
+        s_a[[0, 1, 1]] = complex(0.5, 0.0);
+
+        let mut s_b = Array3::zeros((1, 2, 2));
+        s_b[[0, 0, 1]] = complex(1.0, 0.0);
+        s_b[[0, 0, 0]] = complex(1.0, 0.0);
+
+        let z0_a = valid_z0(1, 2);
+        let z0_b = valid_z0(1, 2);
+        assert_eq!(
+            connect_matched(&frequency, &s_a, &z0_a, 1, &frequency, &s_b, &z0_b, 0).unwrap_err(),
+            ConnectionError::NonFiniteComputation {
+                frequency: 0,
+                row: 0,
+                column: 1,
             }
         );
     }
