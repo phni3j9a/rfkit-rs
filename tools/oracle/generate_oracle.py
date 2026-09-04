@@ -22,6 +22,10 @@ direction.  The matched-junction fixture uses independent three-port and
 four-port inputs and the public ``skrf.network.connect`` operation with
 explicit power-wave Network constructors; its output-only comparison leaves
 inputs, z0, and port-order metadata exact.
+The interpolation fixture uses the public
+``Network.interpolate(..., basis="s", coords="cart", kind="linear")`` operation
+for both S and z0 outputs.  SciPy is pinned explicitly because scikit-rf
+delegates the interpolation numerics to it.
 """
 
 from __future__ import annotations
@@ -37,6 +41,7 @@ from typing import Any, Callable, NamedTuple
 
 EXPECTED_NUMPY_VERSION = "2.5.1"
 EXPECTED_SCIKIT_RF_VERSION = "2.0.1"
+EXPECTED_SCIPY_VERSION = "1.18.1"
 RANDOM_SEED = 20_250_308
 SCHEMA_VERSION = 1
 DEFAULT_FIXTURE = (
@@ -398,6 +403,26 @@ INNER_CONNECT_TOLERANCE_JUSTIFICATION = (
     "remain exact."
 )
 
+# The interpolation case is kept as one direct, independently generated
+# fixture.  Its expected S and z0 arrays come from public scikit-rf
+# ``Network.interpolate`` behavior; both outputs remain numeric-tolerance
+# fields while the source/target grids and all input metadata stay exact.
+INTERPOLATION_FIXTURE = (
+    Path(__file__).resolve().parent
+    / "fixtures"
+    / "interpolation_cartesian_linear_three_port_complex_z0.json"
+)
+INTERPOLATION_CASE_ID = "interpolation_cartesian_linear_three_port_complex_z0"
+INTERPOLATION_RANDOM_SEED = 20_260_942
+INTERPOLATION_RTOL = 1e-12
+INTERPOLATION_ATOL = 1e-12
+INTERPOLATION_TOLERANCE_JUSTIFICATION = (
+    "Strict binary64 mixed relative/absolute tolerance for a deterministic, "
+    "irregular-grid three-port Cartesian linear interpolation case; it allows "
+    "normal cross-language interpolation rounding while catching material "
+    "disagreement."
+)
+
 
 class _OracleCase(NamedTuple):
     """A registered fixture, builder, and case-specific check strategy."""
@@ -406,7 +431,7 @@ class _OracleCase(NamedTuple):
     path: Path
     builder: Callable[[Any, Any], dict[str, Any]]
     comparison: str
-    numeric_output_key: str | None = None
+    numeric_output_key: str | tuple[str, ...] | None = None
 
 
 def _load_dependencies() -> tuple[Any, Any]:
@@ -418,6 +443,7 @@ def _load_dependencies() -> tuple[Any, Any]:
     try:
         installed_numpy = version("numpy")
         installed_skrf = version("scikit-rf")
+        installed_scipy = version("scipy")
     except PackageNotFoundError as error:  # pragma: no cover - clean env path
         package = getattr(error, "name", "a required package")
         raise RuntimeError(
@@ -434,6 +460,10 @@ def _load_dependencies() -> tuple[Any, Any]:
     if installed_skrf != EXPECTED_SCIKIT_RF_VERSION:
         distribution_version_errors.append(
             f"scikit-rf=={EXPECTED_SCIKIT_RF_VERSION} (found {installed_skrf})"
+        )
+    if installed_scipy != EXPECTED_SCIPY_VERSION:
+        distribution_version_errors.append(
+            f"scipy=={EXPECTED_SCIPY_VERSION} (found {installed_scipy})"
         )
     if distribution_version_errors:
         raise RuntimeError(
@@ -458,14 +488,27 @@ def _load_dependencies() -> tuple[Any, Any]:
             "`python -m pip install -r requirements.txt`"
         ) from error
 
+    try:
+        import scipy
+    except ImportError as error:  # pragma: no cover - exercised in a clean env
+        raise RuntimeError(
+            "scipy is not installed; create an isolated environment and run "
+            "`python -m pip install -r requirements.txt`"
+        ) from error
+
     actual_numpy = np.__version__
     actual_skrf = skrf.__version__
+    actual_scipy = scipy.__version__
     version_errors: list[str] = []
     if actual_numpy != EXPECTED_NUMPY_VERSION:
         version_errors.append(f"numpy=={EXPECTED_NUMPY_VERSION} (found {actual_numpy})")
     if actual_skrf != EXPECTED_SCIKIT_RF_VERSION:
         version_errors.append(
             f"scikit-rf=={EXPECTED_SCIKIT_RF_VERSION} (found {actual_skrf})"
+        )
+    if actual_scipy != EXPECTED_SCIPY_VERSION:
+        version_errors.append(
+            f"scipy=={EXPECTED_SCIPY_VERSION} (found {actual_scipy})"
         )
     if version_errors:
         raise RuntimeError(
@@ -1724,6 +1767,141 @@ def _network_fixture(np: Any, skrf: Any) -> dict[str, Any]:
             "frequency_hz": [float(value) for value in frequency],
             "s": _complex_array(network_s),
             "z0_ohm": _complex_array(network_z0),
+        },
+    }
+
+
+def _interpolation_inputs(np: Any) -> tuple[Any, Any, Any, Any]:
+    """Build direct irregular-grid S/z0 inputs for interpolation conformance."""
+
+    source_frequency_hz = np.array(
+        [0.72e9, 1.11e9, 1.93e9, 2.68e9, 3.47e9],
+        dtype=np.float64,
+    )
+    target_frequency_hz = np.array(
+        [0.72e9, 0.91e9, 1.11e9, 1.53e9, 2.305e9, 3.47e9],
+        dtype=np.float64,
+    )
+    nports = 3
+    rng = np.random.default_rng(INTERPOLATION_RANDOM_SEED)
+    source_s = (
+        rng.normal(loc=0.0, scale=0.04, size=(source_frequency_hz.size, nports, nports))
+        + 1j
+        * rng.normal(
+            loc=0.0,
+            scale=0.04,
+            size=(source_frequency_hz.size, nports, nports),
+        )
+    ).astype(np.complex128)
+    source_z0 = (
+        37.5
+        + 3.2 * np.arange(nports, dtype=np.float64)[None, :]
+        + 1.7 * np.arange(source_frequency_hz.size, dtype=np.float64)[:, None]
+        + 1j
+        * (
+            1.2
+            + 0.4 * np.arange(nports, dtype=np.float64)[None, :]
+            - 0.17 * np.arange(source_frequency_hz.size, dtype=np.float64)[:, None]
+        )
+    ).astype(np.complex128)
+
+    _assert_non_symmetric(np, source_s, name="interpolation S input")
+    if not np.isfinite(source_frequency_hz).all():
+        raise ValueError("interpolation source frequencies must be finite")
+    if not np.isfinite(target_frequency_hz).all():
+        raise ValueError("interpolation target frequencies must be finite")
+    if not np.isfinite(source_z0).all():
+        raise ValueError("interpolation z0 input must be finite")
+    if np.any(source_z0.imag == 0.0):
+        raise ValueError("interpolation z0 input must be complex at every port/frequency")
+    return source_frequency_hz, target_frequency_hz, source_s, source_z0
+
+
+def _interpolation_fixture(np: Any, skrf: Any) -> dict[str, Any]:
+    """Build the direct Cartesian interpolation fixture through public scikit-rf."""
+
+    (
+        source_frequency_hz,
+        target_frequency_hz,
+        source_s,
+        source_z0,
+    ) = _interpolation_inputs(np)
+    network = skrf.Network(
+        f=source_frequency_hz,
+        s=source_s,
+        z0=source_z0,
+        s_def="power",
+        name=INTERPOLATION_CASE_ID,
+    )
+    input_frequency = np.asarray(network.f, dtype=np.float64)
+    input_s = np.asarray(network.s, dtype=np.complex128)
+    input_z0 = np.asarray(network.z0, dtype=np.complex128)
+    interpolated = network.interpolate(
+        target_frequency_hz,
+        basis="s",
+        coords="cart",
+        kind="linear",
+    )
+    output_frequency = np.asarray(interpolated.f, dtype=np.float64)
+    output_s = np.asarray(interpolated.s, dtype=np.complex128)
+    output_z0 = np.asarray(interpolated.z0, dtype=np.complex128)
+    if not np.array_equal(input_frequency, source_frequency_hz):
+        raise ValueError("scikit-rf changed interpolation source frequencies on read-back")
+    if not np.array_equal(input_s, source_s):
+        raise ValueError("scikit-rf changed interpolation S inputs on read-back")
+    if not np.array_equal(input_z0, source_z0):
+        raise ValueError("scikit-rf changed interpolation z0 inputs on read-back")
+    if not np.array_equal(output_frequency, target_frequency_hz):
+        raise ValueError("scikit-rf changed interpolation target frequencies")
+    if not np.isfinite(output_s).all() or not np.isfinite(output_z0).all():
+        raise ValueError("interpolation output must be finite")
+
+    return {
+        "metadata": {
+            "basis": "s",
+            "case_id": INTERPOLATION_CASE_ID,
+            "coords": "cart",
+            "input_reference_impedance": {
+                "complex": True,
+                "frequency_dependent": True,
+                "per_port": True,
+                "unit": "ohm",
+            },
+            "kind": "linear",
+            "numpy_version": np.__version__,
+            "operation": "interpolate_s",
+            "random_seed": INTERPOLATION_RANDOM_SEED,
+            "schema": "rfkit-rs.oracle.fixture",
+            "schema_version": SCHEMA_VERSION,
+            "scikit_rf_version": skrf.__version__,
+            "scipy_version": version("scipy"),
+            "shape": {
+                "input_s": list(input_s.shape),
+                "input_z0": list(input_z0.shape),
+                "source_frequency": list(input_frequency.shape),
+                "output_s": list(output_s.shape),
+                "output_z0": list(output_z0.shape),
+                "target_frequency": list(output_frequency.shape),
+            },
+            "tolerance_policy": {
+                "atol": INTERPOLATION_ATOL,
+                "comparison": "abs(actual-expected) <= atol + rtol*abs(expected)",
+                "justification": INTERPOLATION_TOLERANCE_JUSTIFICATION,
+                "regeneration": (
+                    "canonical UTF-8 JSON serialization; s and z0_ohm are checked "
+                    "with the recorded mixed numeric tolerance"
+                ),
+                "rtol": INTERPOLATION_RTOL,
+            },
+            "wave_definition": network.s_def,
+        },
+        "data": {
+            "s": _complex_array(output_s),
+            "s_input": _complex_array(input_s),
+            "source_frequency_hz": [float(value) for value in input_frequency],
+            "target_frequency_hz": [float(value) for value in output_frequency],
+            "z0_input_ohm": _complex_array(input_z0),
+            "z0_ohm": _complex_array(output_z0),
         },
     }
 
@@ -3613,6 +3791,13 @@ _CASES = (
         "exact",
     ),
     _OracleCase(
+        INTERPOLATION_CASE_ID,
+        INTERPOLATION_FIXTURE,
+        _interpolation_fixture,
+        "numeric_output",
+        ("s", "z0_ohm"),
+    ),
+    _OracleCase(
         CONNECT_CASE_ID,
         CONNECT_FIXTURE,
         _connect_matched_fixture,
@@ -3949,18 +4134,43 @@ def _read_canonical_json(path: Path) -> dict[str, Any]:
     return document
 
 
-def _contract_projection(document: dict[str, Any], output_key: str) -> dict[str, Any]:
-    """Remove only the operation output before exact contract comparison."""
+def _numeric_output_keys(
+    output_key: str | tuple[str, ...] | list[str],
+) -> tuple[str, ...]:
+    """Normalize one or more numerically tolerant output field names."""
+
+    if isinstance(output_key, str):
+        output_keys = (output_key,)
+    elif isinstance(output_key, (tuple, list)):
+        output_keys = tuple(output_key)
+    else:
+        raise TypeError("numeric output key must be a string or a sequence of strings")
+    if not output_keys or any(not isinstance(key, str) or not key for key in output_keys):
+        raise ValueError("numeric output keys must be non-empty strings")
+    if len(set(output_keys)) != len(output_keys):
+        raise ValueError("numeric output keys must be unique")
+    return output_keys
+
+
+def _contract_projection(
+    document: dict[str, Any],
+    output_key: str | tuple[str, ...] | list[str],
+) -> dict[str, Any]:
+    """Remove only the operation outputs before exact contract comparison."""
+
+    output_keys = _numeric_output_keys(output_key)
 
     data = document.get("data")
     if not isinstance(data, dict):
         raise ValueError("fixture data must be a JSON object")
-    if output_key not in data:
-        raise ValueError(f"fixture data is missing numeric output {output_key!r}")
+    for key in output_keys:
+        if key not in data:
+            raise ValueError(f"fixture data is missing numeric output {key!r}")
 
     projection = dict(document)
     projected_data = dict(data)
-    del projected_data[output_key]
+    for key in output_keys:
+        del projected_data[key]
     projection["data"] = projected_data
     return projection
 
@@ -4086,9 +4296,9 @@ def _compare_numeric_output(
 def _check_numeric_fixture(
     path: Path,
     expected: dict[str, Any],
-    output_key: str,
+    output_key: str | tuple[str, ...] | list[str],
 ) -> int:
-    """Check a canonical fixture whose selected output is numerically tolerant."""
+    """Check canonical fixture outputs whose values are numerically tolerant."""
 
     try:
         actual = _read_canonical_json(path)
@@ -4111,18 +4321,22 @@ def _check_numeric_fixture(
             return 1
 
         rtol, atol = _numeric_tolerance(actual)
-        regenerated_output = expected["data"][output_key]
-        checked_in_output = actual["data"][output_key]
-        mismatch = _compare_numeric_output(
-            regenerated_output,
-            checked_in_output,
-            path=f"data.{output_key}",
-            rtol=rtol,
-            atol=atol,
-        )
-        if mismatch is not None:
-            print(f"fixture numeric output check failed: {path}: {mismatch}", file=sys.stderr)
-            return 1
+        for key in _numeric_output_keys(output_key):
+            regenerated_output = expected["data"][key]
+            checked_in_output = actual["data"][key]
+            mismatch = _compare_numeric_output(
+                regenerated_output,
+                checked_in_output,
+                path=f"data.{key}",
+                rtol=rtol,
+                atol=atol,
+            )
+            if mismatch is not None:
+                print(
+                    f"fixture numeric output check failed: {path}: {mismatch}",
+                    file=sys.stderr,
+                )
+                return 1
     except (KeyError, TypeError, ValueError) as error:
         print(f"fixture schema check failed: {path}: {error}", file=sys.stderr)
         return 1

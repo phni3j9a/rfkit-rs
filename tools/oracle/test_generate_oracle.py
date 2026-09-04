@@ -479,6 +479,165 @@ INNER_CONNECT_CASE_SPECS = {
     },
 }
 
+INTERPOLATION_CASE_SPECS = {
+    "interpolation_cartesian_linear_three_port_complex_z0": {
+        "operation": "interpolate_s",
+        "ports": 3,
+        "source_frequencies": 5,
+        "target_frequencies": 6,
+        "output": ("s", "z0_ohm"),
+        "seed": 20_260_942,
+        "scipy_version": "1.18.1",
+    },
+}
+
+
+class InterpolationRegistrationAndCheckerTests(unittest.TestCase):
+    """Protect the direct interpolation case and both-output checker path."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.fixture_path = oracle.INTERPOLATION_FIXTURE
+        cls.fixture = oracle._read_canonical_json(cls.fixture_path)
+
+    def _check_document(self, document: dict[str, object]) -> int:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / self.fixture_path.name
+            path.write_bytes(oracle._canonical_bytes(document))
+            return oracle._check_numeric_fixture(
+                path,
+                self.fixture,
+                ("s", "z0_ohm"),
+            )
+
+    def test_case_is_registered_with_two_numeric_outputs_and_scipy_pin(self) -> None:
+        case_id = next(iter(INTERPOLATION_CASE_SPECS))
+        spec = INTERPOLATION_CASE_SPECS[case_id]
+        registered = {case.case_id: case for case in oracle._CASES}
+        self.assertIn(case_id, registered)
+        case = registered[case_id]
+        self.assertEqual(case.path, oracle.INTERPOLATION_FIXTURE)
+        self.assertEqual(case.path.stem, case_id)
+        self.assertEqual(case.comparison, "numeric_output")
+        self.assertEqual(case.numeric_output_key, spec["output"])
+
+        metadata = self.fixture["metadata"]
+        self.assertEqual(metadata["case_id"], case_id)
+        self.assertEqual(metadata["operation"], spec["operation"])
+        self.assertEqual(metadata["basis"], "s")
+        self.assertEqual(metadata["coords"], "cart")
+        self.assertEqual(metadata["kind"], "linear")
+        self.assertEqual(metadata["numpy_version"], oracle.EXPECTED_NUMPY_VERSION)
+        self.assertEqual(metadata["scikit_rf_version"], oracle.EXPECTED_SCIKIT_RF_VERSION)
+        self.assertEqual(metadata["scipy_version"], oracle.EXPECTED_SCIPY_VERSION)
+        self.assertEqual(metadata["random_seed"], spec["seed"])
+        self.assertEqual(metadata["shape"]["source_frequency"], [spec["source_frequencies"]])
+        self.assertEqual(metadata["shape"]["target_frequency"], [spec["target_frequencies"]])
+        self.assertEqual(
+            metadata["shape"]["input_s"],
+            [spec["source_frequencies"], spec["ports"], spec["ports"]],
+        )
+        self.assertEqual(
+            metadata["shape"]["input_z0"],
+            [spec["source_frequencies"], spec["ports"]],
+        )
+        self.assertEqual(
+            metadata["shape"]["output_s"],
+            [spec["target_frequencies"], spec["ports"], spec["ports"]],
+        )
+        self.assertEqual(
+            metadata["shape"]["output_z0"],
+            [spec["target_frequencies"], spec["ports"]],
+        )
+        self.assertEqual(
+            metadata["input_reference_impedance"],
+            {
+                "complex": True,
+                "frequency_dependent": True,
+                "per_port": True,
+                "unit": "ohm",
+            },
+        )
+        self.assertEqual(metadata["tolerance_policy"]["rtol"], 1e-12)
+        self.assertEqual(metadata["tolerance_policy"]["atol"], 1e-12)
+
+    def test_builder_uses_public_cartesian_linear_interpolation(self) -> None:
+        case = next(
+            case
+            for case in oracle._CASES
+            if case.case_id == oracle.INTERPOLATION_CASE_ID
+        )
+        # Importing the exact pinned environment here makes this a direct
+        # behavioral check rather than a test of hand-copied fixture values.
+        np, skrf = oracle._load_dependencies()
+        with mock.patch.object(
+            skrf.Network,
+            "interpolate",
+            autospec=True,
+            side_effect=skrf.Network.interpolate,
+        ) as interpolate:
+            generated = case.builder(np, skrf)
+        self.assertEqual(interpolate.call_count, 1)
+        self.assertEqual(interpolate.call_args.kwargs["basis"], "s")
+        self.assertEqual(interpolate.call_args.kwargs["coords"], "cart")
+        self.assertEqual(interpolate.call_args.kwargs["kind"], "linear")
+        self.assertEqual(generated["data"]["target_frequency_hz"], self.fixture["data"]["target_frequency_hz"])
+
+    def test_each_interpolation_output_tolerates_subthreshold_drift(self) -> None:
+        for output_key in ("s", "z0_ohm"):
+            with self.subTest(output_key=output_key):
+                adjusted = copy.deepcopy(self.fixture)
+                indices = (0, 0, 0) if output_key == "s" else (0, 0)
+                container = adjusted["data"][output_key]
+                for index in indices[:-1]:
+                    container = container[index]
+                container[indices[-1]]["real"] += 1e-13
+                self.assertEqual(self._check_document(adjusted), 0)
+
+    def test_each_interpolation_output_rejects_supra_threshold_drift(self) -> None:
+        for output_key in ("s", "z0_ohm"):
+            with self.subTest(output_key=output_key):
+                adjusted = copy.deepcopy(self.fixture)
+                indices = (0, 0, 0) if output_key == "s" else (0, 0)
+                container = adjusted["data"][output_key]
+                for index in indices[:-1]:
+                    container = container[index]
+                container[indices[-1]]["real"] += 1e-3
+                self.assertEqual(self._check_document(adjusted), 1)
+
+    def test_all_inputs_and_metadata_remain_exact(self) -> None:
+        drift_paths = (
+            ("source_frequency_hz", (0,), 1.0),
+            ("target_frequency_hz", (1,), 1.0),
+            ("s_input", (0, 0, 0), 1e-3),
+            ("z0_input_ohm", (0, 0), 1.0),
+        )
+        for field, indices, delta in drift_paths:
+            with self.subTest(field=field):
+                adjusted = copy.deepcopy(self.fixture)
+                container = adjusted["data"][field]
+                for index in indices[:-1]:
+                    container = container[index]
+                leaf = container[indices[-1]]
+                if isinstance(leaf, dict):
+                    leaf["real"] += delta
+                else:
+                    container[indices[-1]] = leaf + delta
+                self.assertEqual(self._check_document(adjusted), 1)
+
+        adjusted_metadata = copy.deepcopy(self.fixture)
+        adjusted_metadata["metadata"]["scipy_version"] = "1.18.0"
+        self.assertEqual(self._check_document(adjusted_metadata), 1)
+
+    def test_missing_or_extra_numeric_output_is_rejected(self) -> None:
+        missing = copy.deepcopy(self.fixture)
+        del missing["data"]["z0_ohm"]
+        self.assertEqual(self._check_document(missing), 1)
+
+        extra = copy.deepcopy(self.fixture)
+        extra["data"]["unregistered_output"] = copy.deepcopy(extra["data"]["s"])
+        self.assertEqual(self._check_document(extra), 1)
+
 
 class MatrixRegistrationAndCheckerTests(unittest.TestCase):
     """Protect registration, z0-pattern, and output-only checker semantics."""
@@ -492,6 +651,7 @@ class MatrixRegistrationAndCheckerTests(unittest.TestCase):
         self.assertEqual(
             len(registered),
             3
+            + len(INTERPOLATION_CASE_SPECS)
             + len(MATRIX_CASE_SPECS)
             + len(RENORMALIZATION_CASE_SPECS)
             + len(RECIPROCAL_CASE_SPECS)
