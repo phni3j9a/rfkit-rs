@@ -491,6 +491,22 @@ INTERPOLATION_CASE_SPECS = {
     },
 }
 
+COMPOSITION_CASE_SPECS = {
+    "power_wave_connect_matched_explicit_grid_three_to_four_port_complex_z0": {
+        "operation": "connect_matched_on_grid",
+        "ports_a": 3,
+        "ports_b": 4,
+        "source_frequencies_a": 5,
+        "source_frequencies_b": 6,
+        "target_frequencies": 8,
+        "output": ("s_connected", "z0_connected_ohm"),
+        "junction_port_a": 1,
+        "junction_port_b": 2,
+        "seed_a": 20_260_943,
+        "seed_b": 20_260_944,
+    },
+}
+
 
 class InterpolationRegistrationAndCheckerTests(unittest.TestCase):
     """Protect the direct interpolation case and both-output checker path."""
@@ -639,6 +655,250 @@ class InterpolationRegistrationAndCheckerTests(unittest.TestCase):
         self.assertEqual(self._check_document(extra), 1)
 
 
+class CompositionRegistrationAndCheckerTests(unittest.TestCase):
+    """Protect explicit-grid interpolation/connection oracle semantics."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.np, cls.skrf = oracle._load_dependencies()
+
+    @staticmethod
+    def _complex(value: dict[str, float]) -> complex:
+        return complex(value["real"], value["imag"])
+
+    def test_case_is_registered_with_both_numeric_outputs_and_grid_contract(self) -> None:
+        case_id = next(iter(COMPOSITION_CASE_SPECS))
+        spec = COMPOSITION_CASE_SPECS[case_id]
+        registered = {case.case_id: case for case in oracle._CASES}
+        self.assertIn(case_id, registered)
+        case = registered[case_id]
+        self.assertEqual(case.path, oracle.COMPOSITION_FIXTURE)
+        self.assertEqual(case.path.stem, case_id)
+        self.assertEqual(case.comparison, "numeric_output")
+        self.assertEqual(case.numeric_output_key, spec["output"])
+
+        fixture = oracle._read_canonical_json(case.path)
+        metadata = fixture["metadata"]
+        self.assertEqual(metadata["case_id"], case_id)
+        self.assertEqual(metadata["operation"], spec["operation"])
+        self.assertEqual(metadata["wave_definition"], "power")
+        self.assertEqual(metadata["numpy_version"], oracle.EXPECTED_NUMPY_VERSION)
+        self.assertEqual(metadata["scikit_rf_version"], oracle.EXPECTED_SCIKIT_RF_VERSION)
+        self.assertEqual(
+            metadata["interpolation"],
+            {
+                "basis": "s",
+                "coords": "cart",
+                "kind": "linear",
+                "scipy_version": oracle.EXPECTED_SCIPY_VERSION,
+            },
+        )
+        self.assertEqual(
+            metadata["random_seeds"],
+            {"a": spec["seed_a"], "b": spec["seed_b"]},
+        )
+        self.assertEqual(
+            metadata["junction_ports"],
+            {"a": spec["junction_port_a"], "b": spec["junction_port_b"]},
+        )
+        self.assertEqual(metadata["shape"]["source_frequency_a"], [spec["source_frequencies_a"]])
+        self.assertEqual(metadata["shape"]["source_frequency_b"], [spec["source_frequencies_b"]])
+        self.assertEqual(metadata["shape"]["target_frequency"], [spec["target_frequencies"]])
+        self.assertEqual(
+            metadata["shape"]["input_s_a"],
+            [spec["source_frequencies_a"], spec["ports_a"], spec["ports_a"]],
+        )
+        self.assertEqual(
+            metadata["shape"]["input_s_b"],
+            [spec["source_frequencies_b"], spec["ports_b"], spec["ports_b"]],
+        )
+        self.assertEqual(
+            metadata["shape"]["output_s"],
+            [spec["target_frequencies"], 5, 5],
+        )
+        self.assertEqual(
+            metadata["shape"]["output_z0"],
+            [spec["target_frequencies"], 5],
+        )
+        self.assertEqual(
+            metadata["port_order"]["output"],
+            [
+                {"network": "A", "port": 0},
+                {"network": "A", "port": 2},
+                {"network": "B", "port": 0},
+                {"network": "B", "port": 1},
+                {"network": "B", "port": 3},
+            ],
+        )
+        reference_impedance = metadata["reference_impedance"]
+        self.assertTrue(reference_impedance["external_complex"])
+        self.assertTrue(reference_impedance["external_frequency_dependent"])
+        self.assertTrue(reference_impedance["junction_exactly_equal_after_interpolation"])
+        self.assertTrue(reference_impedance["junction_real_strictly_positive"])
+        self.assertEqual(reference_impedance["unit"], "ohm")
+
+        data = fixture["data"]
+        self.assertEqual(
+            data["source_frequency_a_hz"],
+            [0.73e9, 1.21e9, 1.89e9, 2.67e9, 3.41e9],
+        )
+        self.assertEqual(
+            data["source_frequency_b_hz"],
+            [0.73e9, 0.96e9, 1.48e9, 2.22e9, 2.93e9, 3.41e9],
+        )
+        self.assertEqual(
+            data["target_frequency_hz"],
+            [0.73e9, 0.96e9, 1.21e9, 1.73e9, 2.22e9, 2.67e9, 2.93e9, 3.41e9],
+        )
+        self.assertNotEqual(data["source_frequency_a_hz"], data["source_frequency_b_hz"])
+        self.assertEqual(data["target_frequency_hz"], data["frequency_hz"])
+        for frequency in range(spec["source_frequencies_a"]):
+            junction = data["z0_a_ohm"][frequency][spec["junction_port_a"]]
+            self.assertEqual(junction, {"real": 73.5, "imag": 0.0})
+        for frequency in range(spec["source_frequencies_b"]):
+            junction = data["z0_b_ohm"][frequency][spec["junction_port_b"]]
+            self.assertEqual(junction, {"real": 73.5, "imag": 0.0})
+        self.assertTrue(
+            any(
+                value["imag"] != 0.0
+                for row in data["z0_a_ohm"]
+                for value in row
+                if value != {"real": 73.5, "imag": 0.0}
+            )
+        )
+        self.assertTrue(
+            any(
+                value["imag"] != 0.0
+                for matrix in data["s_a"] + data["s_b"]
+                for row in matrix
+                for value in row
+            )
+        )
+        self.assertTrue(
+            any(
+                data["s_a"][0][row][column]
+                != data["s_a"][0][column][row]
+                for row in range(spec["ports_a"])
+                for column in range(spec["ports_a"])
+                if row != column
+            )
+        )
+
+    def test_builder_interpolates_each_network_once_then_connects_once(self) -> None:
+        case_id = next(iter(COMPOSITION_CASE_SPECS))
+        case = next(case for case in oracle._CASES if case.case_id == case_id)
+        network_type = self.skrf.Network
+        with mock.patch.object(
+            network_type,
+            "interpolate",
+            autospec=True,
+            side_effect=network_type.interpolate,
+        ) as interpolate, mock.patch.object(
+            self.skrf,
+            "Network",
+            side_effect=network_type,
+        ) as network_constructor, mock.patch.object(
+            self.skrf.network,
+            "connect",
+            wraps=self.skrf.network.connect,
+        ) as connect:
+            generated = case.builder(self.np, self.skrf)
+
+        self.assertEqual(network_constructor.call_count, 2)
+        for call in network_constructor.call_args_list:
+            self.assertEqual(call.kwargs["s_def"], "power")
+        self.assertEqual(interpolate.call_count, 2)
+        for call in interpolate.call_args_list:
+            self.assertEqual(call.kwargs["basis"], "s")
+            self.assertEqual(call.kwargs["coords"], "cart")
+            self.assertEqual(call.kwargs["kind"], "linear")
+        self.assertEqual(connect.call_count, 1)
+        self.assertEqual(connect.call_args.args[1], oracle.COMPOSITION_PORT_A)
+        self.assertEqual(connect.call_args.args[3], oracle.COMPOSITION_PORT_B)
+        connected_a = connect.call_args.args[0]
+        connected_b = connect.call_args.args[2]
+        target = self.np.asarray(
+            generated["data"]["target_frequency_hz"], dtype=self.np.float64
+        )
+        self.assertEqual(
+            connected_a.f.tolist(),
+            generated["data"]["target_frequency_hz"],
+        )
+        self.assertTrue(self.np.array_equal(self.np.asarray(connected_a.f), target))
+        self.assertTrue(self.np.array_equal(self.np.asarray(connected_b.f), target))
+
+        junction_a = self.np.asarray(connected_a.z0, dtype=self.np.complex128)[
+            :, oracle.COMPOSITION_PORT_A
+        ]
+        junction_b = self.np.asarray(connected_b.z0, dtype=self.np.complex128)[
+            :, oracle.COMPOSITION_PORT_B
+        ]
+        self.assertTrue(self.np.isfinite(junction_a).all())
+        self.assertTrue(self.np.isfinite(junction_b).all())
+        self.assertTrue((junction_a.imag == 0.0).all())
+        self.assertTrue((junction_b.imag == 0.0).all())
+        self.assertTrue((junction_a.real > 0.0).all())
+        self.assertTrue((junction_b.real > 0.0).all())
+        self.assertTrue(self.np.array_equal(junction_a, junction_b))
+        self.assertTrue((junction_a == 73.5).all())
+
+    def test_checker_tolerates_only_connected_s_and_z0_outputs(self) -> None:
+        case_id = next(iter(COMPOSITION_CASE_SPECS))
+        case = next(case for case in oracle._CASES if case.case_id == case_id)
+        fixture = oracle._read_canonical_json(case.path)
+        adjusted = copy.deepcopy(fixture)
+        adjusted["data"]["s_connected"][0][0][0]["real"] += 1e-13
+        adjusted["data"]["z0_connected_ohm"][0][0]["real"] += 1e-13
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / case.path.name
+            path.write_bytes(oracle._canonical_bytes(adjusted))
+            self.assertEqual(
+                oracle._check_numeric_fixture(path, fixture, case.numeric_output_key),
+                0,
+            )
+
+            for field in (
+                "frequency_hz",
+                "source_frequency_a_hz",
+                "source_frequency_b_hz",
+                "target_frequency_hz",
+                "s_a",
+                "s_b",
+                "z0_a_ohm",
+                "z0_b_ohm",
+            ):
+                drifted = copy.deepcopy(fixture)
+                if field.endswith("hz"):
+                    drifted["data"][field][0] += 1.0
+                elif field.startswith("s_"):
+                    drifted["data"][field][0][0][0]["real"] += 1e-3
+                else:
+                    drifted["data"][field][0][0]["real"] += 1.0
+                path.write_bytes(oracle._canonical_bytes(drifted))
+                self.assertEqual(
+                    oracle._check_numeric_fixture(
+                        path,
+                        fixture,
+                        case.numeric_output_key,
+                    ),
+                    1,
+                    field,
+                )
+
+            drifted_metadata = copy.deepcopy(fixture)
+            drifted_metadata["metadata"]["port_order"]["output"][0]["port"] = 1
+            path.write_bytes(oracle._canonical_bytes(drifted_metadata))
+            self.assertEqual(
+                oracle._check_numeric_fixture(
+                    path,
+                    fixture,
+                    case.numeric_output_key,
+                ),
+                1,
+                "port-order metadata",
+            )
+
+
 class MatrixRegistrationAndCheckerTests(unittest.TestCase):
     """Protect registration, z0-pattern, and output-only checker semantics."""
 
@@ -658,6 +918,7 @@ class MatrixRegistrationAndCheckerTests(unittest.TestCase):
             + len(ACTIVE_CASE_SPECS)
             + len(IMPEDANCE_ADMITTANCE_CASE_SPECS)
             + len(POWER_WAVE_ADMITTANCE_CASE_SPECS)
+            + len(COMPOSITION_CASE_SPECS)
             + len(MATCHED_CONNECTION_CASE_SPECS)
             + len(INNER_CONNECT_CASE_SPECS),
         )
