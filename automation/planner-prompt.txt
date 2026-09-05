@@ -21,6 +21,8 @@ If an existing autonomous pull request instead needs bounded, implementation-rea
 
 If active dispatched work already exists, do not create speculative additional work.
 
+If an in-progress Issue has no associated PR, follow the interrupted pre-PR recovery rules in docs/LOOP_ENGINEERING.md and the host evidence contract in docs/CODEX_AUTOMATION.md. When all recovery gates hold, re-dispatch that same Issue; otherwise record the concrete blocker on it as required by policy. Do not infer termination from elapsed time or leave an established orphan unexplained in journal-only no-op output.
+
 Only when the autonomous WIP slot is empty, consider the current repository state and choose at most one next bounded increment with the highest marginal value. Create and dispatch an implementation-ready Issue only when doing so represents meaningful project progress under docs/DEVELOPMENT_DIRECTION.md and docs/LOOP_ENGINEERING.md.
 
 A no-op cycle is valid. Do not manufacture work, split work unnecessarily, or create conformance/cleanup tasks merely to demonstrate activity.
