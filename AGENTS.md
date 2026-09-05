@@ -70,6 +70,7 @@ For the scheduled Codex Planner:
 
 - use fresh GitHub and `main` state rather than cached assumptions;
 - protect WIP=1 and resolve existing autonomous work before dispatching new work;
+- recover an interrupted pre-PR Worker claim on the same Issue only under the execution-evidence and retry limits in `docs/LOOP_ENGINEERING.md`; elapsed time alone never authorizes recovery;
 - when an existing autonomous PR needs bounded, implementation-ready corrections, record or reuse a concrete change request for its current head and re-dispatch the same linked Issue for a correction pass instead of creating replacement work;
 - do not repeat an already-sufficient change request against an unchanged PR head merely to show activity;
 - choose at most one next Issue by marginal value under `docs/DEVELOPMENT_DIRECTION.md`;
@@ -83,6 +84,7 @@ For the scheduled Codex Worker:
 - only an open Issue explicitly marked `loop:ready` is permission to start an autonomous initial implementation or correction pass;
 - do not implement arbitrary open Issues merely because they exist;
 - claim the selected Issue before implementation by moving it from `loop:ready` to `loop:in-progress`;
+- record the host run ID, base commit, and intended branch on the claimed Issue before editing, so an interrupted pass can be identified;
 - process at most one dispatched Issue per Worker run;
 - when the dispatched Issue has exactly one unambiguously linked, safely writable open autonomous PR, apply the authorized correction to that PR's existing branch and do not create a duplicate PR;
 - fail closed when the Issue-to-PR relationship, correction request, or writable head branch is ambiguous;

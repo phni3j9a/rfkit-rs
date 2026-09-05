@@ -93,6 +93,16 @@ Before enabling scheduled execution, verify that:
 8. stdout/stderr are retained in the systemd journal or equivalent host logs;
 9. legacy scheduled workers/maintainers are disabled so the new loop is not duplicated.
 
+### Execution evidence and interrupted work
+
+For automatic pre-PR recovery, configure one execution host and require every scheduled or manual Planner/Worker invocation to use the same lock-holding wrapper. A second independent executor invalidates this recovery assumption. Hold the lock for the entire process tree; after a timeout or stop, terminate remaining child processes before another cycle can proceed.
+
+After acquiring the lock, the host exposes `RFKIT_AUTOMATION_CONTEXT`, the path to a host-written JSON file outside the writable checkout. It records factual fields: `run_id`, `role`, `boot_id`, `lock_path`, `lock_holder_pid`, `started_at`, and `checkout`. The file identifies the current invocation and is replaced only under the shared lock. It must be readable by Codex and not writable by the run. Missing context disables automatic recovery; an Issue comment alone cannot substitute for this host evidence. The file is operational evidence, not a prompt or an Issue-selection instruction.
+
+Keep run metadata and journal start/end results. Preserve a failed/interrupted checkout, including uncommitted and unpushed work, before starting a fresh checkout. Also preserve work from an apparently successful run unless the host can establish that the checkout is clean and all local commits are published. Report archive locations in the journal and retain them for inspection; do not silently delete a prior residual runtime on startup. Archive retention and eventual removal belong to host maintenance, not autonomous product work.
+
+Set a finite service runtime limit shorter than the interval between Planner opportunities (for example, two hours for the six-hour cadence) and terminate the whole service process group on timeout. This bounds an unresponsive run without introducing another daemon or scheduler. Timeout is an execution failure, not permission for the wrapper to change a GitHub label. The next Planner decides recovery under `docs/LOOP_ENGINEERING.md` using host evidence and fresh GitHub state.
+
 Prefer a small shell wrapper plus systemd service/timer units over introducing an additional daemon, queue, scheduler, or orchestration framework unless a demonstrated requirement cannot be met by systemd.
 
 ## Failure behavior

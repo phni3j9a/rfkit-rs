@@ -103,7 +103,7 @@ Every scheduled planner run must use fresh GitHub state and process work in this
 3. inspect open PRs before generating new work;
 4. if one autonomous PR is clearly merge-ready, merge it when authorized by this policy;
 5. if implementation-ready changes are needed, keep the correction bounded to the existing work and re-dispatch its linked Issue under the correction-loop rules below rather than generating a replacement task;
-6. inspect blocked work and relevant open Issues;
+6. inspect blocked work and relevant open Issues, including interrupted pre-PR claims under the recovery rules below;
 7. check `loop:ready` / `loop:in-progress` state and unresolved autonomous PRs;
 8. only when WIP is clear, compare a small set of plausible next directions internally;
 9. create **one** implementation-ready Issue for the best bounded increment and apply `loop:ready`;
@@ -143,6 +143,28 @@ After selecting exactly one `loop:ready` Issue, the Worker must verify that it c
 For a correction pass, the Worker must verify the current-head change request, claim the Issue by replacing `loop:ready` with `loop:in-progress`, and re-read the Issue, PR, head SHA, change request, base, and branch ownership before editing. It then fetches and checks out the exact existing head and applies only the requested bounded correction through the normal IssueFlow implementation, verification, and independent-review workflow. Main commits and pushes normally to the same branch so the same PR is updated. The Worker must not force-push, open a replacement PR, or broaden the Issue contract. If fresh revalidation differs from the claimed state or the remote head changes after inspection, the Worker must stop rather than overwrite concurrent work and let a later Planner cycle decide the next safe transition.
 
 After the PR is updated, the Issue remains `loop:in-progress` until the next Planner cycle merges, re-dispatches another bounded correction, blocks, or escalates it.
+
+## Recovery after interruption before a pull request
+
+A Worker can stop after claiming an Issue but before publishing a PR. `loop:in-progress` is a dispatch label, not proof that a process is still running. A successful no-op service exit also does not prove the claimed implementation finished. Resolve this existing WIP before creating new work.
+
+Automatic recovery is limited to the configured **single execution host**. All authorized Planner/Worker runs, including manual runs, must use its same lock-holding wrapper. If another host or an independently launched Worker may still be running, automatic recovery is unavailable until that executor is accounted for. Do not infer termination from claim age, missing comments, a missing PR, a GitHub search result, or a PID alone.
+
+The Planner may re-dispatch the same Issue for an interrupted initial pass only after verifying all of these conditions:
+
+1. The host execution context described in `docs/CODEX_AUTOMATION.md` identifies this run as a Planner holding the shared lock. The single-host execution contract is in effect, so no authorized Worker can still be running. Identify the prior claim/run from its Issue comment and host evidence. If the Worker stopped between the label transition and claim comment, a uniquely matching host Worker run interval and the Issue's direct label timeline may supply that linkage; ambiguous or clock-discontinuous intervals are insufficient. For a claim predating host run records, an explicit maintainer audit may supply the missing historical linkage.
+2. Fresh direct GitHub API state shows exactly one dispatched Issue, carrying only `loop:in-progress`, with no other ready/in-progress work and no unresolved autonomous PR. Inspect its body, comments, full relationship history, and current remote heads. There must be no current or historical PR associated with it. Existing PR work must follow the correction-loop rules instead; closed/unmerged or ambiguous relationships must not be treated as a fresh start.
+3. The Issue remains implementation-ready under current `main` and its original contract. There is no unresolved RF/product/API/provenance decision. A remote work branch without a PR, concurrent updates, unexplained local work, or uncertain ownership requires escalation rather than overwriting or creating replacement work.
+4. Inspect the host's preserved checkout/run evidence when present. Record where uncommitted or unpushed work is preserved and whether it belongs to this claim. Saved work is unreviewed input, not a completed implementation. If a prior host discarded the checkout, state that explicitly and authorize rebuilding the same contract; do not pretend the work was recovered.
+5. This Issue has not already used an automatic pre-PR recovery. Permit **one automatic recovery per Issue**. A further interrupted claim must be marked `loop:blocked` with the failure evidence and required intervention, rather than retried indefinitely. Ordinary corrections of an existing PR do not count as pre-PR recovery.
+
+When these conditions hold, the Planner must post one concise recovery comment on the same Issue, marked `<!-- rfkit-pre-pr-recovery:v1 -->`, identifying the interrupted claim/run, current Planner run, termination/exclusivity evidence, preserved-work disposition, and unchanged implementation contract. Re-read the Issue labels, comments, relationships, remote branches, and WIP immediately before replacing `loop:in-progress` with `loop:ready`, preserving all non-loop labels. Verify the result through the Issue's direct API. Do not create a replacement Issue or PR, implement code, or dispatch additional work in this cycle.
+
+If a run stops between the recovery comment and label update, a later Planner may finish that same transition only when there has been no intervening ready/claim transition or other material change. Reuse the comment rather than consuming a second attempt. If the Issue is already only `loop:ready`, leave it ready. If a Worker has claimed it again, the recovery has been consumed; do not mistake the new claim for an unfinished label update. Use the Issue timeline and run IDs to distinguish these cases.
+
+When termination, provenance, ownership, or relationships cannot be established, leave potentially live work untouched and record a concise blocker/required evidence on the Issue. If termination is established but safe restart is not, replace its loop state with `loop:blocked`. Reuse an adequate comment for unchanged evidence instead of repeatedly posting. A journal-only no-op is insufficient when an orphaned claim requires intervention.
+
+After recovery dispatch, the Worker uses the normal initial implementation workflow on the same Issue, with the normal claim, verification, fresh independent review, and one PR. Before product edits, it records a claim comment containing the host run ID (when supplied), base SHA and intended branch, and verifies the claim again. It may inspect clearly attributed preserved work and reapply useful changes into its fresh checkout through the usual implementation workflow; it must not alter the archive, treat an old review as current, or push over an unexplained remote branch. Missing or ambiguous recovery evidence must be surfaced, not guessed. The Worker never changes an unready Issue to ready itself.
 
 ## Choosing the next Issue
 
