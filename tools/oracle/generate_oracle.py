@@ -423,6 +423,35 @@ INTERPOLATION_TOLERANCE_JUSTIFICATION = (
     "disagreement."
 )
 
+# Explicit-grid matched connection composes two independently sampled inputs:
+# each side is interpolated once through the public Network API, then the
+# public matched connection operation is called once on the common target
+# grid.  Keep the source axes distinct and retain enough ports on each side to
+# exercise all four N-port output blocks.
+COMPOSITION_FIXTURE = (
+    Path(__file__).resolve().parent
+    / "fixtures"
+    / "power_wave_connect_matched_explicit_grid_three_to_four_port_complex_z0.json"
+)
+COMPOSITION_CASE_ID = (
+    "power_wave_connect_matched_explicit_grid_three_to_four_port_complex_z0"
+)
+COMPOSITION_RANDOM_SEED_A = 20_260_943
+COMPOSITION_RANDOM_SEED_B = 20_260_944
+COMPOSITION_NPORTS_A = 3
+COMPOSITION_NPORTS_B = 4
+COMPOSITION_PORT_A = 1
+COMPOSITION_PORT_B = 2
+COMPOSITION_RTOL = 1e-12
+COMPOSITION_ATOL = 1e-12
+COMPOSITION_TOLERANCE_JUSTIFICATION = (
+    "Strict binary64 mixed relative/absolute tolerance for a deterministic, "
+    "well-conditioned explicit-grid matched connection; each source network "
+    "is interpolated independently by pinned SciPy-backed scikit-rf before "
+    "the public matched connection, allowing normal cross-language rounding "
+    "while catching material disagreement."
+)
+
 
 class _OracleCase(NamedTuple):
     """A registered fixture, builder, and case-specific check strategy."""
@@ -1902,6 +1931,302 @@ def _interpolation_fixture(np: Any, skrf: Any) -> dict[str, Any]:
             "target_frequency_hz": [float(value) for value in output_frequency],
             "z0_input_ohm": _complex_array(input_z0),
             "z0_ohm": _complex_array(output_z0),
+        },
+    }
+
+
+def _composition_inputs(
+    np: Any,
+    *,
+    seed_a: int,
+    seed_b: int,
+) -> tuple[Any, Any, Any, Any, Any, Any, Any]:
+    """Build independently sampled explicit-grid connection inputs."""
+
+    source_frequency_a_hz = np.array(
+        [0.73e9, 1.21e9, 1.89e9, 2.67e9, 3.41e9],
+        dtype=np.float64,
+    )
+    source_frequency_b_hz = np.array(
+        [0.73e9, 0.96e9, 1.48e9, 2.22e9, 2.93e9, 3.41e9],
+        dtype=np.float64,
+    )
+    target_frequency_hz = np.array(
+        [0.73e9, 0.96e9, 1.21e9, 1.73e9, 2.22e9, 2.67e9, 2.93e9, 3.41e9],
+        dtype=np.float64,
+    )
+
+    def random_s(rng: Any, frequencies: Any, nports: int, diagonal_base: float) -> Any:
+        matrix = (
+            rng.normal(
+                loc=0.0,
+                scale=0.018,
+                size=(frequencies.size, nports, nports),
+            )
+            + 1j
+            * rng.normal(
+                loc=0.0,
+                scale=0.018,
+                size=(frequencies.size, nports, nports),
+            )
+        ).astype(np.complex128)
+        for frequency in range(frequencies.size):
+            for port in range(nports):
+                matrix[frequency, port, port] += complex(
+                    diagonal_base + 0.009 * frequency + 0.005 * port,
+                    0.008 + 0.0015 * frequency - 0.0007 * port,
+                )
+        return matrix
+
+    rng_a = np.random.default_rng(seed_a)
+    rng_b = np.random.default_rng(seed_b)
+    source_s_a = random_s(rng_a, source_frequency_a_hz, COMPOSITION_NPORTS_A, 0.11)
+    source_s_b = random_s(rng_b, source_frequency_b_hz, COMPOSITION_NPORTS_B, 0.14)
+    _assert_non_symmetric(np, source_s_a, name="explicit-grid connection A S input")
+    _assert_non_symmetric(np, source_s_b, name="explicit-grid connection B S input")
+    _assert_s_conditioning(source_s_a)
+    _assert_s_conditioning(source_s_b)
+
+    frequency_index_a = np.arange(source_frequency_a_hz.size, dtype=np.float64)[:, None]
+    frequency_index_b = np.arange(source_frequency_b_hz.size, dtype=np.float64)[:, None]
+    port_index_a = np.arange(COMPOSITION_NPORTS_A, dtype=np.float64)[None, :]
+    port_index_b = np.arange(COMPOSITION_NPORTS_B, dtype=np.float64)[None, :]
+    source_z0_a = (
+        41.0
+        + 2.4 * port_index_a
+        + 1.35 * frequency_index_a
+        + 1j * (1.5 + 0.37 * port_index_a - 0.11 * frequency_index_a)
+    ).astype(np.complex128)
+    source_z0_b = (
+        83.0
+        + 3.1 * port_index_b
+        + 1.9 * frequency_index_b
+        + 1j * (2.1 + 0.29 * port_index_b + 0.13 * frequency_index_b)
+    ).astype(np.complex128)
+
+    # Keep the selected junction profile finite, real, positive, and exactly
+    # equal in both inputs.  A constant non-50-ohm value is intentional: it
+    # remains bit-for-bit equal after either source grid is interpolated.
+    junction_z0 = np.float64(73.5)
+    source_z0_a[:, COMPOSITION_PORT_A] = junction_z0
+    source_z0_b[:, COMPOSITION_PORT_B] = junction_z0
+
+    if not np.isfinite(source_frequency_a_hz).all() or not np.isfinite(
+        source_frequency_b_hz
+    ).all():
+        raise ValueError("explicit-grid connection source frequencies must be finite")
+    if not np.isfinite(target_frequency_hz).all():
+        raise ValueError("explicit-grid connection target frequencies must be finite")
+    if not np.isfinite(source_s_a).all() or not np.isfinite(source_s_b).all():
+        raise ValueError("explicit-grid connection S inputs must be finite")
+    if not np.isfinite(source_z0_a).all() or not np.isfinite(source_z0_b).all():
+        raise ValueError("explicit-grid connection z0 inputs must be finite")
+    if not (source_z0_a[:, COMPOSITION_PORT_A].imag == 0.0).all() or not (
+        source_z0_b[:, COMPOSITION_PORT_B].imag == 0.0
+    ).all():
+        raise ValueError("explicit-grid connection junction z0 must be real")
+    if not np.all(source_z0_a[:, COMPOSITION_PORT_A] == junction_z0) or not np.all(
+        source_z0_b[:, COMPOSITION_PORT_B] == junction_z0
+    ):
+        raise ValueError("explicit-grid connection junction z0 must match exactly")
+    if not (source_z0_a[:, COMPOSITION_PORT_A].real > 0.0).all():
+        raise ValueError("explicit-grid connection junction z0 must be positive")
+    if np.array_equal(source_frequency_a_hz, source_frequency_b_hz):
+        raise ValueError("explicit-grid connection source grids must differ")
+    if np.any(source_z0_a[:, np.arange(COMPOSITION_NPORTS_A) != COMPOSITION_PORT_A].imag == 0.0):
+        raise ValueError("explicit-grid connection A external z0 must be complex")
+    if np.any(source_z0_b[:, np.arange(COMPOSITION_NPORTS_B) != COMPOSITION_PORT_B].imag == 0.0):
+        raise ValueError("explicit-grid connection B external z0 must be complex")
+
+    return (
+        source_frequency_a_hz,
+        source_frequency_b_hz,
+        target_frequency_hz,
+        source_s_a,
+        source_z0_a,
+        source_s_b,
+        source_z0_b,
+    )
+
+
+def _composition_fixture(np: Any, skrf: Any) -> dict[str, Any]:
+    """Build explicit-grid connection output through public scikit-rf APIs."""
+
+    (
+        source_frequency_a_hz,
+        source_frequency_b_hz,
+        target_frequency_hz,
+        source_s_a,
+        source_z0_a,
+        source_s_b,
+        source_z0_b,
+    ) = _composition_inputs(
+        np,
+        seed_a=COMPOSITION_RANDOM_SEED_A,
+        seed_b=COMPOSITION_RANDOM_SEED_B,
+    )
+    case_id = COMPOSITION_CASE_ID
+    network_a = skrf.Network(
+        f=source_frequency_a_hz,
+        s=source_s_a,
+        z0=source_z0_a,
+        s_def="power",
+        name=f"{case_id}_a",
+    )
+    network_b = skrf.Network(
+        f=source_frequency_b_hz,
+        s=source_s_b,
+        z0=source_z0_b,
+        s_def="power",
+        name=f"{case_id}_b",
+    )
+
+    # Each side is interpolated exactly once through the public API.  The
+    # expected output is then produced by one public network.connect call.
+    interpolated_a = network_a.interpolate(
+        target_frequency_hz,
+        basis="s",
+        coords="cart",
+        kind="linear",
+    )
+    interpolated_b = network_b.interpolate(
+        target_frequency_hz,
+        basis="s",
+        coords="cart",
+        kind="linear",
+    )
+
+    interpolated_frequency_a = np.asarray(interpolated_a.f, dtype=np.float64)
+    interpolated_frequency_b = np.asarray(interpolated_b.f, dtype=np.float64)
+    if not np.array_equal(interpolated_frequency_a, target_frequency_hz):
+        raise ValueError("scikit-rf changed explicit-grid A interpolation frequencies")
+    if not np.array_equal(interpolated_frequency_b, target_frequency_hz):
+        raise ValueError("scikit-rf changed explicit-grid B interpolation frequencies")
+
+    junction_a = np.asarray(interpolated_a.z0, dtype=np.complex128)[:, COMPOSITION_PORT_A]
+    junction_b = np.asarray(interpolated_b.z0, dtype=np.complex128)[:, COMPOSITION_PORT_B]
+    if not np.isfinite(junction_a).all() or not np.isfinite(junction_b).all():
+        raise ValueError("interpolated explicit-grid junction z0 must be finite")
+    if not (junction_a.imag == 0.0).all() or not (junction_b.imag == 0.0).all():
+        raise ValueError("interpolated explicit-grid junction z0 must be real")
+    if not (junction_a.real > 0.0).all() or not (junction_b.real > 0.0).all():
+        raise ValueError("interpolated explicit-grid junction z0 must be positive")
+    if not np.array_equal(junction_a, junction_b):
+        raise ValueError("interpolated explicit-grid junction z0 must match exactly")
+
+    connected = skrf.network.connect(
+        interpolated_a,
+        COMPOSITION_PORT_A,
+        interpolated_b,
+        COMPOSITION_PORT_B,
+    )
+
+    source_frequency_a = np.asarray(network_a.f, dtype=np.float64)
+    source_frequency_b = np.asarray(network_b.f, dtype=np.float64)
+    source_s_a_readback = np.asarray(network_a.s, dtype=np.complex128)
+    source_z0_a_readback = np.asarray(network_a.z0, dtype=np.complex128)
+    source_s_b_readback = np.asarray(network_b.s, dtype=np.complex128)
+    source_z0_b_readback = np.asarray(network_b.z0, dtype=np.complex128)
+    output_frequency = np.asarray(connected.f, dtype=np.float64)
+    connected_s = np.asarray(connected.s, dtype=np.complex128)
+    connected_z0 = np.asarray(connected.z0, dtype=np.complex128)
+    if not np.array_equal(source_frequency_a, source_frequency_a_hz):
+        raise ValueError("scikit-rf changed explicit-grid A source frequencies")
+    if not np.array_equal(source_frequency_b, source_frequency_b_hz):
+        raise ValueError("scikit-rf changed explicit-grid B source frequencies")
+    if not np.array_equal(source_s_a_readback, source_s_a):
+        raise ValueError("scikit-rf changed explicit-grid A S inputs")
+    if not np.array_equal(source_z0_a_readback, source_z0_a):
+        raise ValueError("scikit-rf changed explicit-grid A z0 inputs")
+    if not np.array_equal(source_s_b_readback, source_s_b):
+        raise ValueError("scikit-rf changed explicit-grid B S inputs")
+    if not np.array_equal(source_z0_b_readback, source_z0_b):
+        raise ValueError("scikit-rf changed explicit-grid B z0 inputs")
+    if not np.array_equal(output_frequency, target_frequency_hz):
+        raise ValueError("scikit-rf changed explicit-grid target frequencies")
+    if not np.isfinite(connected_s).all() or not np.isfinite(connected_z0).all():
+        raise ValueError("explicit-grid connection output must be finite")
+
+    a_survivors = [port for port in range(COMPOSITION_NPORTS_A) if port != COMPOSITION_PORT_A]
+    b_survivors = [port for port in range(COMPOSITION_NPORTS_B) if port != COMPOSITION_PORT_B]
+    output_order = [
+        *({"network": "A", "port": port} for port in a_survivors),
+        *({"network": "B", "port": port} for port in b_survivors),
+    ]
+    shape = {
+        "frequency": list(output_frequency.shape),
+        "source_frequency_a": list(source_frequency_a.shape),
+        "source_frequency_b": list(source_frequency_b.shape),
+        "target_frequency": list(output_frequency.shape),
+        "input_s_a": list(source_s_a_readback.shape),
+        "input_s_b": list(source_s_b_readback.shape),
+        "input_z0_a": list(source_z0_a_readback.shape),
+        "input_z0_b": list(source_z0_b_readback.shape),
+        "output_s": list(connected_s.shape),
+        "output_z0": list(connected_z0.shape),
+    }
+    return {
+        "metadata": {
+            "case_id": case_id,
+            "interpolation": {
+                "basis": "s",
+                "coords": "cart",
+                "kind": "linear",
+                "scipy_version": version("scipy"),
+            },
+            "junction_ports": {"a": COMPOSITION_PORT_A, "b": COMPOSITION_PORT_B},
+            "numpy_version": np.__version__,
+            "operation": "connect_matched_on_grid",
+            "port_order": {
+                "a_survivors": a_survivors,
+                "b_survivors": b_survivors,
+                "description": (
+                    "A unconnected ports in original order, followed by B "
+                    "unconnected ports in original order"
+                ),
+                "output": output_order,
+            },
+            "random_seeds": {
+                "a": COMPOSITION_RANDOM_SEED_A,
+                "b": COMPOSITION_RANDOM_SEED_B,
+            },
+            "reference_impedance": {
+                "external_complex": True,
+                "external_frequency_dependent": True,
+                "junction_exactly_equal_after_interpolation": True,
+                "junction_frequency_dependent": False,
+                "junction_real_strictly_positive": True,
+                "unit": "ohm",
+            },
+            "schema": "rfkit-rs.oracle.fixture",
+            "schema_version": SCHEMA_VERSION,
+            "scikit_rf_version": skrf.__version__,
+            "shape": shape,
+            "tolerance_policy": {
+                "atol": COMPOSITION_ATOL,
+                "comparison": "abs(actual-expected) <= atol + rtol*abs(expected)",
+                "justification": COMPOSITION_TOLERANCE_JUSTIFICATION,
+                "regeneration": (
+                    "canonical UTF-8 JSON serialization; s_connected and "
+                    "z0_connected_ohm are checked with the recorded mixed "
+                    "numeric tolerance; inputs, grids, ordering, and metadata "
+                    "are checked exactly"
+                ),
+                "rtol": COMPOSITION_RTOL,
+            },
+            "wave_definition": connected.s_def,
+        },
+        "data": {
+            "frequency_hz": [float(value) for value in output_frequency],
+            "source_frequency_a_hz": [float(value) for value in source_frequency_a],
+            "source_frequency_b_hz": [float(value) for value in source_frequency_b],
+            "target_frequency_hz": [float(value) for value in output_frequency],
+            "s_a": _complex_array(source_s_a_readback),
+            "s_b": _complex_array(source_s_b_readback),
+            "s_connected": _complex_array(connected_s),
+            "z0_a_ohm": _complex_array(source_z0_a_readback),
+            "z0_b_ohm": _complex_array(source_z0_b_readback),
+            "z0_connected_ohm": _complex_array(connected_z0),
         },
     }
 
@@ -3796,6 +4121,13 @@ _CASES = (
         _interpolation_fixture,
         "numeric_output",
         ("s", "z0_ohm"),
+    ),
+    _OracleCase(
+        COMPOSITION_CASE_ID,
+        COMPOSITION_FIXTURE,
+        _composition_fixture,
+        "numeric_output",
+        ("s_connected", "z0_connected_ohm"),
     ),
     _OracleCase(
         CONNECT_CASE_ID,
