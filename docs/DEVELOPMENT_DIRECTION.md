@@ -17,10 +17,20 @@ Prefer progress that strengthens one or more of:
 1. numerical correctness and explicit RF semantics;
 2. foundational N-port operations with downstream leverage;
 3. network composition and transformation capability;
-4. practical analysis capability that can later support a stable public API;
+4. practical analysis capability that can support a coherent public API;
 5. conformance evidence needed to make those capabilities safe.
 
 The README initial scope is directional context, not an ordered backlog.
+
+### Public-API checkpoint
+
+The verified private `Network` foundations have reached the point where public usability is becoming higher-value than continuing to accumulate internal kernels. The human-approved first public surface and its semantic constraints are defined in `docs/PUBLIC_API.md`.
+
+Once the currently active explicit-grid matched-composition work is merged (PR #50 or an equivalent successor), the default next direction is to expose those verified capabilities through bounded public `Network` API increments under `docs/PUBLIC_API.md`.
+
+Do not route around this checkpoint by generating additional private-only RF kernels merely because public API work was previously an escalation boundary. A private prerequisite remains valid only when fresh repository evidence shows that it materially blocks correctness or implementation of the approved public surface.
+
+The approved design resolves the decisions written in `docs/PUBLIC_API.md`; implementing within those bounds does not require repeated human escalation. Material deviation from that design still does.
 
 ## What counts as meaningful progress
 
@@ -29,6 +39,7 @@ A sequence of autonomous changes should make it possible to answer at least one 
 - What RF operation can the library now perform that it could not perform before?
 - What previously unsafe or ambiguous behavior is now objectively characterized or corrected?
 - What foundational primitive now unlocks multiple useful downstream operations?
+- What verified internal capability is now usable through the approved public `Network` surface?
 - What important implementation or API decision can now be made safely because a concrete blocker was retired?
 
 A run may legitimately do nothing when no high-value bounded increment is available.
@@ -55,7 +66,8 @@ Do not autonomously:
 - generate one Issue per missing scikit-rf method;
 - add tests, fixtures, metadata, abstractions, or refactors mainly because they are easy to name;
 - repeatedly polish already-strong foundations while higher-value capability work is available;
-- freeze public APIs simply to make the next autonomous task convenient;
+- continue adding private-only kernels merely to avoid the approved public-API checkpoint;
+- freeze or broaden public APIs beyond `docs/PUBLIC_API.md` simply to make the next autonomous task convenient;
 - create speculative multi-Issue roadmaps that become stale before implementation.
 
 After two consecutive merged conformance-only increments, another conformance-only increment requires concrete repository evidence that it blocks correctness or safe capability growth.
@@ -66,7 +78,7 @@ After several consecutive cleanup/refactor/documentation-only increments, the pl
 
 Autonomous development must stop and escalate rather than invent policy when the next useful step requires a material decision about:
 
-- public API stability or breaking behavior;
+- public API semantics, models, defaults, stabilization, or breaking behavior not already approved by `docs/PUBLIC_API.md`;
 - competing RF definitions or wave conventions;
 - externally visible behavior where authoritative sources disagree;
 - unavailable paid standards, papers, datasets, or fixtures;

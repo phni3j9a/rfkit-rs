@@ -58,6 +58,14 @@ Prefer generated fixtures or a reproducible test runner over hand-copied expecte
 
 Keep the numerical core independent of plotting frameworks, Python, WASM, GUI frameworks, and instrument I/O. Add integrations as separate crates when they become necessary.
 
+## Public API
+
+Read `docs/PUBLIC_API.md` before any work that adds or changes public RF-analysis operations.
+
+That document is the human-approved policy for the first public `Network` surface. Implementing a bounded slice within it is authorized; changing its semantic distinctions, frequency policy, wave-policy approach, core model, or stabilization assumptions is not an implementation detail and must be escalated.
+
+Do not accumulate additional private-only RF kernels merely to route around the approved public-API checkpoint unless fresh repository evidence shows that a private prerequisite materially blocks correctness or implementation of the approved surface.
+
 ## Third-party provenance
 
 BSD-3-Clause permits reuse but attribution still matters. Do not erase lineage to make code appear original. If copying or closely adapting code, preserve the applicable copyright/license terms and log the source commit/path.
@@ -74,6 +82,7 @@ For the scheduled Codex Planner:
 - when an existing autonomous PR needs bounded, implementation-ready corrections, record or reuse a concrete change request for its current head and re-dispatch the same linked Issue for a correction pass instead of creating replacement work;
 - do not repeat an already-sufficient change request against an unchanged PR head merely to show activity;
 - choose at most one next Issue by marginal value under `docs/DEVELOPMENT_DIRECTION.md`;
+- after the public-API checkpoint in `docs/DEVELOPMENT_DIRECTION.md` is reached, prefer bounded public-usability increments from `docs/PUBLIC_API.md` over additional private-only capability unless a concrete prerequisite blocks them;
 - treat no-op as valid when useful bounded work is unavailable;
 - do not turn README scope, scikit-rf surface area, or `docs/CONFORMANCE.md` into a mechanical backlog;
 - never implement a newly dispatched Issue in the same Planner run;
@@ -89,6 +98,7 @@ For the scheduled Codex Worker:
 - when the dispatched Issue has exactly one unambiguously linked, safely writable open autonomous PR, apply the authorized correction to that PR's existing branch and do not create a duplicate PR;
 - fail closed when the Issue-to-PR relationship, correction request, or writable head branch is ambiguous;
 - use the Issue as the product contract and own the repository-specific implementation plan after inspection;
+- for public RF-operation work, implement within `docs/PUBLIC_API.md` and escalate rather than silently widening or reinterpreting that approved surface;
 - follow the configured IssueFlow `issue-to-pr` workflow: Codex Main plans/orchestrates, Luna MAX implements bounded product-code tasks, and a fresh Sol XHIGH independently reviews the integrated candidate;
 - Main owns deterministic verification, review-finding adjudication, Git, and PR creation;
 - do not silently substitute unspecified child models when required role routing is unavailable;
@@ -106,4 +116,5 @@ The `loop:*` labels are dispatch state, not feature taxonomy. Keep design decisi
 - scheduled implementation of untriaged open Issues without `loop:ready`
 - pre-generating a long autonomous roadmap when WIP=1 is configured
 - repeated conformance, cleanup, refactor, or documentation work without concrete marginal value
+- adding private-only RF capabilities primarily to avoid the approved public-API checkpoint
 - measuring autonomous-development quality by commit, Issue, PR, or test-count velocity alone
