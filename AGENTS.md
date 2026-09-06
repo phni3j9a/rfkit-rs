@@ -86,10 +86,14 @@ For the scheduled Codex Planner:
 - treat no-op as valid when useful bounded work is unavailable;
 - do not turn README scope, scikit-rf surface area, or `docs/CONFORMANCE.md` into a mechanical backlog;
 - never implement a newly dispatched Issue in the same Planner run;
+- remain repository-policy-driven; Axiom skill availability and implementation routing are Worker execution concerns, not Planner prerequisites;
 - apply the autonomous merge and escalation gates in `docs/LOOP_ENGINEERING.md`.
 
 For the scheduled Codex Worker:
 
+- if no `loop:ready` Issue exists, complete a normal no-op without loading Axiom or checking delegation routing;
+- after selecting one valid `loop:ready` Issue and before claiming it, discover and read the available `axiom:axiom` skill through runtime skill discovery; do not assume a hardcoded skill, plugin, or version path;
+- before claiming that Issue, verify that the runtime delegation surface exposes explicit `model` and `reasoning_effort` overrides needed to request `gpt-5.6-luna` at MAX for bounded implementation and a fresh `gpt-5.6-sol` at XHIGH for independent review; if the skill or routing is unavailable, fail closed and report the blocker rather than reinstalling IssueFlow, creating a replacement orchestrator, or substituting models;
 - only an open Issue explicitly marked `loop:ready` is permission to start an autonomous initial implementation or correction pass;
 - do not implement arbitrary open Issues merely because they exist;
 - claim the selected Issue before implementation by moving it from `loop:ready` to `loop:in-progress`;
@@ -99,9 +103,10 @@ For the scheduled Codex Worker:
 - fail closed when the Issue-to-PR relationship, correction request, or writable head branch is ambiguous;
 - use the Issue as the product contract and own the repository-specific implementation plan after inspection;
 - for public RF-operation work, implement within `docs/PUBLIC_API.md` and escalate rather than silently widening or reinterpreting that approved surface;
-- follow the configured IssueFlow `issue-to-pr` workflow: Codex Main plans/orchestrates, Luna MAX implements bounded product-code tasks, and a fresh Sol XHIGH independently reviews the integrated candidate;
-- Main owns deterministic verification, review-finding adjudication, Git, and PR creation;
-- do not silently substitute unspecified child models when required role routing is unavailable;
+- use Axiom as execution guidance: Codex Main plans, integrates, and accepts the work; Luna MAX implements bounded product-code tasks; and a fresh Sol XHIGH independently reviews the integrated candidate. Verify actual delegated turns from their requested spawn arguments, child `turn_context`, and `task_complete` evidence; a throwaway routing canary is not required;
+- independent bounded subtasks may run in parallel within the selected Issue, but this does not increase WIP or authorize another Issue;
+- within an active Worker pass/review cycle, retain the same Sol XHIGH reviewer session for re-review while the review boundary remains stable; each scheduled correction pass still obtains a fresh independent review;
+- Main owns deterministic verification, review-finding adjudication, Git, and PR creation or update;
 - if a material product/RF/licensing decision is unresolved, mark blocked and surface it rather than guessing.
 
 The `loop:*` labels are dispatch state, not feature taxonomy. Keep design decisions in repository policy, Issues, and PRs rather than encoding them in labels.

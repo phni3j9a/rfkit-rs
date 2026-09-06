@@ -4,6 +4,8 @@ This document defines the host-independent execution contract for the autonomous
 
 Repository policy decides **what** work is valid. Version-controlled prompt files in `automation/` provide the runtime role entrypoints. Systemd or another host scheduler should decide only **when and where** those prompts run.
 
+The available `axiom:axiom` skill guides Worker execution and delegation only. It does not replace repository policy or give the Planner a dependency on implementation routing.
+
 ## Source of truth
 
 Scheduled Codex must read and follow the current repository state, especially:
@@ -24,9 +26,13 @@ The scheduled Planner performs one repository-maintenance/planning cycle. It use
 
 The Planner does not implement product code and does not claim `loop:ready` work as a Worker.
 
+The Planner remains repository-policy-driven; it does not require the Axiom skill or Worker model routing to inspect state, choose work, or dispatch an Issue.
+
 ### Worker
 
-The scheduled Worker performs one implementation cycle. It may implement only an explicitly dispatched `loop:ready` Issue, claims exactly one Issue before work, follows the repository implementation/review/verification contract, and either creates its initial PR or updates its one unambiguously linked existing PR for a dispatched correction pass.
+The scheduled Worker performs one implementation cycle as the Main execution agent. It first checks fresh dispatch and WIP state; if no `loop:ready` Issue exists, it completes a normal no-op without requiring Axiom skill or delegation routing. After selecting one valid ready Issue and before claiming it, the Worker discovers and reads the available `axiom:axiom` skill at runtime without assuming a hardcoded skill, plugin, or version path. It then verifies that the runtime delegation surface exposes explicit `model` and `reasoning_effort` overrides for the named `gpt-5.6-luna` MAX implementation route and a fresh `gpt-5.6-sol` XHIGH review route. If the skill or routing is unavailable, it fails closed and reports the blocker rather than reinstalling IssueFlow, creating a replacement orchestrator, or substituting models.
+
+The Worker may implement only an explicitly dispatched `loop:ready` Issue, claims exactly one Issue before work, and uses Axiom to delegate bounded implementation and independent review while Main retains the repository-specific plan, integration, deterministic verification, review-finding adjudication, Git, and PR creation or update. Actual delegated turns must be checked using requested spawn arguments, child `turn_context`, and `task_complete` evidence; a throwaway routing canary is not required. Independent bounded subtasks may run in parallel within the same Issue without increasing WIP. Within an active Worker pass/review cycle, the same Sol XHIGH reviewer session is retained for re-review while the review boundary remains stable; each scheduled correction pass obtains a fresh independent review.
 
 The Worker does not choose speculative roadmap work and does not claim a second Issue in the same run.
 
@@ -75,7 +81,7 @@ codex exec "$(cat automation/planner-prompt.txt)"
 codex exec "$(cat automation/worker-prompt.txt)"
 ```
 
-Do not copy the prompt body into the unit file. Do not add host-specific strategic instructions that compete with repository policy.
+Do not copy the prompt body into the unit file. Do not add host-specific strategic instructions that compete with repository policy. Do not hardcode an Axiom skill, plugin, or version path in the unit or wrapper; the Worker discovers the skill at runtime.
 
 See `automation/README.md` for host-integration requirements.
 
@@ -85,7 +91,7 @@ Before enabling scheduled execution, verify that:
 
 1. the checkout can fetch, push, create/update Issues and PRs, and merge when authorized;
 2. Codex can read the repository policy and runtime prompt files;
-3. required IssueFlow/model routing used by the repository workflow is available;
+3. the Worker runtime can discover/read the available Axiom skill and exposes explicit model/effort routing for the named Luna MAX and fresh Sol XHIGH roles; the Planner has no such dependency;
 4. GitHub and Codex authentication work non-interactively under the systemd service account;
 5. `HOME`, `PATH`, working directory, and other required environment are explicit enough for non-interactive execution;
 6. Planner and Worker share a host-level lock so they cannot mutate the same checkout concurrently;

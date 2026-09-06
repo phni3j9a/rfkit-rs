@@ -15,21 +15,23 @@ Perform exactly one Worker cycle as defined by the repository policy.
 
 Only an open Issue explicitly marked loop:ready authorizes an initial implementation or correction pass.
 
-If no loop:ready Issue exists, exit without implementing unrelated work.
+If no loop:ready Issue exists, exit as a normal no-op without loading Axiom or checking delegation routing; do not implement unrelated work.
 
 If more than one loop:ready Issue exists, treat it as a WIP invariant violation and exit without choosing one silently.
 
 If exactly one exists, verify that it has no conflicting loop state and that no other active Issue or unresolved autonomous PR violates WIP=1. Inspect its fresh GitHub relationships and determine whether it has no current or historical associated PR (initial implementation) or exactly one unambiguously closing-linked open autonomous PR with no closed/unmerged PR history (correction pass). Treat multiple or ambiguous linked PRs, any closed/unmerged historical PR whether or not an open PR also exists, an unclear current-head change request, a non-`main` base, or an unwritable existing head as a fail-closed condition.
 
+After selecting one valid `loop:ready` Issue and before claiming it, discover and read the currently available `axiom:axiom` skill through the runtime skill surface. Do not assume a hardcoded skill, plugin, or version path. Verify that the delegation surface exposes explicit `model` and `reasoning_effort` overrides needed to request `gpt-5.6-luna` at MAX for bounded implementation and a fresh `gpt-5.6-sol` at XHIGH for independent review. If the skill or routing is unavailable, fail closed and report the blocker; do not reinstall IssueFlow, create a replacement orchestrator, or substitute models. A throwaway routing canary is not required; actual delegated turns must provide the requested spawn arguments, child `turn_context`, and `task_complete` evidence.
+
 Claim the Issue according to repository policy before implementation. If the claim cannot be established safely, do not implement.
 
 Before editing, record the claim/run identity and intended branch as required by repository policy. If this is a recovered initial pass, inspect its recovery evidence and handle preserved work through the normal implementation/review workflow. Never re-authorize an in-progress Issue yourself.
 
-For a correction pass, revalidate the Issue, PR, head SHA, current-head change request, base, and branch ownership after claiming. Then fetch and check out the exact existing PR head, apply only the bounded requested corrections, and push normally to the same repository branch so the same PR is updated. Do not force-push or create a replacement Issue, branch, or PR. Stop rather than overwrite the branch if fresh state differs or its remote head changed after inspection.
+For a correction pass, revalidate the Issue, PR, head SHA, current-head change request, base, and branch ownership after claiming. Then fetch and check out the exact existing PR head, apply only the bounded requested corrections through Axiom-guided delegation, and have Main run deterministic verification, adjudicate review findings, and push normally to the same repository branch so the same PR is updated. Within this active Worker pass/review cycle, reuse the same Sol XHIGH reviewer session for re-review while the review boundary remains stable; each scheduled correction pass obtains a fresh independent review. Do not force-push or create a replacement Issue, branch, or PR. Stop rather than overwrite the branch if fresh state differs or its remote head changed after inspection.
 
 Treat the Issue as the product contract. Inspect the current repository and own the implementation plan rather than expecting implementation details from the scheduler prompt.
 
-Implement the authorized pass end-to-end using the repository's required workflow, including deterministic verification, independent review, numerical/conformance requirements, provenance handling, Git operations, and pull-request creation or update as appropriate.
+Execute the authorized pass end-to-end with Axiom as execution guidance: Main delegates bounded product-code implementation to the named Luna MAX route and independent review to a fresh named Sol XHIGH route, while Main owns integration, deterministic verification, review-finding adjudication, provenance handling, Git operations, and pull-request creation or update. Independent bounded subtasks may run in parallel within this Issue when useful; this does not increase WIP or authorize another Issue. Follow all repository numerical/conformance requirements.
 
 Do not claim a second Issue in the same run. Do not create unrelated Issues or expand the task into speculative follow-up work.
 
