@@ -24,19 +24,25 @@ The scheduled planner owns repository-level progress decisions during normal aut
 
 The planner decides **what should happen next**, but does not pre-prescribe routine implementation details. The worker owns repository-specific implementation planning after claiming the Issue.
 
+The Planner remains repository-policy-driven and does not depend on Axiom skill availability or implementation routing.
+
 ### Codex Worker
 
 The scheduled worker owns execution of one dispatched Issue:
 
 - find exactly one `loop:ready` Issue authorizing either initial implementation or a correction pass;
+- if no `loop:ready` Issue exists, complete a normal no-op without requiring Axiom skill or delegation routing;
+- after selecting one valid `loop:ready` Issue and before claiming it, discover and read the available `axiom:axiom` skill through runtime skill discovery; do not assume a hardcoded skill, plugin, or version path;
+- before claiming it, verify that the runtime delegation surface exposes explicit `model` and `reasoning_effort` overrides needed to request `gpt-5.6-luna` at MAX for bounded implementation and a fresh `gpt-5.6-sol` at XHIGH for independent review. If the skill or routing is unavailable, fail closed and report the blocker rather than reinstalling IssueFlow, creating a replacement orchestrator, or substituting models;
 - claim it before implementation;
 - update its existing autonomous PR rather than opening a duplicate when the dispatch is for bounded corrections;
 - read `AGENTS.md`, repository policy, and the Issue contract;
 - inspect the repository and create the implementation plan;
-- implement through the configured IssueFlow `issue-to-pr` workflow;
-- run deterministic verification;
-- obtain independent review;
-- perform Git operations and open the PR.
+- use Axiom as execution guidance to delegate bounded product-code implementation to the named Luna MAX route and independent review to a fresh named Sol XHIGH route, while Main retains integration and acceptance;
+- verify actual delegated turns from their requested spawn arguments, child `turn_context`, and `task_complete` evidence; a throwaway routing canary is not required;
+- allow independent bounded subtasks to run in parallel within the selected Issue when useful, without increasing WIP or authorizing another Issue;
+- have Main run deterministic verification, adjudicate review findings, perform Git operations, and create or update the PR;
+- within an active Worker pass/review cycle, retain the same Sol XHIGH reviewer session for re-review while the review boundary remains stable; each scheduled correction pass still obtains a fresh independent review.
 
 ### ChatGPT governor / auditor
 
@@ -140,7 +146,7 @@ After selecting exactly one `loop:ready` Issue, the Worker must verify that it c
 - with exactly one closing-linked open autonomous PR, perform a correction pass against that PR;
 - with an ambiguous Issue-to-PR relationship, more than one linked open PR, or any closed/unmerged historical PR whether or not an open PR also exists, fail closed without choosing a target.
 
-For a correction pass, the Worker must verify the current-head change request, claim the Issue by replacing `loop:ready` with `loop:in-progress`, and re-read the Issue, PR, head SHA, change request, base, and branch ownership before editing. It then fetches and checks out the exact existing head and applies only the requested bounded correction through the normal IssueFlow implementation, verification, and independent-review workflow. Main commits and pushes normally to the same branch so the same PR is updated. The Worker must not force-push, open a replacement PR, or broaden the Issue contract. If fresh revalidation differs from the claimed state or the remote head changes after inspection, the Worker must stop rather than overwrite concurrent work and let a later Planner cycle decide the next safe transition.
+For a correction pass, the Worker must verify the current-head change request, claim the Issue by replacing `loop:ready` with `loop:in-progress`, and re-read the Issue, PR, head SHA, change request, base, and branch ownership before editing. It then fetches and checks out the exact existing head and applies only the requested bounded correction through the Axiom-guided implementation and independent-review execution described above. Main runs deterministic verification, adjudicates review findings, and commits and pushes normally to the same branch so the same PR is updated. Within this active Worker pass/review cycle, the same Sol XHIGH reviewer session is reused for re-review while the review boundary remains stable; each scheduled correction pass obtains a fresh independent review. The Worker must not force-push, open a replacement PR, or broaden the Issue contract. If fresh revalidation differs from the claimed state or the remote head changes after inspection, the Worker must stop rather than overwrite concurrent work and let a later Planner cycle decide the next safe transition.
 
 After the PR is updated, the Issue remains `loop:in-progress` until the next Planner cycle merges, re-dispatches another bounded correction, blocks, or escalates it.
 
@@ -164,7 +170,7 @@ If a run stops between the recovery comment and label update, a later Planner ma
 
 When termination, provenance, ownership, or relationships cannot be established, leave potentially live work untouched and record a concise blocker/required evidence on the Issue. If termination is established but safe restart is not, replace its loop state with `loop:blocked`. Reuse an adequate comment for unchanged evidence instead of repeatedly posting. A journal-only no-op is insufficient when an orphaned claim requires intervention.
 
-After recovery dispatch, the Worker uses the normal initial implementation workflow on the same Issue, with the normal claim, verification, fresh independent review, and one PR. Before product edits, it records a claim comment containing the host run ID (when supplied), base SHA and intended branch, and verifies the claim again. It may inspect clearly attributed preserved work and reapply useful changes into its fresh checkout through the usual implementation workflow; it must not alter the archive, treat an old review as current, or push over an unexplained remote branch. Missing or ambiguous recovery evidence must be surfaced, not guessed. The Worker never changes an unready Issue to ready itself.
+After recovery dispatch, the Worker uses the normal Axiom-guided initial implementation execution on the same Issue, with the normal claim, verification, fresh independent review, and one PR. Before product edits, it records a claim comment containing the host run ID (when supplied), base SHA and intended branch, and verifies the claim again. It may inspect clearly attributed preserved work and reapply useful changes into its fresh checkout through the usual bounded delegation; it must not alter the archive, treat an old review as current, or push over an unexplained remote branch. Missing or ambiguous recovery evidence must be surfaced, not guessed. The Worker never changes an unready Issue to ready itself.
 
 ## Choosing the next Issue
 
