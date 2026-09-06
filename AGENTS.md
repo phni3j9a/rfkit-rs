@@ -93,7 +93,8 @@ For the scheduled Codex Worker:
 
 - if no `loop:ready` Issue exists, complete a normal no-op without loading Axiom or checking delegation routing;
 - after selecting one valid `loop:ready` Issue and before claiming it, discover and read the available `axiom:axiom` skill through runtime skill discovery; do not assume a hardcoded skill, plugin, or version path;
-- before claiming that Issue, verify that the runtime delegation surface exposes explicit `model` and `reasoning_effort` overrides needed to request `gpt-5.6-luna` at MAX for bounded implementation and a fresh `gpt-5.6-sol` at XHIGH for independent review; if the skill or routing is unavailable, fail closed and report the blocker rather than reinstalling IssueFlow, creating a replacement orchestrator, or substituting models;
+- before claiming that Issue, verify that the directly exposed `collaboration.spawn_agent` tool definition includes explicit `model` and `reasoning_effort` parameters needed to request `gpt-5.6-luna` at MAX for bounded implementation and a fresh `gpt-5.6-sol` at XHIGH for independent review; if the skill or routing is unavailable, fail closed and report the blocker rather than reinstalling IssueFlow, creating a replacement orchestrator, or substituting models;
+- inspect the direct collaboration tool definitions separately from `functions.exec`: its `ALL_TOOLS` and `tools.*` registry intentionally omit collaboration tools, so an empty registry search is not evidence that delegation is unavailable; invoke collaboration tools directly using their exposed tool recipients;
 - only an open Issue explicitly marked `loop:ready` is permission to start an autonomous initial implementation or correction pass;
 - do not implement arbitrary open Issues merely because they exist;
 - claim the selected Issue before implementation by moving it from `loop:ready` to `loop:in-progress`;

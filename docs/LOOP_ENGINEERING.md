@@ -33,7 +33,7 @@ The scheduled worker owns execution of one dispatched Issue:
 - find exactly one `loop:ready` Issue authorizing either initial implementation or a correction pass;
 - if no `loop:ready` Issue exists, complete a normal no-op without requiring Axiom skill or delegation routing;
 - after selecting one valid `loop:ready` Issue and before claiming it, discover and read the available `axiom:axiom` skill through runtime skill discovery; do not assume a hardcoded skill, plugin, or version path;
-- before claiming it, verify that the runtime delegation surface exposes explicit `model` and `reasoning_effort` overrides needed to request `gpt-5.6-luna` at MAX for bounded implementation and a fresh `gpt-5.6-sol` at XHIGH for independent review. If the skill or routing is unavailable, fail closed and report the blocker rather than reinstalling IssueFlow, creating a replacement orchestrator, or substituting models;
+- before claiming it, verify that the directly exposed `collaboration.spawn_agent` tool definition includes explicit `model` and `reasoning_effort` parameters needed to request `gpt-5.6-luna` at MAX for bounded implementation and a fresh `gpt-5.6-sol` at XHIGH for independent review. If the skill or routing is unavailable, fail closed and report the blocker rather than reinstalling IssueFlow, creating a replacement orchestrator, or substituting models;
 - claim it before implementation;
 - update its existing autonomous PR rather than opening a duplicate when the dispatch is for bounded corrections;
 - read `AGENTS.md`, repository policy, and the Issue contract;
