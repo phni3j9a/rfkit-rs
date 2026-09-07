@@ -117,6 +117,8 @@ pub enum ConversionStage {
     SToZ,
     /// Conversion from impedance parameters to admittance parameters.
     ZToY,
+    /// Conversion from impedance parameters to scattering parameters.
+    ZToS,
 }
 
 impl fmt::Display for ConversionStage {
@@ -124,6 +126,7 @@ impl fmt::Display for ConversionStage {
         formatter.write_str(match self {
             Self::SToZ => "S→Z",
             Self::ZToY => "Z→Y",
+            Self::ZToS => "Z→S",
         })
     }
 }
@@ -311,6 +314,80 @@ impl Network {
     pub fn to_y_power(&self) -> Result<Array3<Complex64>> {
         power_wave_admittance::s_to_y_power(&self.s, &self.z0)
             .map_err(map_power_wave_admittance_error)
+    }
+
+    /// Re-expresses this network at explicit reference impedances using
+    /// Kurokawa power-wave renormalization.
+    ///
+    /// The operation is composed as `S→Z` using this network's stored source
+    /// references, followed by `Z→S` using `new_z0` as the target references.
+    /// It therefore preserves the underlying physical impedance network while
+    /// changing only the representation of the scattering parameters.  The
+    /// target array must have shape `(nfreq, nport)`, where `nfreq` is this
+    /// network's frequency count and `nport` is its port count.  Complex,
+    /// per-port, and frequency-dependent references are accepted whenever the
+    /// Kurokawa normalization domain is defined, including finite references
+    /// with negative real parts; normalization uses the existing
+    /// `abs(Re(z0))` rule.  Zero-real and non-finite references are rejected.
+    ///
+    /// The returned [`Network`] is newly owned.  Its frequency axis and port
+    /// ordering are exact clones of this network, its S-parameters are the
+    /// target-referenced result, and its reference impedances are exactly the
+    /// supplied `new_z0`.  This method does not modify the source network.
+    ///
+    /// Because this is the verified two-stage conversion path, an exact
+    /// singularity in either stage is an error.  Equal source and target
+    /// references do not bypass a singular `S→Z` stage, and no near-singular
+    /// tolerance, regularization, or identity shortcut is applied.  The
+    /// public error preserves whether a failure occurred in the source `S→Z`
+    /// or target `Z→S` stage together with available frequency, port, row,
+    /// column, and pivot context.
+    ///
+    /// This method is provisional while `rfkit-core` is in the `0.x` series;
+    /// its name and signature are not a `1.0` stability promise.
+    ///
+    /// # Errors
+    ///
+    /// Returns a structured [`Error`] if `new_z0` has the wrong shape, either
+    /// reference array contains invalid values, either conversion stage is
+    /// exactly singular, or a non-finite intermediate/result is produced.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use ndarray::{Array2, Array3};
+    /// use num_complex::Complex64;
+    /// use rfkit_core::{Frequency, Network};
+    ///
+    /// # fn example() -> rfkit_core::Result<()> {
+    /// let frequency = Frequency::from_hz(vec![1.0e9])?;
+    /// let source_z0 = Array2::from_elem((1, 1), Complex64::new(50.0, 0.0));
+    /// let s = Array3::from_elem((1, 1, 1), Complex64::new(0.2, -0.1));
+    /// let source = Network::new(frequency, s, source_z0)?;
+    /// let source_z = source.to_z_power()?;
+    ///
+    /// let target_z0 = Array2::from_elem((1, 1), Complex64::new(75.0, 0.0));
+    /// let target = source.renormalize_power(target_z0)?;
+    /// assert_eq!(target.z0()[[0, 0]], Complex64::new(75.0, 0.0));
+    /// let target_z = target.to_z_power()?;
+    /// assert!(target_z
+    ///     .iter()
+    ///     .zip(source_z.iter())
+    ///     .all(|(actual, expected)| (*actual - *expected).norm() <= 1.0e-12));
+    /// # Ok(())
+    /// # }
+    /// # example().unwrap();
+    /// ```
+    pub fn renormalize_power(&self, new_z0: Array2<Complex64>) -> Result<Network> {
+        let z = power_waves::s_to_z_power(&self.s, &self.z0)
+            .map_err(|error| map_power_wave_error(ConversionStage::SToZ, error))?;
+        let s = power_waves::z_to_s_power(&z, &new_z0)
+            .map_err(|error| map_power_wave_error(ConversionStage::ZToS, error))?;
+
+        // The target shape has already been checked by z_to_s_power.  Given
+        // the source Network invariants, constructing the owned result cannot
+        // fail; retain the public constructor as the single invariant gate.
+        Network::new(self.frequency.clone(), s, new_z0)
     }
 }
 
