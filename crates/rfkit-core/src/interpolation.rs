@@ -128,7 +128,6 @@ struct InputShape {
 /// source span.  No extrapolation is performed.  A target that is exactly a
 /// source sample copies the complete source slice, preserving that slice
 /// without interpolation arithmetic.
-#[allow(dead_code)] // Internal kernel is staged for a future Network call site.
 pub(crate) fn interpolate_cartesian_linear(
     source_frequency_hz: &[f64],
     s: &Array3<Complex64>,
