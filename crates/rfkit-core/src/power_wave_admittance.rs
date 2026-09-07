@@ -13,9 +13,9 @@
 //!
 //! Thus S→Y is the composition `S → Z → Y`, and Y→S is `Y → Z → S` under
 //! the same explicit Kurokawa convention.  Reference impedances remain
-//! complex, per-port, and frequency-dependent through each stage.  No public
-//! Network API is exposed here; callers are kept on the internal, verified
-//! conversion boundary until a public API contract is specified.
+//! complex, per-port, and frequency-dependent through each stage.  Public
+//! [`crate::Network`] methods call these kernels and map their stage-specific
+//! errors to the crate-level error boundary.
 
 use ndarray::{Array2, Array3};
 use num_complex::Complex64;
@@ -50,7 +50,6 @@ pub(crate) enum PowerWaveAdmittanceError {
 /// [`crate::power_waves::s_to_z_power`] followed by
 /// [`crate::impedance_admittance::z_to_y`].  This preserves the existing
 /// complex-Z0 semantics and exact-zero singularity policy at each stage.
-#[allow(dead_code)] // Internal kernel is staged for a future Network call site.
 pub(crate) fn s_to_y_power(
     s: &Array3<Complex64>,
     z0: &Array2<Complex64>,
