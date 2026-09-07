@@ -17,8 +17,9 @@
 //! `Z = F^-1 (I - S)^-1 (S G + G*) F`.  A zero real part in any reference
 //! impedance makes this normalization undefined, so the kernel returns a
 //! private error rather than producing a non-finite value.  It deliberately
-//! works on the frequency-major arrays used by [`crate::Network`] and does
-//! not expose a public conversion API yet.
+//! works on the frequency-major arrays used by [`crate::Network`]; the public
+//! [`crate::Network::to_z_power`] method maps its errors to the crate-level
+//! boundary.
 
 use ndarray::{Array2, Array3};
 use num_complex::Complex64;
@@ -104,7 +105,6 @@ pub(crate) enum PowerWaveError {
 /// Gaussian elimination with partial pivoting.  No explicit matrix inverse,
 /// near-singular tolerance, or pivot nudge is used.  A pivot is singular only
 /// when the selected complex value is exactly zero.
-#[allow(dead_code)] // Internal kernel is staged for future Network conversion call sites; unit tests exercise it now.
 pub(crate) fn s_to_z_power(
     s: &Array3<Complex64>,
     z0: &Array2<Complex64>,
@@ -221,7 +221,7 @@ pub(crate) fn s_to_z_power(
 /// existing exact-pivot left solver is reused by transposing the two systems
 /// without conjugation: `A^T S^T = B^T`.  This avoids an explicit matrix
 /// inverse and preserves the exact-zero-pivot singularity rule.
-#[allow(dead_code)] // Internal kernel is staged for future Network conversion call sites; unit tests exercise it now.
+#[allow(dead_code)] // Internal kernel is staged for a future Network call site.
 pub(crate) fn z_to_s_power(
     z: &Array3<Complex64>,
     z0: &Array2<Complex64>,
@@ -346,7 +346,7 @@ pub(crate) fn z_to_s_power(
 /// policy: malformed shapes, non-finite values, and zero-real reference
 /// impedances are rejected, and only an exactly-zero selected pivot is
 /// considered singular (no near-singular tolerance, pivot nudge, or fallback).
-#[allow(dead_code)] // Internal kernel is staged for future Network conversion call sites; unit tests exercise it now.
+#[allow(dead_code)] // Internal kernel is staged for a future Network call site.
 pub(crate) fn renormalize_s_power(
     s: &Array3<Complex64>,
     source_z0: &Array2<Complex64>,
