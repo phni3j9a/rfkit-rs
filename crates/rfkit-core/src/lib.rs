@@ -180,6 +180,124 @@ pub enum Error {
         row: usize,
         column: usize,
     },
+
+    #[error("{input} connection S-parameter shape must be (nfreq, nport, nport), got {shape:?}")]
+    InvalidConnectionSShape {
+        input: ConnectionInput,
+        shape: Vec<usize>,
+    },
+
+    #[error("{input} connection reference-impedance shape must be (nfreq, nport), got {shape:?}")]
+    InvalidConnectionZ0Shape {
+        input: ConnectionInput,
+        shape: Vec<usize>,
+    },
+
+    #[error("{input} connection frequency axis must not be empty")]
+    EmptyConnectionFrequency { input: ConnectionInput },
+
+    #[error(
+        "{input} connection frequency axis length does not match S-parameter frequency dimension: expected {expected}, got {actual}"
+    )]
+    ConnectionFrequencyShape {
+        input: ConnectionInput,
+        expected: usize,
+        actual: usize,
+    },
+
+    #[error("A and B connection frequency axes have different lengths: A={a}, B={b}")]
+    ConnectionFrequencyLengthMismatch { a: usize, b: usize },
+
+    #[error("connection frequency axes differ at index {index}: A={a:?}, B={b:?}")]
+    ConnectionFrequencyMismatch { index: usize, a: f64, b: f64 },
+
+    #[error("{input} connection frequency is non-finite at index {index}: {value:?}")]
+    NonFiniteConnectionFrequency {
+        input: ConnectionInput,
+        index: usize,
+        value: f64,
+    },
+
+    #[error(
+        "{input} connection S-parameter is non-finite at frequency {frequency}, row {row}, column {column}"
+    )]
+    NonFiniteConnectionS {
+        input: ConnectionInput,
+        frequency: usize,
+        row: usize,
+        column: usize,
+    },
+
+    #[error(
+        "{input} connection reference impedance is non-finite at frequency {frequency}, port {port}"
+    )]
+    NonFiniteConnectionZ0 {
+        input: ConnectionInput,
+        frequency: usize,
+        port: usize,
+    },
+
+    #[error("{input} connection port {port} is out of range for {nports} ports")]
+    InvalidConnectionPort {
+        input: ConnectionInput,
+        port: usize,
+        nports: usize,
+    },
+
+    #[error(
+        "{input} connection junction reference impedance is not finite, real, and strictly positive at frequency {frequency}, port {port}: {value:?}"
+    )]
+    InvalidConnectionJunctionZ0 {
+        input: ConnectionInput,
+        frequency: usize,
+        port: usize,
+        value: Complex64,
+    },
+
+    #[error("connected reference impedances differ at frequency {frequency}: A={a:?}, B={b:?}")]
+    MismatchedConnectionJunctionZ0 {
+        frequency: usize,
+        a: Complex64,
+        b: Complex64,
+    },
+
+    #[error("connecting the selected ports leaves no external ports")]
+    NoExternalConnectionPorts,
+
+    #[error("matched-junction connection is exactly singular at frequency {frequency}")]
+    SingularConnection { frequency: usize },
+
+    #[error(
+        "non-finite value while evaluating matched-junction connection at frequency {frequency}, output row {row}, column {column}"
+    )]
+    NonFiniteConnectionComputation {
+        frequency: usize,
+        row: usize,
+        column: usize,
+    },
+}
+
+/// Identifies which input supplied a connection value or triggered a
+/// connection validation error.
+///
+/// `A` denotes the receiver (`self`) and the private kernel's input A; `B`
+/// denotes the `other` network and the private kernel's input B.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnectionInput {
+    /// The receiver network (`self`, kernel input A).
+    A,
+    /// The network passed as `other` (kernel input B).
+    B,
+}
+
+impl fmt::Display for ConnectionInput {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::A => "A (self)",
+            Self::B => "B (other)",
+        })
+    }
 }
 
 /// Axis associated with a structured interpolation error.
@@ -582,6 +700,109 @@ impl Network {
         let frequency = Frequency::from_hz(interpolated.frequency_hz)?;
         Network::new(frequency, interpolated.s, interpolated.z0)
     }
+
+    /// Connects one port of this network to one port of `other` through a
+    /// matched Kurokawa power-wave junction.
+    ///
+    /// The operation uses the existing exact-grid matched-connection kernel.
+    /// The two frequency axes must both be non-empty and finite, have equal
+    /// lengths, and contain exactly equal values at corresponding indices.
+    /// Equality is Rust's `f64` equality: finite negative, duplicate, and
+    /// descending samples are accepted, and `-0.0` equals `+0.0`.  A
+    /// single-frequency grid is valid.  No grid is selected or inferred; this
+    /// method does not sort, deduplicate, interpolate, extrapolate, or
+    /// otherwise resample either input.  A's frequency values
+    /// (`self.frequency()`) are copied into the result exactly.
+    ///
+    /// The selected reference impedances must be finite, real, strictly
+    /// positive, and exactly equal at every frequency.  They are the matched
+    /// junction impedance, and may be non-50-ohm and frequency-dependent.
+    /// This requirement is distinct from the surviving external references:
+    /// those values may be any finite complex impedances admitted by the
+    /// connection kernel and are copied without conversion-specific
+    /// positive-real restrictions.
+    ///
+    /// If `k` and `l` are the selected ports of A and B, and `EA` and `EB` are
+    /// the surviving ports in their original order, the elimination equation
+    /// is
+    ///
+    /// ```text
+    /// D     = 1 - S_A[k,k] S_B[l,l]
+    /// C_AA = S_A[EA,EA] + S_A[EA,k] S_B[l,l] S_A[k,EA] / D
+    /// C_AB = S_A[EA,k] S_B[l,EB] / D
+    /// C_BA = S_B[EB,l] S_A[k,EA] / D
+    /// C_BB = S_B[EB,EB] + S_B[EB,l] S_A[k,k] S_B[l,EB] / D.
+    /// ```
+    ///
+    /// The denominator is classified as singular only when its computed
+    /// complex value is exactly zero.  No conditioning threshold,
+    /// regularization, or mismatch renormalization is applied.  The returned
+    /// network is newly owned, has `self.nports() + other.nports() - 2`
+    /// ports, and orders them as A survivors followed by B survivors.  Its
+    /// survivor `z0` values are copied in that same order.  Neither input,
+    /// their arrays, nor their frequency axes is modified.  Ports are
+    /// zero-based.
+    ///
+    /// This operation is provisional while `rfkit-core` is in the `0.x`
+    /// series; its name and signature are not a `1.0` stability promise.
+    ///
+    /// # Errors
+    ///
+    /// Returns a structured connection-specific [`Error`].  `A`
+    /// ([`ConnectionInput::A`]) identifies `self` and kernel input A; `B`
+    /// ([`ConnectionInput::B`]) identifies `other` and kernel input B.  The
+    /// error preserves invalid port/count, exact-grid, source-data location,
+    /// junction impedance, no-survivor, exact-singularity, and non-finite
+    /// computation context.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use ndarray::{Array2, Array3};
+    /// use num_complex::Complex64;
+    /// use rfkit_core::{Frequency, Network};
+    ///
+    /// # fn example() -> rfkit_core::Result<()> {
+    /// let frequency = Frequency::from_hz(vec![1.0e9])?;
+    /// let left = Network::new(
+    ///     frequency.clone(),
+    ///     Array3::zeros((1, 2, 2)),
+    ///     Array2::from_elem((1, 2), Complex64::new(50.0, 0.0)),
+    /// )?;
+    /// let right = Network::new(
+    ///     frequency,
+    ///     Array3::zeros((1, 2, 2)),
+    ///     Array2::from_elem((1, 2), Complex64::new(50.0, 0.0)),
+    /// )?;
+    ///
+    /// let connected = left.connect_matched_power(0, &right, 0)?;
+    /// assert_eq!(connected.nports(), 2);
+    /// assert_eq!(connected.s().dim(), (1, 2, 2));
+    /// # Ok(())
+    /// # }
+    /// # example().unwrap();
+    /// ```
+    pub fn connect_matched_power(
+        &self,
+        port: usize,
+        other: &Network,
+        other_port: usize,
+    ) -> Result<Network> {
+        let connected = connection::connect_matched(
+            self.frequency.hz(),
+            &self.s,
+            &self.z0,
+            port,
+            other.frequency.hz(),
+            &other.s,
+            &other.z0,
+            other_port,
+        )
+        .map_err(map_connection_error)?;
+
+        let frequency = Frequency::from_hz(connected.frequency_hz)?;
+        Network::new(frequency, connected.s, connected.z0)
+    }
 }
 
 fn map_power_wave_admittance_error(
@@ -702,6 +923,119 @@ fn map_interpolation_error(error: interpolation::InterpolationError) -> Error {
                 interpolation::InterpolationQuantity::Z0 => InterpolationQuantity::Z0,
             },
             target,
+            row,
+            column,
+        },
+    }
+}
+
+fn map_connection_input(input: connection::NetworkSide) -> ConnectionInput {
+    match input {
+        connection::NetworkSide::A => ConnectionInput::A,
+        connection::NetworkSide::B => ConnectionInput::B,
+    }
+}
+
+fn map_connection_error(error: connection::ConnectionError) -> Error {
+    match error {
+        connection::ConnectionError::InvalidSShape { network, shape } => {
+            Error::InvalidConnectionSShape {
+                input: map_connection_input(network),
+                shape: vec![shape.0, shape.1, shape.2],
+            }
+        }
+        connection::ConnectionError::InvalidZ0Shape { network, shape } => {
+            Error::InvalidConnectionZ0Shape {
+                input: map_connection_input(network),
+                shape: vec![shape.0, shape.1],
+            }
+        }
+        connection::ConnectionError::EmptyFrequency { network } => {
+            Error::EmptyConnectionFrequency {
+                input: map_connection_input(network),
+            }
+        }
+        connection::ConnectionError::FrequencyShape {
+            network,
+            expected,
+            actual,
+        } => Error::ConnectionFrequencyShape {
+            input: map_connection_input(network),
+            expected,
+            actual,
+        },
+        connection::ConnectionError::FrequencyLengthMismatch { a, b } => {
+            Error::ConnectionFrequencyLengthMismatch { a, b }
+        }
+        connection::ConnectionError::FrequencyMismatch { index, a, b } => {
+            Error::ConnectionFrequencyMismatch { index, a, b }
+        }
+        connection::ConnectionError::NonFiniteFrequency {
+            network,
+            index,
+            value,
+        } => Error::NonFiniteConnectionFrequency {
+            input: map_connection_input(network),
+            index,
+            value,
+        },
+        connection::ConnectionError::NonFiniteS {
+            network,
+            frequency,
+            row,
+            column,
+        } => Error::NonFiniteConnectionS {
+            input: map_connection_input(network),
+            frequency,
+            row,
+            column,
+        },
+        connection::ConnectionError::NonFiniteZ0 {
+            network,
+            frequency,
+            port,
+        } => Error::NonFiniteConnectionZ0 {
+            input: map_connection_input(network),
+            frequency,
+            port,
+        },
+        connection::ConnectionError::InvalidPort {
+            network,
+            port,
+            nports,
+        } => Error::InvalidConnectionPort {
+            input: map_connection_input(network),
+            port,
+            nports,
+        },
+        connection::ConnectionError::InvalidInnerPort { .. }
+        | connection::ConnectionError::IdenticalInnerPorts { .. } => {
+            unreachable!("two-network connection kernel returned an inner-connect error")
+        }
+        connection::ConnectionError::InvalidJunctionZ0 {
+            network,
+            frequency,
+            port,
+            value,
+        } => Error::InvalidConnectionJunctionZ0 {
+            input: map_connection_input(network),
+            frequency,
+            port,
+            value,
+        },
+        connection::ConnectionError::MismatchedJunctionZ0 { frequency, a, b } => {
+            Error::MismatchedConnectionJunctionZ0 { frequency, a, b }
+        }
+        connection::ConnectionError::NoExternalPorts => Error::NoExternalConnectionPorts,
+        connection::ConnectionError::Singular { frequency } => {
+            Error::SingularConnection { frequency }
+        }
+        connection::ConnectionError::NonFiniteComputation {
+            frequency,
+            row,
+            column,
+        } => Error::NonFiniteConnectionComputation {
+            frequency,
             row,
             column,
         },
@@ -1075,6 +1409,164 @@ mod tests {
             Error::NonFiniteInterpolationZ0 {
                 frequency: 2,
                 port: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn maps_every_private_connection_error_with_input_context() {
+        use connection::{ConnectionError, NetworkSide};
+
+        assert_eq!(
+            map_connection_error(ConnectionError::InvalidSShape {
+                network: NetworkSide::B,
+                shape: (2, 3, 4),
+            }),
+            Error::InvalidConnectionSShape {
+                input: ConnectionInput::B,
+                shape: vec![2, 3, 4],
+            }
+        );
+        assert_eq!(
+            map_connection_error(ConnectionError::InvalidZ0Shape {
+                network: NetworkSide::A,
+                shape: (2, 3),
+            }),
+            Error::InvalidConnectionZ0Shape {
+                input: ConnectionInput::A,
+                shape: vec![2, 3],
+            }
+        );
+        assert_eq!(
+            map_connection_error(ConnectionError::EmptyFrequency {
+                network: NetworkSide::A,
+            }),
+            Error::EmptyConnectionFrequency {
+                input: ConnectionInput::A,
+            }
+        );
+        assert_eq!(
+            map_connection_error(ConnectionError::FrequencyShape {
+                network: NetworkSide::B,
+                expected: 4,
+                actual: 3,
+            }),
+            Error::ConnectionFrequencyShape {
+                input: ConnectionInput::B,
+                expected: 4,
+                actual: 3,
+            }
+        );
+        assert_eq!(
+            map_connection_error(ConnectionError::FrequencyLengthMismatch { a: 2, b: 3 }),
+            Error::ConnectionFrequencyLengthMismatch { a: 2, b: 3 }
+        );
+        assert_eq!(
+            map_connection_error(ConnectionError::FrequencyMismatch {
+                index: 1,
+                a: 2.0,
+                b: 2.5,
+            }),
+            Error::ConnectionFrequencyMismatch {
+                index: 1,
+                a: 2.0,
+                b: 2.5,
+            }
+        );
+        assert!(matches!(
+            map_connection_error(ConnectionError::NonFiniteFrequency {
+                network: NetworkSide::B,
+                index: 2,
+                value: f64::NAN,
+            }),
+            Error::NonFiniteConnectionFrequency {
+                input: ConnectionInput::B,
+                index: 2,
+                value,
+            } if value.is_nan()
+        ));
+        assert_eq!(
+            map_connection_error(ConnectionError::NonFiniteS {
+                network: NetworkSide::A,
+                frequency: 3,
+                row: 1,
+                column: 2,
+            }),
+            Error::NonFiniteConnectionS {
+                input: ConnectionInput::A,
+                frequency: 3,
+                row: 1,
+                column: 2,
+            }
+        );
+        assert_eq!(
+            map_connection_error(ConnectionError::NonFiniteZ0 {
+                network: NetworkSide::B,
+                frequency: 4,
+                port: 5,
+            }),
+            Error::NonFiniteConnectionZ0 {
+                input: ConnectionInput::B,
+                frequency: 4,
+                port: 5,
+            }
+        );
+        assert_eq!(
+            map_connection_error(ConnectionError::InvalidPort {
+                network: NetworkSide::A,
+                port: 4,
+                nports: 3,
+            }),
+            Error::InvalidConnectionPort {
+                input: ConnectionInput::A,
+                port: 4,
+                nports: 3,
+            }
+        );
+        assert_eq!(
+            map_connection_error(ConnectionError::InvalidJunctionZ0 {
+                network: NetworkSide::B,
+                frequency: 2,
+                port: 1,
+                value: Complex64::new(0.0, 1.0),
+            }),
+            Error::InvalidConnectionJunctionZ0 {
+                input: ConnectionInput::B,
+                frequency: 2,
+                port: 1,
+                value: Complex64::new(0.0, 1.0),
+            }
+        );
+        assert_eq!(
+            map_connection_error(ConnectionError::MismatchedJunctionZ0 {
+                frequency: 2,
+                a: Complex64::new(50.0, 0.0),
+                b: Complex64::new(75.0, 0.0),
+            }),
+            Error::MismatchedConnectionJunctionZ0 {
+                frequency: 2,
+                a: Complex64::new(50.0, 0.0),
+                b: Complex64::new(75.0, 0.0),
+            }
+        );
+        assert_eq!(
+            map_connection_error(ConnectionError::NoExternalPorts),
+            Error::NoExternalConnectionPorts
+        );
+        assert_eq!(
+            map_connection_error(ConnectionError::Singular { frequency: 2 }),
+            Error::SingularConnection { frequency: 2 }
+        );
+        assert_eq!(
+            map_connection_error(ConnectionError::NonFiniteComputation {
+                frequency: 2,
+                row: 3,
+                column: 4,
+            }),
+            Error::NonFiniteConnectionComputation {
+                frequency: 2,
+                row: 3,
+                column: 4,
             }
         );
     }
