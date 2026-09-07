@@ -103,6 +103,122 @@ pub enum Error {
         row: usize,
         column: usize,
     },
+
+    #[error("interpolation received an invalid {quantity} shape {shape:?}")]
+    InvalidInterpolationShape {
+        quantity: InterpolationQuantity,
+        shape: Vec<usize>,
+    },
+
+    #[error(
+        "interpolation source frequency axis length does not match the S-parameter frequency dimension: expected {expected}, got {actual}"
+    )]
+    InterpolationSourceFrequencyLengthMismatch { expected: usize, actual: usize },
+
+    #[error("interpolation source frequency axis must contain at least two samples, got {actual}")]
+    InterpolationTooFewSourceSamples { actual: usize },
+
+    #[error("interpolation target frequency axis must not be empty")]
+    InterpolationEmptyTarget,
+
+    #[error("interpolation {axis} frequency is non-finite at index {index}: {value:?}")]
+    NonFiniteInterpolationFrequency {
+        axis: InterpolationAxis,
+        index: usize,
+        value: f64,
+    },
+
+    #[error(
+        "interpolation {axis} frequency axis must be strictly increasing at index {index}: previous={previous:?}, current={current:?}"
+    )]
+    InterpolationFrequencyNotStrictlyIncreasing {
+        axis: InterpolationAxis,
+        index: usize,
+        previous: f64,
+        current: f64,
+    },
+
+    #[error(
+        "interpolation target frequency is outside the source span at index {index}: value={value:?}, span=[{lower:?}, {upper:?}]"
+    )]
+    InterpolationTargetOutOfRange {
+        index: usize,
+        value: f64,
+        lower: f64,
+        upper: f64,
+    },
+
+    #[error(
+        "interpolation received a non-finite S-parameter at frequency {frequency}, row {row}, column {column}"
+    )]
+    NonFiniteInterpolationS {
+        frequency: usize,
+        row: usize,
+        column: usize,
+    },
+
+    #[error(
+        "interpolation received a non-finite reference impedance at frequency {frequency}, port {port}"
+    )]
+    NonFiniteInterpolationZ0 { frequency: usize, port: usize },
+
+    #[error(
+        "interpolation weight is non-finite at target {target} between source indices {lower_source} and {upper_source}"
+    )]
+    NonFiniteInterpolationWeight {
+        target: usize,
+        lower_source: usize,
+        upper_source: usize,
+    },
+
+    #[error(
+        "interpolation computation is non-finite for {quantity} at target {target}, row {row}, column {column}"
+    )]
+    NonFiniteInterpolationComputation {
+        quantity: InterpolationQuantity,
+        target: usize,
+        row: usize,
+        column: usize,
+    },
+}
+
+/// Axis associated with a structured interpolation error.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InterpolationAxis {
+    /// The source network's frequency axis.
+    Source,
+    /// The caller-provided target frequency axis.
+    Target,
+}
+
+impl fmt::Display for InterpolationAxis {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Source => "source",
+            Self::Target => "target",
+        })
+    }
+}
+
+/// Quantity associated with a structured interpolation shape or computation
+/// error.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InterpolationQuantity {
+    /// Scattering-parameter data.
+    S,
+    /// Reference-impedance data.
+    Z0,
+}
+
+impl fmt::Display for InterpolationQuantity {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::S => "S-parameter",
+            Self::Z0 => "reference-impedance",
+        })
+    }
 }
 
 /// High-level conversion stage associated with a public conversion error.
@@ -389,6 +505,83 @@ impl Network {
         // fail; retain the public constructor as the single invariant gate.
         Network::new(self.frequency.clone(), s, new_z0)
     }
+
+    /// Resamples this network onto an explicit frequency grid using
+    /// component-wise Cartesian linear interpolation.
+    ///
+    /// Every real and imaginary component of the frequency-major S-parameter
+    /// stack and of the frequency-major reference-impedance array is
+    /// interpolated independently.  The source axis must contain at least two
+    /// finite, strictly increasing samples.  `target` must be non-empty,
+    /// finite, strictly increasing, and wholly within the inclusive source
+    /// span.  No sorting, deduplication, extrapolation, automatic grid
+    /// alignment, or reference-impedance renormalization is performed.
+    ///
+    /// A target frequency that exactly equals a source knot, including either
+    /// endpoint, copies the complete source S and z0 slices without
+    /// interpolation arithmetic.  Finite complex reference impedances are
+    /// accepted as stored, including non-50-ohm, zero-real, and negative-real
+    /// values; interpolation does not apply the domain checks used by
+    /// power-wave conversions.  Finite negative frequencies and the existing
+    /// signed-zero knot equality behavior are retained.
+    ///
+    /// The returned network is newly owned, preserves the source port count
+    /// and ordering, and uses the target frequency values exactly.  Neither
+    /// this network nor `target` is modified.  Interpolation is a component-
+    /// wise resampling operation only; this method makes no claim about
+    /// preserving physical Z-parameters, passivity, or causality.
+    ///
+    /// This method is provisional while `rfkit-core` is in the `0.x` series;
+    /// its name and signature are not a `1.0` stability promise.
+    ///
+    /// # Errors
+    ///
+    /// Returns a structured [`Error`] when the source or target axis violates
+    /// the restrictions above, an S/z0 shape is invalid, source data is
+    /// non-finite, a computed weight is non-finite, or a computed component
+    /// is non-finite.  Interpolation failures remain distinct from the
+    /// power-conversion error stages.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use ndarray::{Array2, Array3};
+    /// use num_complex::Complex64;
+    /// use rfkit_core::{Frequency, Network};
+    ///
+    /// # fn example() -> rfkit_core::Result<()> {
+    /// let source_frequency = Frequency::from_hz(vec![1.0e9, 2.0e9])?;
+    /// let source = Network::new(
+    ///     source_frequency,
+    ///     Array3::from_shape_fn((2, 1, 1), |(frequency, _, _)| {
+    ///         Complex64::new(0.1 + 0.2 * frequency as f64, -0.05)
+    ///     }),
+    ///     Array2::from_shape_fn((2, 1), |(frequency, _)| {
+    ///         Complex64::new(50.0 + 10.0 * frequency as f64, 2.0)
+    ///     }),
+    /// )?;
+    /// let target_frequency = Frequency::from_hz(vec![1.25e9, 1.75e9])?;
+    ///
+    /// let resampled = source.interpolate_cartesian_linear(&target_frequency)?;
+    /// assert_eq!(resampled.frequency(), &target_frequency);
+    /// assert_eq!(resampled.s().dim(), (2, 1, 1));
+    /// assert_eq!(resampled.z0().dim(), (2, 1));
+    /// # Ok(())
+    /// # }
+    /// # example().unwrap();
+    /// ```
+    pub fn interpolate_cartesian_linear(&self, target: &Frequency) -> Result<Network> {
+        let interpolated = interpolation::interpolate_cartesian_linear(
+            self.frequency.hz(),
+            &self.s,
+            &self.z0,
+            target.hz(),
+        )
+        .map_err(map_interpolation_error)?;
+
+        let frequency = Frequency::from_hz(interpolated.frequency_hz)?;
+        Network::new(frequency, interpolated.s, interpolated.z0)
+    }
 }
 
 fn map_power_wave_admittance_error(
@@ -408,6 +601,110 @@ fn map_power_wave_admittance_error(
         | power_wave_admittance::PowerWaveAdmittanceError::ZToS(_) => {
             unreachable!("S-to-Y kernel returned an inverse-direction stage")
         }
+    }
+}
+
+fn map_interpolation_error(error: interpolation::InterpolationError) -> Error {
+    match error {
+        interpolation::InterpolationError::InvalidSShape { shape } => {
+            Error::InvalidInterpolationShape {
+                quantity: InterpolationQuantity::S,
+                shape: vec![shape.0, shape.1, shape.2],
+            }
+        }
+        interpolation::InterpolationError::SourceFrequencyShape { expected, actual } => {
+            Error::InterpolationSourceFrequencyLengthMismatch { expected, actual }
+        }
+        interpolation::InterpolationError::InvalidZ0Shape { shape } => {
+            Error::InvalidInterpolationShape {
+                quantity: InterpolationQuantity::Z0,
+                shape: vec![shape.0, shape.1],
+            }
+        }
+        interpolation::InterpolationError::TooFewSourceSamples { actual } => {
+            Error::InterpolationTooFewSourceSamples { actual }
+        }
+        interpolation::InterpolationError::EmptyTarget => Error::InterpolationEmptyTarget,
+        interpolation::InterpolationError::NonFiniteSourceFrequency { index, value } => {
+            Error::NonFiniteInterpolationFrequency {
+                axis: InterpolationAxis::Source,
+                index,
+                value,
+            }
+        }
+        interpolation::InterpolationError::SourceFrequencyNotStrictlyIncreasing {
+            index,
+            previous,
+            current,
+        } => Error::InterpolationFrequencyNotStrictlyIncreasing {
+            axis: InterpolationAxis::Source,
+            index,
+            previous,
+            current,
+        },
+        interpolation::InterpolationError::NonFiniteTargetFrequency { index, value } => {
+            Error::NonFiniteInterpolationFrequency {
+                axis: InterpolationAxis::Target,
+                index,
+                value,
+            }
+        }
+        interpolation::InterpolationError::TargetFrequencyNotStrictlyIncreasing {
+            index,
+            previous,
+            current,
+        } => Error::InterpolationFrequencyNotStrictlyIncreasing {
+            axis: InterpolationAxis::Target,
+            index,
+            previous,
+            current,
+        },
+        interpolation::InterpolationError::TargetFrequencyOutOfRange {
+            index,
+            value,
+            lower,
+            upper,
+        } => Error::InterpolationTargetOutOfRange {
+            index,
+            value,
+            lower,
+            upper,
+        },
+        interpolation::InterpolationError::NonFiniteS {
+            frequency,
+            row,
+            column,
+        } => Error::NonFiniteInterpolationS {
+            frequency,
+            row,
+            column,
+        },
+        interpolation::InterpolationError::NonFiniteZ0 { frequency, port } => {
+            Error::NonFiniteInterpolationZ0 { frequency, port }
+        }
+        interpolation::InterpolationError::NonFiniteWeight {
+            target,
+            lower_source,
+            upper_source,
+        } => Error::NonFiniteInterpolationWeight {
+            target,
+            lower_source,
+            upper_source,
+        },
+        interpolation::InterpolationError::NonFiniteComputation {
+            quantity,
+            target,
+            row,
+            column,
+        } => Error::NonFiniteInterpolationComputation {
+            quantity: match quantity {
+                interpolation::InterpolationQuantity::S => InterpolationQuantity::S,
+                interpolation::InterpolationQuantity::Z0 => InterpolationQuantity::Z0,
+            },
+            target,
+            row,
+            column,
+        },
     }
 }
 
@@ -640,6 +937,144 @@ mod tests {
                 frequency: 1,
                 row: 4,
                 column: 5,
+            }
+        );
+    }
+
+    #[test]
+    fn maps_private_interpolation_shape_and_axis_errors_without_flattening() {
+        assert_eq!(
+            map_interpolation_error(interpolation::InterpolationError::InvalidSShape {
+                shape: (2, 3, 4),
+            }),
+            Error::InvalidInterpolationShape {
+                quantity: InterpolationQuantity::S,
+                shape: vec![2, 3, 4],
+            }
+        );
+        assert_eq!(
+            map_interpolation_error(interpolation::InterpolationError::InvalidZ0Shape {
+                shape: (2, 1),
+            }),
+            Error::InvalidInterpolationShape {
+                quantity: InterpolationQuantity::Z0,
+                shape: vec![2, 1],
+            }
+        );
+        assert_eq!(
+            map_interpolation_error(interpolation::InterpolationError::SourceFrequencyShape {
+                expected: 4,
+                actual: 3,
+            }),
+            Error::InterpolationSourceFrequencyLengthMismatch {
+                expected: 4,
+                actual: 3,
+            }
+        );
+        assert_eq!(
+            map_interpolation_error(interpolation::InterpolationError::EmptyTarget),
+            Error::InterpolationEmptyTarget
+        );
+        assert_eq!(
+            map_interpolation_error(interpolation::InterpolationError::TooFewSourceSamples {
+                actual: 1,
+            }),
+            Error::InterpolationTooFewSourceSamples { actual: 1 }
+        );
+        assert_eq!(
+            map_interpolation_error(
+                interpolation::InterpolationError::SourceFrequencyNotStrictlyIncreasing {
+                    index: 2,
+                    previous: 2.0,
+                    current: 2.0,
+                },
+            ),
+            Error::InterpolationFrequencyNotStrictlyIncreasing {
+                axis: InterpolationAxis::Source,
+                index: 2,
+                previous: 2.0,
+                current: 2.0,
+            }
+        );
+        assert!(matches!(
+            map_interpolation_error(
+                interpolation::InterpolationError::NonFiniteTargetFrequency {
+                    index: 1,
+                    value: f64::NAN,
+                }
+            ),
+            Error::NonFiniteInterpolationFrequency {
+                axis: InterpolationAxis::Target,
+                index: 1,
+                value,
+            } if value.is_nan()
+        ));
+    }
+
+    #[test]
+    fn maps_private_interpolation_numeric_context_without_flattening() {
+        assert_eq!(
+            map_interpolation_error(interpolation::InterpolationError::NonFiniteWeight {
+                target: 5,
+                lower_source: 2,
+                upper_source: 3,
+            }),
+            Error::NonFiniteInterpolationWeight {
+                target: 5,
+                lower_source: 2,
+                upper_source: 3,
+            }
+        );
+        assert_eq!(
+            map_interpolation_error(interpolation::InterpolationError::NonFiniteComputation {
+                quantity: interpolation::InterpolationQuantity::Z0,
+                target: 4,
+                row: 2,
+                column: 0,
+            }),
+            Error::NonFiniteInterpolationComputation {
+                quantity: InterpolationQuantity::Z0,
+                target: 4,
+                row: 2,
+                column: 0,
+            }
+        );
+        assert_eq!(
+            map_interpolation_error(
+                interpolation::InterpolationError::TargetFrequencyOutOfRange {
+                    index: 0,
+                    value: 0.5,
+                    lower: 1.0,
+                    upper: 2.0,
+                }
+            ),
+            Error::InterpolationTargetOutOfRange {
+                index: 0,
+                value: 0.5,
+                lower: 1.0,
+                upper: 2.0,
+            }
+        );
+        assert_eq!(
+            map_interpolation_error(interpolation::InterpolationError::NonFiniteS {
+                frequency: 3,
+                row: 1,
+                column: 2,
+            }),
+            Error::NonFiniteInterpolationS {
+                frequency: 3,
+                row: 1,
+                column: 2,
+            }
+        );
+        assert_eq!(
+            map_interpolation_error(interpolation::InterpolationError::NonFiniteZ0 {
+                frequency: 2,
+                port: 1,
+            }),
+            Error::NonFiniteInterpolationZ0 {
+                frequency: 2,
+                port: 1,
             }
         );
     }
