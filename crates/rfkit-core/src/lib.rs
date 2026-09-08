@@ -276,6 +276,13 @@ pub enum Error {
         column: usize,
     },
 
+    #[error("explicit-grid matched connection {stage} stage failed: {source}")]
+    GridConnection {
+        stage: GridConnectionStage,
+        #[source]
+        source: Box<Error>,
+    },
+
     #[error("inner connection S-parameter shape must be (nfreq, nport, nport), got {shape:?}")]
     InvalidInnerConnectionSShape { shape: Vec<usize> },
 
@@ -361,6 +368,35 @@ pub enum ConnectionInput {
     A,
     /// The network passed as `other` (kernel input B).
     B,
+}
+
+/// Identifies the ordered stage that failed during an explicit-grid matched
+/// connection.
+///
+/// The operation always interpolates the receiver (A) first, then `other`
+/// (B), and only then evaluates the matched connection.  Keeping this stage
+/// outside the nested [`Error`] preserves deterministic failure attribution
+/// while the nested error retains the detailed shape, axis, index, value, or
+/// numerical context from the underlying public operation.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GridConnectionStage {
+    /// Cartesian interpolation of the receiver (`self`, kernel input A).
+    AInterpolation,
+    /// Cartesian interpolation of `other` (kernel input B).
+    BInterpolation,
+    /// Matched power-wave connection after both interpolations complete.
+    Connection,
+}
+
+impl fmt::Display for GridConnectionStage {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::AInterpolation => "A interpolation (receiver)",
+            Self::BInterpolation => "B interpolation (other)",
+            Self::Connection => "matched connection",
+        })
+    }
 }
 
 impl fmt::Display for ConnectionInput {
@@ -876,6 +912,104 @@ impl Network {
         Network::new(frequency, connected.s, connected.z0)
     }
 
+    /// Connects one port of this network to one port of `other` through a
+    /// matched Kurokawa power-wave junction after interpolating both networks
+    /// onto an explicit target frequency grid.
+    ///
+    /// The operation stages are deliberately ordered: all of A (`self`) is
+    /// interpolated first, all of B (`other`) is interpolated second, and the
+    /// existing exact-grid matched connection is evaluated only after both
+    /// stages succeed.  The target grid is never inferred, intersected,
+    /// sorted, subset, or extrapolated.  Even when a source and target grid
+    /// have equal values, each source still goes through the interpolation
+    /// contract; in particular, a source with fewer than two samples is not
+    /// accepted as a same-grid shortcut.
+    ///
+    /// Cartesian linear interpolation is applied independently to the real
+    /// and imaginary components of both S and `z0`.  Each source axis must
+    /// contain at least two finite, strictly increasing samples.  `target`
+    /// must be non-empty, finite, strictly increasing, and within both
+    /// inclusive source spans.  A one-sample target is valid.  Exact source
+    /// knots copy the complete source S/`z0` slices, and the returned
+    /// frequency axis copies `target` exactly, including signed zero.
+    ///
+    /// The final connection uses the existing Kurokawa power-wave
+    /// matched-junction contract.  Selected junction references must be
+    /// finite, real, strictly positive, and exactly equal at every target
+    /// frequency after interpolation; no tolerance-based matching or hidden
+    /// renormalization is performed.  Non-50-ohm and frequency-dependent
+    /// matched junctions are valid, and surviving ports may retain finite
+    /// complex reference impedances.  Output ports are the original A
+    /// survivors followed by the original B survivors.
+    ///
+    /// A connection denominator is singular only when its computed complex
+    /// value is exactly zero.  No conditioning threshold or regularization is
+    /// used.  The result is newly owned and neither input network nor `target`
+    /// is modified.  This operation is provisional while `rfkit-core` is in
+    /// the `0.x` series; its name and signature are not a `1.0` stability
+    /// promise.
+    ///
+    /// # Errors
+    ///
+    /// Errors are wrapped in [`Error::GridConnection`] with a
+    /// [`GridConnectionStage`] identifying A interpolation, B interpolation,
+    /// or the final matched connection.  The nested error preserves the
+    /// detailed shape/axis/index/value, selected-port, junction,
+    /// no-survivor, singularity, and checked-computation context from the
+    /// underlying operation.  Because interpolation precedes port validation,
+    /// an invalid port is reported only after both source interpolations have
+    /// succeeded.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use ndarray::{Array2, Array3};
+    /// use num_complex::Complex64;
+    /// use rfkit_core::{Frequency, Network};
+    ///
+    /// # fn example() -> rfkit_core::Result<()> {
+    /// let left = Network::new(
+    ///     Frequency::from_hz(vec![1.0e9, 2.0e9])?,
+    ///     Array3::zeros((2, 2, 2)),
+    ///     Array2::from_elem((2, 2), Complex64::new(50.0, 0.0)),
+    /// )?;
+    /// let right = Network::new(
+    ///     Frequency::from_hz(vec![1.0e9, 1.5e9, 2.0e9])?,
+    ///     Array3::zeros((3, 2, 2)),
+    ///     Array2::from_elem((3, 2), Complex64::new(50.0, 0.0)),
+    /// )?;
+    /// let target = Frequency::from_hz(vec![1.0e9, 1.25e9, 2.0e9])?;
+    /// let connected = left.connect_matched_power_on_grid(0, &right, 0, &target)?;
+    /// assert_eq!(connected.frequency(), &target);
+    /// assert_eq!(connected.nports(), 2);
+    /// # Ok(())
+    /// # }
+    /// # example().unwrap();
+    /// ```
+    pub fn connect_matched_power_on_grid(
+        &self,
+        port: usize,
+        other: &Network,
+        other_port: usize,
+        target: &Frequency,
+    ) -> Result<Network> {
+        let connected = composition::connect_matched_on_grid(
+            self.frequency.hz(),
+            &self.s,
+            &self.z0,
+            port,
+            other.frequency.hz(),
+            &other.s,
+            &other.z0,
+            other_port,
+            target.hz(),
+        )
+        .map_err(map_composition_error)?;
+
+        let frequency = Frequency::from_hz(connected.frequency_hz)?;
+        Network::new(frequency, connected.s, connected.z0)
+    }
+
     /// Connects two distinct ports of this network through a matched
     /// Kurokawa power-wave junction and returns the remaining network.
     ///
@@ -1077,6 +1211,23 @@ fn map_interpolation_error(error: interpolation::InterpolationError) -> Error {
             target,
             row,
             column,
+        },
+    }
+}
+
+fn map_composition_error(error: composition::CompositionError) -> Error {
+    match error {
+        composition::CompositionError::AInterpolation(error) => Error::GridConnection {
+            stage: GridConnectionStage::AInterpolation,
+            source: Box::new(map_interpolation_error(error)),
+        },
+        composition::CompositionError::BInterpolation(error) => Error::GridConnection {
+            stage: GridConnectionStage::BInterpolation,
+            source: Box::new(map_interpolation_error(error)),
+        },
+        composition::CompositionError::Connection(error) => Error::GridConnection {
+            stage: GridConnectionStage::Connection,
+            source: Box::new(map_connection_error(error)),
         },
     }
 }
@@ -1644,6 +1795,76 @@ mod tests {
                 frequency: 2,
                 port: 1,
             }
+        );
+    }
+
+    #[test]
+    fn maps_private_composition_errors_with_ordered_public_stage_context() {
+        assert_eq!(
+            map_composition_error(composition::CompositionError::AInterpolation(
+                interpolation::InterpolationError::InvalidSShape { shape: (2, 3, 4) },
+            )),
+            Error::GridConnection {
+                stage: GridConnectionStage::AInterpolation,
+                source: Box::new(Error::InvalidInterpolationShape {
+                    quantity: InterpolationQuantity::S,
+                    shape: vec![2, 3, 4],
+                }),
+            }
+        );
+
+        assert_eq!(
+            map_composition_error(composition::CompositionError::BInterpolation(
+                interpolation::InterpolationError::TargetFrequencyOutOfRange {
+                    index: 2,
+                    value: 4.0,
+                    lower: 1.0,
+                    upper: 3.0,
+                },
+            )),
+            Error::GridConnection {
+                stage: GridConnectionStage::BInterpolation,
+                source: Box::new(Error::InterpolationTargetOutOfRange {
+                    index: 2,
+                    value: 4.0,
+                    lower: 1.0,
+                    upper: 3.0,
+                }),
+            }
+        );
+
+        assert_eq!(
+            map_composition_error(composition::CompositionError::Connection(
+                connection::ConnectionError::MismatchedJunctionZ0 {
+                    frequency: 1,
+                    a: Complex64::new(73.5, 0.0),
+                    b: Complex64::new(74.0, 0.0),
+                },
+            )),
+            Error::GridConnection {
+                stage: GridConnectionStage::Connection,
+                source: Box::new(Error::MismatchedConnectionJunctionZ0 {
+                    frequency: 1,
+                    a: Complex64::new(73.5, 0.0),
+                    b: Complex64::new(74.0, 0.0),
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn grid_connection_stage_display_is_actionable() {
+        assert_eq!(
+            GridConnectionStage::AInterpolation.to_string(),
+            "A interpolation (receiver)"
+        );
+        assert_eq!(
+            GridConnectionStage::BInterpolation.to_string(),
+            "B interpolation (other)"
+        );
+        assert_eq!(
+            GridConnectionStage::Connection.to_string(),
+            "matched connection"
         );
     }
 
