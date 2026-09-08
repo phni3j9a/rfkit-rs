@@ -275,6 +275,78 @@ pub enum Error {
         row: usize,
         column: usize,
     },
+
+    #[error("inner connection S-parameter shape must be (nfreq, nport, nport), got {shape:?}")]
+    InvalidInnerConnectionSShape { shape: Vec<usize> },
+
+    #[error("inner connection reference-impedance shape must be (nfreq, nport), got {shape:?}")]
+    InvalidInnerConnectionZ0Shape { shape: Vec<usize> },
+
+    #[error("inner connection frequency axis must not be empty")]
+    EmptyInnerConnectionFrequency,
+
+    #[error(
+        "inner connection frequency axis length does not match the S-parameter frequency dimension: expected {expected}, got {actual}"
+    )]
+    InnerConnectionFrequencyShape { expected: usize, actual: usize },
+
+    #[error("inner connection frequency is non-finite at index {index}: {value:?}")]
+    NonFiniteInnerConnectionFrequency { index: usize, value: f64 },
+
+    #[error(
+        "inner connection S-parameter is non-finite at frequency {frequency}, row {row}, column {column}"
+    )]
+    NonFiniteInnerConnectionS {
+        frequency: usize,
+        row: usize,
+        column: usize,
+    },
+
+    #[error(
+        "inner connection reference impedance is non-finite at frequency {frequency}, port {port}"
+    )]
+    NonFiniteInnerConnectionZ0 { frequency: usize, port: usize },
+
+    #[error("inner connection port {port} is out of range for {nports} ports")]
+    InvalidInnerConnectionPort { port: usize, nports: usize },
+
+    #[error("inner connection requires two distinct ports, got {port_a} and {port_b}")]
+    IdenticalInnerConnectionPorts { port_a: usize, port_b: usize },
+
+    #[error(
+        "inner connection junction reference impedance is not finite, real, and strictly positive at frequency {frequency}, port {port}: {value:?}"
+    )]
+    InvalidInnerConnectionJunctionZ0 {
+        frequency: usize,
+        port: usize,
+        value: Complex64,
+    },
+
+    #[error(
+        "inner connection junction reference impedances differ at frequency {frequency}: port {port_a}={z0_a:?}, port {port_b}={z0_b:?}"
+    )]
+    MismatchedInnerConnectionJunctionZ0 {
+        frequency: usize,
+        port_a: usize,
+        z0_a: Complex64,
+        port_b: usize,
+        z0_b: Complex64,
+    },
+
+    #[error("inner connection leaves no external ports")]
+    NoExternalInnerConnectionPorts,
+
+    #[error("matched-junction inner connection is exactly singular at frequency {frequency}")]
+    SingularInnerConnection { frequency: usize },
+
+    #[error(
+        "non-finite value while evaluating matched-junction inner connection at frequency {frequency}, computation row {row}, computation column {column}"
+    )]
+    NonFiniteInnerConnectionComputation {
+        frequency: usize,
+        row: usize,
+        column: usize,
+    },
 }
 
 /// Identifies which input supplied a connection value or triggered a
@@ -803,6 +875,86 @@ impl Network {
         let frequency = Frequency::from_hz(connected.frequency_hz)?;
         Network::new(frequency, connected.s, connected.z0)
     }
+
+    /// Connects two distinct ports of this network through a matched
+    /// Kurokawa power-wave junction and returns the remaining network.
+    ///
+    /// For selected ports in internal order `[port_a, port_b]`, the matched
+    /// junction exchanges the two incident waves with
+    /// `P = [[0, 1], [1, 0]]`.  Eliminating the selected internal waves uses
+    /// the equation
+    ///
+    /// ```text
+    /// S_out = S_EE + S_EI (I - P S_II)^-1 P S_IE.
+    /// ```
+    ///
+    /// `port_a` and `port_b` are zero-based and must be distinct and in range.
+    /// At least one survivor must remain.  The output contains the survivors
+    /// in their original order, with their reference impedances copied
+    /// exactly.  The result, including its frequency axis and arrays, is newly
+    /// owned; this network and its arrays are not modified.
+    ///
+    /// The source frequency axis must be non-empty and finite.  A single
+    /// sample is valid, as are finite negative, duplicate, and descending
+    /// samples and signed zero.  The axis is copied exactly, without sorting,
+    /// deduplication, interpolation, or resampling.  The selected junction
+    /// reference impedances must be finite, real, strictly positive, and
+    /// exactly equal at every frequency.  They may be non-50-ohm and
+    /// frequency-dependent.  External survivor reference impedances may be
+    /// any finite complex values admitted by the matched connection kernel and
+    /// are copied without conversion-specific positive-real restrictions.
+    ///
+    /// The private kernel classifies only exact-zero pivots as singular.  No
+    /// near-singular threshold, regularization, determinant/rank fallback, or
+    /// mismatch renormalization is applied.  Checked arithmetic reports
+    /// non-finite computations instead of returning non-finite output.
+    ///
+    /// This operation is provisional while `rfkit-core` is in the `0.x`
+    /// series; its name and signature are not a `1.0` stability promise.
+    ///
+    /// # Errors
+    ///
+    /// Returns a structured [`Error`] preserving invalid source-data shapes,
+    /// frequency and S/z0 coordinates, selected-port validation, junction
+    /// identities and values, no-survivor, exact-singularity, and checked
+    /// computation context.  Computation row and column fields refer to the
+    /// kernel's generic arithmetic coordinates (including its internal 2×2
+    /// solve), not to output-network coordinates.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use ndarray::{Array2, Array3};
+    /// use num_complex::Complex64;
+    /// use rfkit_core::{Frequency, Network};
+    ///
+    /// # fn example() -> rfkit_core::Result<()> {
+    /// let frequency = Frequency::from_hz(vec![1.0e9])?;
+    /// let network = Network::new(
+    ///     frequency,
+    ///     Array3::zeros((1, 3, 3)),
+    ///     Array2::from_elem((1, 3), Complex64::new(50.0, 0.0)),
+    /// )?;
+    /// let reduced = network.inner_connect_matched_power(0, 1)?;
+    /// assert_eq!(reduced.nports(), 1);
+    /// assert_eq!(reduced.s().dim(), (1, 1, 1));
+    /// # Ok(())
+    /// # }
+    /// # example().unwrap();
+    /// ```
+    pub fn inner_connect_matched_power(&self, port_a: usize, port_b: usize) -> Result<Network> {
+        let connected = connection::inner_connect_matched(
+            self.frequency.hz(),
+            &self.s,
+            &self.z0,
+            port_a,
+            port_b,
+        )
+        .map_err(|error| map_inner_connection_error(error, port_a, port_b))?;
+
+        let frequency = Frequency::from_hz(connected.frequency_hz)?;
+        Network::new(frequency, connected.s, connected.z0)
+    }
 }
 
 fn map_power_wave_admittance_error(
@@ -1035,6 +1187,88 @@ fn map_connection_error(error: connection::ConnectionError) -> Error {
             row,
             column,
         } => Error::NonFiniteConnectionComputation {
+            frequency,
+            row,
+            column,
+        },
+    }
+}
+
+fn map_inner_connection_error(
+    error: connection::ConnectionError,
+    port_a: usize,
+    port_b: usize,
+) -> Error {
+    match error {
+        connection::ConnectionError::InvalidSShape { shape, .. } => {
+            Error::InvalidInnerConnectionSShape {
+                shape: vec![shape.0, shape.1, shape.2],
+            }
+        }
+        connection::ConnectionError::InvalidZ0Shape { shape, .. } => {
+            Error::InvalidInnerConnectionZ0Shape {
+                shape: vec![shape.0, shape.1],
+            }
+        }
+        connection::ConnectionError::EmptyFrequency { .. } => Error::EmptyInnerConnectionFrequency,
+        connection::ConnectionError::FrequencyShape {
+            expected, actual, ..
+        } => Error::InnerConnectionFrequencyShape { expected, actual },
+        connection::ConnectionError::FrequencyLengthMismatch { .. }
+        | connection::ConnectionError::FrequencyMismatch { .. }
+        | connection::ConnectionError::InvalidPort { .. } => {
+            unreachable!("same-network inner-connect kernel returned a two-network error")
+        }
+        connection::ConnectionError::NonFiniteFrequency { index, value, .. } => {
+            Error::NonFiniteInnerConnectionFrequency { index, value }
+        }
+        connection::ConnectionError::NonFiniteS {
+            frequency,
+            row,
+            column,
+            ..
+        } => Error::NonFiniteInnerConnectionS {
+            frequency,
+            row,
+            column,
+        },
+        connection::ConnectionError::NonFiniteZ0 {
+            frequency, port, ..
+        } => Error::NonFiniteInnerConnectionZ0 { frequency, port },
+        connection::ConnectionError::InvalidInnerPort { port, nports } => {
+            Error::InvalidInnerConnectionPort { port, nports }
+        }
+        connection::ConnectionError::IdenticalInnerPorts { port_a, port_b } => {
+            Error::IdenticalInnerConnectionPorts { port_a, port_b }
+        }
+        connection::ConnectionError::InvalidJunctionZ0 {
+            frequency,
+            port,
+            value,
+            ..
+        } => Error::InvalidInnerConnectionJunctionZ0 {
+            frequency,
+            port,
+            value,
+        },
+        connection::ConnectionError::MismatchedJunctionZ0 { frequency, a, b } => {
+            Error::MismatchedInnerConnectionJunctionZ0 {
+                frequency,
+                port_a,
+                z0_a: a,
+                port_b,
+                z0_b: b,
+            }
+        }
+        connection::ConnectionError::NoExternalPorts => Error::NoExternalInnerConnectionPorts,
+        connection::ConnectionError::Singular { frequency } => {
+            Error::SingularInnerConnection { frequency }
+        }
+        connection::ConnectionError::NonFiniteComputation {
+            frequency,
+            row,
+            column,
+        } => Error::NonFiniteInnerConnectionComputation {
             frequency,
             row,
             column,
@@ -1567,6 +1801,186 @@ mod tests {
                 frequency: 2,
                 row: 3,
                 column: 4,
+            }
+        );
+    }
+
+    #[test]
+    fn maps_every_private_inner_connection_error_without_two_network_context() {
+        use connection::{ConnectionError, NetworkSide};
+
+        assert_eq!(
+            map_inner_connection_error(
+                ConnectionError::InvalidSShape {
+                    network: NetworkSide::A,
+                    shape: (2, 3, 4),
+                },
+                5,
+                7,
+            ),
+            Error::InvalidInnerConnectionSShape {
+                shape: vec![2, 3, 4],
+            }
+        );
+        assert_eq!(
+            map_inner_connection_error(
+                ConnectionError::InvalidZ0Shape {
+                    network: NetworkSide::A,
+                    shape: (2, 3),
+                },
+                5,
+                7,
+            ),
+            Error::InvalidInnerConnectionZ0Shape { shape: vec![2, 3] }
+        );
+        assert_eq!(
+            map_inner_connection_error(
+                ConnectionError::EmptyFrequency {
+                    network: NetworkSide::A,
+                },
+                5,
+                7,
+            ),
+            Error::EmptyInnerConnectionFrequency
+        );
+        assert_eq!(
+            map_inner_connection_error(
+                ConnectionError::FrequencyShape {
+                    network: NetworkSide::A,
+                    expected: 4,
+                    actual: 3,
+                },
+                5,
+                7,
+            ),
+            Error::InnerConnectionFrequencyShape {
+                expected: 4,
+                actual: 3,
+            }
+        );
+        assert!(matches!(
+            map_inner_connection_error(
+                ConnectionError::NonFiniteFrequency {
+                    network: NetworkSide::A,
+                    index: 2,
+                    value: f64::NAN,
+                },
+                5,
+                7,
+            ),
+            Error::NonFiniteInnerConnectionFrequency { index: 2, value } if value.is_nan()
+        ));
+        assert_eq!(
+            map_inner_connection_error(
+                ConnectionError::NonFiniteS {
+                    network: NetworkSide::A,
+                    frequency: 3,
+                    row: 1,
+                    column: 2,
+                },
+                5,
+                7,
+            ),
+            Error::NonFiniteInnerConnectionS {
+                frequency: 3,
+                row: 1,
+                column: 2,
+            }
+        );
+        assert_eq!(
+            map_inner_connection_error(
+                ConnectionError::NonFiniteZ0 {
+                    network: NetworkSide::A,
+                    frequency: 4,
+                    port: 5,
+                },
+                5,
+                7,
+            ),
+            Error::NonFiniteInnerConnectionZ0 {
+                frequency: 4,
+                port: 5,
+            }
+        );
+        assert_eq!(
+            map_inner_connection_error(
+                ConnectionError::InvalidInnerPort { port: 8, nports: 6 },
+                5,
+                7,
+            ),
+            Error::InvalidInnerConnectionPort { port: 8, nports: 6 }
+        );
+        assert_eq!(
+            map_inner_connection_error(
+                ConnectionError::IdenticalInnerPorts {
+                    port_a: 5,
+                    port_b: 5,
+                },
+                5,
+                5,
+            ),
+            Error::IdenticalInnerConnectionPorts {
+                port_a: 5,
+                port_b: 5,
+            }
+        );
+        assert_eq!(
+            map_inner_connection_error(
+                ConnectionError::InvalidJunctionZ0 {
+                    network: NetworkSide::A,
+                    frequency: 2,
+                    port: 7,
+                    value: Complex64::new(50.0, 1.0),
+                },
+                5,
+                7,
+            ),
+            Error::InvalidInnerConnectionJunctionZ0 {
+                frequency: 2,
+                port: 7,
+                value: Complex64::new(50.0, 1.0),
+            }
+        );
+        assert_eq!(
+            map_inner_connection_error(
+                ConnectionError::MismatchedJunctionZ0 {
+                    frequency: 2,
+                    a: Complex64::new(50.0, 0.0),
+                    b: Complex64::new(75.0, 0.0),
+                },
+                5,
+                7,
+            ),
+            Error::MismatchedInnerConnectionJunctionZ0 {
+                frequency: 2,
+                port_a: 5,
+                z0_a: Complex64::new(50.0, 0.0),
+                port_b: 7,
+                z0_b: Complex64::new(75.0, 0.0),
+            }
+        );
+        assert_eq!(
+            map_inner_connection_error(ConnectionError::NoExternalPorts, 5, 7),
+            Error::NoExternalInnerConnectionPorts
+        );
+        assert_eq!(
+            map_inner_connection_error(ConnectionError::Singular { frequency: 2 }, 5, 7),
+            Error::SingularInnerConnection { frequency: 2 }
+        );
+        assert_eq!(
+            map_inner_connection_error(
+                ConnectionError::NonFiniteComputation {
+                    frequency: 2,
+                    row: 0,
+                    column: 1,
+                },
+                5,
+                7,
+            ),
+            Error::NonFiniteInnerConnectionComputation {
+                frequency: 2,
+                row: 0,
+                column: 1,
             }
         );
     }
