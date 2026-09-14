@@ -25,7 +25,7 @@ Do not split crates merely for aesthetics. Split when dependency boundaries or c
 
 ## API philosophy
 
-The human-approved first public `Network` surface is defined in `docs/PUBLIC_API.md`. Treat that document as the policy boundary for public RF-operation work.
+The implemented public `Network` baseline and its Green/Yellow/Red extension envelope are defined in `docs/PUBLIC_API.md`. Treat that document and `docs/LOOP_ENGINEERING.md` as the policy boundary for public RF-operation work.
 
 - typed, fallible operations
 - explicit units at boundaries
@@ -35,3 +35,4 @@ The human-approved first public `Network` surface is defined in `docs/PUBLIC_API
 - explicit frequency-grid policy; no hidden alignment or interpolation defaults
 - wave-sensitive public names remain explicit until a typed wave-definition model is justified by actual multi-convention support
 - avoid speculative traits, wrappers, and parameter hierarchies before concrete use requires them
+- permit bounded reversible Green/Yellow evolution before stabilization while reserving canonical-model replacement and irreversible commitments for Red human decisions
