@@ -50,12 +50,14 @@ docs/                architecture, development, conformance and provenance polic
 The repository supports a bounded GitHub-centered autonomous development loop:
 
 ```text
-Codex Planner → one loop:ready Issue → Codex Worker → reviewed PR → next Planner cycle
+Codex Planner → Green/Yellow decision → one loop:ready Issue → Codex Worker → reviewed PR → next Planner cycle
 ```
 
 The default autonomous WIP is one implementation at a time. Higher timer frequency is used to reduce idle latency, not to manufacture additional Issues.
 
-ChatGPT is intentionally outside the normal scheduled execution path. It can act as a governor/auditor when the human owner asks whether recent autonomous work is producing meaningful RF capability, correctness, and leverage rather than activity for its own sake.
+The loop does not require human pre-approval for every provisional public method. Green work follows established semantics; Yellow work records and independently reviews a bounded reversible design choice. Human approval is reserved for Red decisions such as stabilization, unresolved authoritative RF conflicts, unresolved provenance or licensing obligations, major difficult-to-reverse architecture changes, and release or publication. A blocked decision does not stop unrelated eligible work once the WIP slot is clear.
+
+ChatGPT is intentionally outside the normal scheduled execution path. It can act as a governor/auditor when the human owner asks whether recent autonomous work, including its Green/Yellow classifications, is producing meaningful RF capability, correctness, and leverage rather than activity for its own sake.
 
 See:
 

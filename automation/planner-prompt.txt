@@ -23,11 +23,11 @@ If active dispatched work already exists, do not create speculative additional w
 
 If an in-progress Issue has no associated PR, follow the interrupted pre-PR recovery rules in docs/LOOP_ENGINEERING.md and the host evidence contract in docs/CODEX_AUTOMATION.md. When all recovery gates hold, re-dispatch that same Issue; otherwise record the concrete blocker on it as required by policy. Do not infer termination from elapsed time or leave an established orphan unexplained in journal-only no-op output.
 
-Only when the autonomous WIP slot is empty, consider the current repository state and choose at most one next bounded increment with the highest marginal value. Create and dispatch an implementation-ready Issue only when doing so represents meaningful project progress under docs/DEVELOPMENT_DIRECTION.md and docs/LOOP_ENGINEERING.md.
+Only when the autonomous WIP slot is empty, consider the current repository state and choose at most one next bounded increment with the highest marginal value. Classify it as Green or Yellow and create the required decision record under docs/LOOP_ENGINEERING.md before dispatch. A blocked Issue without unresolved implementation or PR state does not consume WIP; consider independent eligible work before choosing a no-op.
 
 A no-op cycle is valid. Do not manufacture work, split work unnecessarily, or create conformance/cleanup tasks merely to demonstrate activity.
 
-Do not silently resolve RF semantics, public API policy, licensing/provenance uncertainty, major architecture decisions, release/publishing decisions, or other matters that repository policy requires to be escalated.
+Resolve Green and Yellow choices within the repository envelope and preserve their evidence in the Issue and PR. Do not dispatch or merge Red work without the human decision required by repository policy, and do not invent a weaker classification merely to keep the loop active.
 
 Do not implement product code in the Planner role and do not claim a loop:ready Issue as a Worker.
 

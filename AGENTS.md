@@ -62,9 +62,9 @@ Keep the numerical core independent of plotting frameworks, Python, WASM, GUI fr
 
 Read `docs/PUBLIC_API.md` before any work that adds or changes public RF-analysis operations.
 
-That document is the human-approved policy for the first public `Network` surface. Implementing a bounded slice within it is authorized; changing its semantic distinctions, frequency policy, wave-policy approach, core model, or stabilization assumptions is not an implementation detail and must be escalated.
+That document records the implemented `Network` baseline and the autonomy envelope for extending the provisional public surface. Bounded Green and Yellow changes defined by `docs/LOOP_ENGINEERING.md` are authorized without per-method human approval. Red changes remain escalation boundaries.
 
-Do not accumulate additional private-only RF kernels merely to route around the approved public-API checkpoint unless fresh repository evidence shows that a private prerequisite materially blocks correctness or implementation of the approved surface.
+Keep wave, frequency-grid, units, tolerance, and other consequential semantics explicit. Do not accumulate private-only RF kernels merely to avoid making a justified public capability usable unless fresh repository evidence shows that a private prerequisite materially blocks correctness.
 
 ## Third-party provenance
 
@@ -82,7 +82,9 @@ For the scheduled Codex Planner:
 - when an existing autonomous PR needs bounded, implementation-ready corrections, record or reuse a concrete change request for its current head and re-dispatch the same linked Issue for a correction pass instead of creating replacement work;
 - do not repeat an already-sufficient change request against an unchanged PR head merely to show activity;
 - choose at most one next Issue by marginal value under `docs/DEVELOPMENT_DIRECTION.md`;
-- after the public-API checkpoint in `docs/DEVELOPMENT_DIRECTION.md` is reached, prefer bounded public-usability increments from `docs/PUBLIC_API.md` over additional private-only capability unless a concrete prerequisite blocks them;
+- classify each newly dispatched Issue as Green or Yellow under `docs/LOOP_ENGINEERING.md`, include the required decision record, and escalate rather than dispatch Red work;
+- prefer bounded increments that close coherent end-to-end usability gaps over additional private-only capability unless a concrete prerequisite blocks them;
+- treat a Red or otherwise blocked decision as local to its Issue and consider independent Green/Yellow work when the WIP slot is clear;
 - treat no-op as valid when useful bounded work is unavailable;
 - do not turn README scope, scikit-rf surface area, or `docs/CONFORMANCE.md` into a mechanical backlog;
 - never implement a newly dispatched Issue in the same Planner run;
@@ -103,12 +105,12 @@ For the scheduled Codex Worker:
 - when the dispatched Issue has exactly one unambiguously linked, safely writable open autonomous PR, apply the authorized correction to that PR's existing branch and do not create a duplicate PR;
 - fail closed when the Issue-to-PR relationship, correction request, or writable head branch is ambiguous;
 - use the Issue as the product contract and own the repository-specific implementation plan after inspection;
-- for public RF-operation work, implement within `docs/PUBLIC_API.md` and escalate rather than silently widening or reinterpreting that approved surface;
+- for public RF-operation work, implement within the Green or Yellow authority recorded in the Issue and `docs/PUBLIC_API.md`; do not silently broaden the contract or cross a Red boundary;
 - use Axiom as execution guidance: Codex Main plans, integrates, and accepts the work; Luna MAX implements bounded product-code tasks; and a fresh Sol XHIGH independently reviews the integrated candidate. Verify actual delegated turns from their requested spawn arguments, child `turn_context`, and `task_complete` evidence; a throwaway routing canary is not required;
 - independent bounded subtasks may run in parallel within the selected Issue, but this does not increase WIP or authorize another Issue;
 - within an active Worker pass/review cycle, retain the same Sol XHIGH reviewer session for re-review while the review boundary remains stable; each scheduled correction pass still obtains a fresh independent review;
 - Main owns deterministic verification, review-finding adjudication, Git, and PR creation or update;
-- if a material product/RF/licensing decision is unresolved, mark blocked and surface it rather than guessing.
+- if a Red product/RF/licensing decision is unresolved, mark the affected work blocked and surface it rather than guessing; do not treat it as a global stop when independent authorized work remains.
 
 The `loop:*` labels are dispatch state, not feature taxonomy. Keep design decisions in repository policy, Issues, and PRs rather than encoding them in labels.
 
@@ -122,5 +124,5 @@ The `loop:*` labels are dispatch state, not feature taxonomy. Keep design decisi
 - scheduled implementation of untriaged open Issues without `loop:ready`
 - pre-generating a long autonomous roadmap when WIP=1 is configured
 - repeated conformance, cleanup, refactor, or documentation work without concrete marginal value
-- adding private-only RF capabilities primarily to avoid the approved public-API checkpoint
+- adding private-only RF capabilities primarily to avoid making a justified public workflow usable
 - measuring autonomous-development quality by commit, Issue, PR, or test-count velocity alone

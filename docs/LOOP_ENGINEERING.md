@@ -16,11 +16,11 @@ The scheduled planner owns repository-level progress decisions during normal aut
 - protect repository health before generating new work;
 - assess whether existing PR/Issue work must finish first;
 - choose the next bounded increment by marginal value;
-- define what / why / done in one implementation-ready Issue;
+- classify it as Green or Yellow and define what / why / done in one implementation-ready Issue;
 - apply `loop:ready` only when the Issue is genuinely ready for implementation;
 - merge a clearly merge-ready autonomous PR when policy permits;
 - request bounded changes and re-dispatch the same linked Issue for a correction pass, or mark work blocked when appropriate;
-- escalate decisions that require human RF/product/policy judgment.
+- resolve Green and Yellow decisions within the repository envelope and escalate only Red decisions.
 
 The planner decides **what should happen next**, but does not pre-prescribe routine implementation details. The worker owns repository-specific implementation planning after claiming the Issue.
 
@@ -54,7 +54,62 @@ If the loop is optimizing the wrong thing, ChatGPT should recommend or apply bou
 
 ### Human owner
 
-Human attention should normally be required only for escalated decisions such as public-API policy, ambiguous RF semantics, unavailable paid standards/papers, provenance/licensing uncertainty, major architecture changes, release/publishing actions, or a deliberate change to autonomous-development policy.
+The human owner sets the development horizon, risk tolerance, and Red boundaries, and audits batches of completed work. Routine provisional API design is governed by the envelope below rather than per-method pre-approval.
+
+Human attention is required for Red decisions such as stabilization or a compatibility promise, an authoritative RF conflict that explicit APIs cannot preserve, unavailable evidence required for correctness, unresolved provenance/licensing obligations, major difficult-to-reverse architecture changes, release/publishing actions, security-policy expansion, or a deliberate change to autonomous WIP/review/merge authority.
+
+## Autonomous decision classes
+
+Every newly dispatched Issue must state `Autonomy class: Green` or `Autonomy class: Yellow`. A Red Issue must not receive `loop:ready` until the human owner records the specific decision that makes a bounded Green or Yellow implementation possible.
+
+### Green
+
+Green work is routine within established repository policy:
+
+- the behavior follows a single well-supported mathematical/specification interpretation and existing RF semantics;
+- consequential wave, unit, grid, tolerance, and error behavior is explicit;
+- the change is additive, corrective, or internal and does not make a new compatibility promise;
+- it follows the current canonical model and architecture;
+- verification and provenance requirements are clear;
+- the action is reversible and does not publish, release, sign, or use new credentials.
+
+The Planner may define, dispatch, and later merge Green work without human confirmation.
+
+### Yellow
+
+Yellow work contains a bounded design choice, but may still proceed autonomously when:
+
+- the choice remains reversible during the provisional `0.x` phase;
+- authoritative sources do not leave an externally visible RF conflict that the proposed explicit API cannot represent;
+- the Issue records plausible alternatives, selection criteria, compatibility impact, and rollback or migration;
+- the selected behavior is explicit rather than hidden behind a vague default;
+- the independent review explicitly evaluates the decision, evidence, scope, and reversibility;
+- no Red condition applies.
+
+Examples include a justified supporting public type, an explicitly named additional convention, a bounded dependency or crate-boundary adjustment, and a provisional API revision with migration notes. The Planner may define, dispatch, and later merge Yellow work without human confirmation when every Yellow record and merge gate is satisfied.
+
+### Red
+
+Red work requires a human decision before dispatch or merge:
+
+- declaring stability, making a compatibility promise, or breaking a promise already made;
+- release, crates.io publication, signing, credential changes, or another irreversible external action;
+- externally visible RF behavior where authoritative sources materially disagree and explicit side-by-side semantics cannot preserve the alternatives;
+- unavailable paid or restricted evidence that is necessary to establish correctness;
+- unresolved copyright, license, attribution, or provenance obligations;
+- a major, difficult-to-reverse replacement of the canonical data model, storage representation, crate layout, or repository architecture;
+- security or safety policy beyond a bounded defect fix;
+- relaxation of WIP=1, independent review, autonomous merge gates, or these decision classes.
+
+Uncertainty alone does not make work Red. The Planner should first narrow the decision, seek authoritative evidence, prefer explicit coexistence over an implicit default, and determine whether a reversible Yellow choice is available. It must not relabel a genuinely Red decision merely to keep the loop active.
+
+The classification and its evidence belong in the Issue and PR, not in additional GitHub labels. This keeps `loop:*` labels reserved for dispatch state.
+
+## Decision records and post-merge audit
+
+A Green Issue records the classification, explicit semantics, authoritative basis, verification plan, and why the work is reversible. A Yellow Issue additionally records the plausible alternatives, the selected option and criteria, compatibility impact, and rollback or migration path. The PR must preserve or update that record to describe the implementation that was actually reviewed.
+
+The human owner or ChatGPT governor may audit a batch of merged decisions against these records and open or request ordinary corrective work when classifications, evidence, or outcomes are weak. That audit is a feedback mechanism for future work, not a standing pre-merge approval gate. It becomes a gate only when the owner explicitly intervenes or the work reaches a Red boundary.
 
 ## Dispatch state
 
@@ -98,6 +153,8 @@ If a `loop:ready` or `loop:in-progress` Issue exists, or an autonomous PR is sti
 
 Existing user-reported Issues may remain open as backlog/discussion items without counting as dispatched WIP unless they carry loop state.
 
+A `loop:blocked` Issue without an unresolved autonomous PR does not consume the WIP slot. After recording the blocker, the Planner may dispatch an independent Green or Yellow increment that will not conflict with preserved or potentially live work. One blocked decision must not become a repository-wide stop.
+
 Increasing schedule frequency does **not** mean creating more work. It shortens idle latency between state transitions.
 
 ## Planner cycle
@@ -112,7 +169,7 @@ Every scheduled planner run must use fresh GitHub state and process work in this
 6. inspect blocked work and relevant open Issues, including interrupted pre-PR claims under the recovery rules below;
 7. check `loop:ready` / `loop:in-progress` state and unresolved autonomous PRs;
 8. only when WIP is clear, compare a small set of plausible next directions internally;
-9. create **one** implementation-ready Issue for the best bounded increment and apply `loop:ready`;
+9. classify the best bounded increment as Green or Yellow, create **one** implementation-ready Issue containing the required decision record, and apply `loop:ready`;
 10. report mutations or escalation concisely.
 
 A run with no mutation is valid. Never manufacture an Issue merely because the timer fired.
@@ -127,7 +184,7 @@ The Planner may re-dispatch a correction pass only when all of the following are
 - no closed/unmerged PR is associated with that Issue;
 - that Issue carries only `loop:in-progress`, or already carries only `loop:ready` because this same re-dispatch completed earlier;
 - the Issue and PR are the existing WIP, not unrelated backlog or a new increment;
-- the required changes are bounded by the existing Issue contract and do not require a human escalation decision;
+- the required changes are bounded by the existing Issue contract and do not cross a Red boundary;
 - the Planner has independently accepted a concrete unresolved change request for the head commit it inspected;
 - the PR targets `main`, and its head is a branch in this repository that the Worker can update without force-pushing.
 
@@ -138,7 +195,7 @@ When those conditions hold, the Planner must:
 3. replace `loop:in-progress` with `loop:ready` on the same Issue, preserving WIP=1;
 4. verify that the post-transition Issue has exactly `loop:ready`, not `loop:in-progress` or `loop:blocked`.
 
-If the Issue is already in that verified ready state, the Planner leaves it unchanged. A partially applied or ambiguous label transition must fail closed and be reported; it is not permission to create replacement work. Multiple linked PRs, a fork or otherwise unwritable head, an unclear change request, or product/RF/policy ambiguity must be blocked or escalated instead of re-dispatched.
+If the Issue is already in that verified ready state, the Planner leaves it unchanged. A partially applied or ambiguous label transition must fail closed and be reported; it is not permission to create replacement work. Multiple linked PRs, a fork or otherwise unwritable head, an unclear change request, an unclear autonomy classification, or a Red decision must be blocked or escalated instead of re-dispatched.
 
 After selecting exactly one `loop:ready` Issue, the Worker must verify that it carries no other loop state and that no other `loop:ready` or `loop:in-progress` Issue or unresolved autonomous PR violates WIP=1. It must then determine the pass type from fresh GitHub state before editing:
 
@@ -160,7 +217,7 @@ The Planner may re-dispatch the same Issue for an interrupted initial pass only 
 
 1. The host execution context described in `docs/CODEX_AUTOMATION.md` identifies this run as a Planner holding the shared lock. The single-host execution contract is in effect, so no authorized Worker can still be running. Identify the prior claim/run from its Issue comment and host evidence. If the Worker stopped between the label transition and claim comment, a uniquely matching host Worker run interval and the Issue's direct label timeline may supply that linkage; ambiguous or clock-discontinuous intervals are insufficient. For a claim predating host run records, an explicit maintainer audit may supply the missing historical linkage.
 2. Fresh direct GitHub API state shows exactly one dispatched Issue, carrying only `loop:in-progress`, with no other ready/in-progress work and no unresolved autonomous PR. Inspect its body, comments, full relationship history, and current remote heads. There must be no current or historical PR associated with it. Existing PR work must follow the correction-loop rules instead; closed/unmerged or ambiguous relationships must not be treated as a fresh start.
-3. The Issue remains implementation-ready under current `main` and its original contract. There is no unresolved RF/product/API/provenance decision. A remote work branch without a PR, concurrent updates, unexplained local work, or uncertain ownership requires escalation rather than overwriting or creating replacement work.
+3. The Issue remains implementation-ready under current `main` and its original Green or Yellow contract. There is no unresolved Red decision. A remote work branch without a PR, concurrent updates, unexplained local work, or uncertain ownership requires escalation rather than overwriting or creating replacement work.
 4. Inspect the host's preserved checkout/run evidence when present. Record where uncommitted or unpushed work is preserved and whether it belongs to this claim. Saved work is unreviewed input, not a completed implementation. If a prior host discarded the checkout, state that explicitly and authorize rebuilding the same contract; do not pretend the work was recovered.
 5. This Issue has not already used an automatic pre-PR recovery. Permit **one automatic recovery per Issue**. A further interrupted claim must be marked `loop:blocked` with the failure evidence and required intervention, rather than retried indefinitely. Ordinary corrections of an existing PR do not count as pre-PR recovery.
 
@@ -191,13 +248,15 @@ A good autonomous Issue is:
 - small enough for independent review and merge;
 - useful on its own or clearly unlocking subsequent work;
 - objectively verifiable;
-- product-complete enough that the worker need not invent externally visible behavior;
+- explicit enough that the worker can resolve exposed choices within its recorded Green or Yellow authority without broadening the contract;
 - justified by current repository evidence;
 - free of unnecessary implementation prescriptions.
 
 Before dispatch, consider several plausible directions internally and choose one. Do not publish a speculative long roadmap.
 
 If all plausible next increments have low marginal value, do nothing and report that conclusion.
+
+If one plausible direction is Red or blocked, consider independent Green and Yellow directions before concluding that useful work is unavailable. Do not evade the blocked decision by implementing a hidden prerequisite whose primary purpose is to prejudge it.
 
 ## Avoiding false progress
 
@@ -237,26 +296,17 @@ The planner may merge an autonomous PR without human confirmation when all of th
 - required CI and deterministic verification are green;
 - independent review has no unresolved substantive finding;
 - the diff is bounded to the Issue contract;
-- no escalation condition below is triggered;
-- the change does not publish/release externally or freeze a material public-policy decision.
+- the Issue and PR carry the required Green or Yellow classification and, for Yellow, the alternatives, compatibility impact, rollback/migration, and decision-focused review evidence;
+- no Red condition in this policy is triggered;
+- the change does not publish or release externally.
 
 Otherwise the planner must request bounded changes, mark blocked, or escalate. It must not merge merely to keep the loop moving.
 
 ## Escalation boundary
 
-Stop generation or merge and ask the human owner when a material decision involves:
+Stop dispatch or merge and ask the human owner only when the decision is Red under this document or a safe Green/Yellow classification cannot be established after narrowing it.
 
-- breaking or freezing a public API;
-- choosing between plausible RF definitions or wave conventions without repository policy selecting one;
-- disagreement between standards/mathematics/scikit-rf that changes externally visible semantics;
-- unavailable paid specifications, papers, datasets, or fixtures needed for correctness;
-- uncertain copyright, license, attribution, or provenance obligations;
-- major crate-boundary or repository-wide architecture changes;
-- release, crates.io publishing, signing, or other irreversible external publication;
-- security or safety policy outside a bounded defect fix;
-- deliberate relaxation of WIP, review, or autonomous merge policy.
-
-The escalation must state the decision needed and the smallest useful set of options. Do not create implementation work that assumes an unresolved answer.
+The escalation must state the decision needed, authoritative evidence or uncertainty, why explicit or reversible alternatives are insufficient, and the smallest useful set of options. Mark only the affected Issue `loop:blocked` when safe to do so. Do not create implementation work that assumes an unresolved Red answer, but continue considering independent eligible work under WIP=1.
 
 ## Recommended cadence
 

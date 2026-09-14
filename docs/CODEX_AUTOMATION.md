@@ -22,11 +22,13 @@ Do not maintain divergent copies of the Planner or Worker prompt in systemd unit
 
 ### Planner
 
-The scheduled Planner performs one repository-maintenance/planning cycle. It uses fresh GitHub state, prioritizes existing PRs and active work, may merge only when all autonomous merge gates are satisfied, may re-dispatch the Issue linked to an existing autonomous PR for a bounded correction pass, and may dispatch at most one new implementation-ready Issue when WIP is empty and the work has meaningful marginal value.
+The scheduled Planner performs one repository-maintenance/planning cycle. It uses fresh GitHub state, prioritizes existing PRs and active work, classifies new work under the Green/Yellow/Red envelope in `docs/LOOP_ENGINEERING.md`, may merge only when all autonomous merge gates are satisfied, may re-dispatch the Issue linked to an existing autonomous PR for a bounded correction pass, and may dispatch at most one new Green or Yellow implementation-ready Issue when WIP is empty and the work has meaningful marginal value.
 
 The Planner does not implement product code and does not claim `loop:ready` work as a Worker.
 
 The Planner remains repository-policy-driven; it does not require the Axiom skill or Worker model routing to inspect state, choose work, or dispatch an Issue.
+
+A Red or otherwise blocked Issue without an unresolved PR does not consume WIP. The Planner should consider independent eligible Green or Yellow work before choosing a no-op, while avoiding work that would prejudge or conflict with the blocked decision.
 
 ### Worker
 
@@ -34,7 +36,7 @@ The scheduled Worker performs one implementation cycle as the Main execution age
 
 The direct collaboration tool definitions are separate from the nested `functions.exec` tool registry. Collaboration tools are intentionally omitted from `ALL_TOOLS` and `tools.*`; an empty search there must not be treated as proof that the direct tool is unavailable. Use the direct tool definition for the pre-claim parameter check and its exposed recipient for subsequent calls.
 
-The Worker may implement only an explicitly dispatched `loop:ready` Issue, claims exactly one Issue before work, and uses Axiom to delegate bounded implementation and independent review while Main retains the repository-specific plan, integration, deterministic verification, review-finding adjudication, Git, and PR creation or update. Actual delegated turns must be checked using requested spawn arguments, child `turn_context`, and `task_complete` evidence; a throwaway routing canary is not required. Independent bounded subtasks may run in parallel within the same Issue without increasing WIP. Within an active Worker pass/review cycle, the same Sol XHIGH reviewer session is retained for re-review while the review boundary remains stable; each scheduled correction pass obtains a fresh independent review.
+The Worker may implement only an explicitly dispatched `loop:ready` Issue with a recorded Green or Yellow class, claims exactly one Issue before work, and uses Axiom to delegate bounded implementation and independent review while Main retains the repository-specific plan, integration, deterministic verification, review-finding adjudication, Git, and PR creation or update. For Yellow work, the reviewer must explicitly evaluate the decision record, alternatives, compatibility impact, and reversibility. Actual delegated turns must be checked using requested spawn arguments, child `turn_context`, and `task_complete` evidence; a throwaway routing canary is not required. Independent bounded subtasks may run in parallel within the same Issue without increasing WIP. Within an active Worker pass/review cycle, the same Sol XHIGH reviewer session is retained for re-review while the review boundary remains stable; each scheduled correction pass obtains a fresh independent review.
 
 The Worker does not choose speculative roadmap work and does not claim a second Issue in the same run.
 
@@ -121,15 +123,15 @@ Planner and Worker must fail closed when safe automation cannot be established, 
 - inability to establish the required claim or merge state safely;
 - unsafe/dirty checkout conditions;
 - unavailable required role/model routing;
-- unresolved material RF/product/API/architecture decisions;
+- an unresolved Red RF/product/API/architecture decision in the affected work;
 - unavailable required standards, papers, or fixtures;
 - uncertain provenance/licensing obligations;
 - authentication or GitHub mutation failures.
 
-A failure, blocked cycle, or no-work cycle must not mutate unrelated Issues or generate speculative backlog.
+A failure or blocked decision must not mutate unrelated Issues or generate speculative backlog. Once potentially live work and the WIP slot are accounted for, a later Planner may still choose an independent Green or Yellow increment; one blocked design question is not a permanent repository-wide stop.
 
 ## ChatGPT role
 
 Scheduled ChatGPT is not required in the normal execution path once the Codex Planner/Worker host integration is validated.
 
-ChatGPT may be used on demand as a governor/auditor to inspect whether autonomous work remains aligned with `docs/DEVELOPMENT_DIRECTION.md`, whether recent PRs represent meaningful capability/correctness progress, whether the Planner is drifting into conformance/cleanup tunnels, and whether repository policy should be adjusted.
+ChatGPT may be used on demand as a governor/auditor to inspect whether autonomous work remains aligned with `docs/DEVELOPMENT_DIRECTION.md`, whether recent PRs represent meaningful capability/correctness progress, whether Green/Yellow classifications and decision records are credible, whether the Planner is drifting into conformance/cleanup tunnels, and whether repository policy or Red boundaries should be adjusted. This is normally post-merge batch oversight rather than routine pre-approval.

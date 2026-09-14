@@ -10,27 +10,29 @@ The project should become more **capable**, not merely larger.
 
 ## Current development horizon
 
-The current horizon is a trustworthy RF `Network` core with enough verified primitives to support real composition and analysis workflows.
+The current horizon is a coherent end-to-end RF workflow: callers should be able to construct or load network data, apply verified transformations and composition, and inspect or export useful results without rebuilding private pipelines themselves.
 
 Prefer progress that strengthens one or more of:
 
 1. numerical correctness and explicit RF semantics;
 2. foundational N-port operations with downstream leverage;
 3. network composition and transformation capability;
-4. practical analysis capability that can support a coherent public API;
+4. practical data ingress, analysis, and egress through a coherent public API;
 5. conformance evidence needed to make those capabilities safe.
 
 The README initial scope is directional context, not an ordered backlog.
 
-### Public-API checkpoint
+### Completed public baseline
 
-The verified private `Network` foundations have reached the point where public usability is becoming higher-value than continuing to accumulate internal kernels. The human-approved first public surface and its semantic constraints are defined in `docs/PUBLIC_API.md`.
+The first public `Network` surface defined in `docs/PUBLIC_API.md` is implemented: power-wave Z/Y conversion and renormalization, Cartesian interpolation, exact-grid and explicit-grid matched connection, and matched inner connection are available through verified public methods.
 
-Once the currently active explicit-grid matched-composition work is merged (PR #50 or an equivalent successor), the default next direction is to expose those verified capabilities through bounded public `Network` API increments under `docs/PUBLIC_API.md`.
+That list is a baseline, not a permanent allowlist or ceiling. The next useful increments should close concrete workflow gaps, with data ingress/egress and additional high-leverage RF transformations generally worth more than further private-only kernels. This is an outcome horizon rather than a fixed backlog; current repository evidence still determines the next bounded increment.
 
-Do not route around this checkpoint by generating additional private-only RF kernels merely because public API work was previously an escalation boundary. A private prerequisite remains valid only when fresh repository evidence shows that it materially blocks correctness or implementation of the approved public surface.
+### Autonomous decision envelope
 
-The approved design resolves the decisions written in `docs/PUBLIC_API.md`; implementing within those bounds does not require repeated human escalation. Material deviation from that design still does.
+`docs/LOOP_ENGINEERING.md` defines Green, Yellow, and Red autonomy classes, while `docs/PUBLIC_API.md` applies them to public RF design. The Planner may dispatch and merge Green work and reversible, explicitly recorded Yellow decisions without per-method human approval. Red decisions remain human-governed.
+
+A Red or otherwise blocked decision is local to its Issue. When it has no unresolved implementation or PR consuming the WIP slot, the Planner should continue with an independent eligible Green or Yellow increment rather than treating one design question as a repository-wide stop.
 
 ## What counts as meaningful progress
 
@@ -39,7 +41,7 @@ A sequence of autonomous changes should make it possible to answer at least one 
 - What RF operation can the library now perform that it could not perform before?
 - What previously unsafe or ambiguous behavior is now objectively characterized or corrected?
 - What foundational primitive now unlocks multiple useful downstream operations?
-- What verified internal capability is now usable through the approved public `Network` surface?
+- What verified internal capability is now usable through an explicit public `Network` surface?
 - What important implementation or API decision can now be made safely because a concrete blocker was retired?
 
 A run may legitimately do nothing when no high-value bounded increment is available.
@@ -66,8 +68,8 @@ Do not autonomously:
 - generate one Issue per missing scikit-rf method;
 - add tests, fixtures, metadata, abstractions, or refactors mainly because they are easy to name;
 - repeatedly polish already-strong foundations while higher-value capability work is available;
-- continue adding private-only kernels merely to avoid the approved public-API checkpoint;
-- freeze or broaden public APIs beyond `docs/PUBLIC_API.md` simply to make the next autonomous task convenient;
+- continue adding private-only kernels merely to avoid making a justified public workflow usable;
+- introduce vague public defaults or abstractions outside the autonomy envelope simply to make the next task convenient;
 - create speculative multi-Issue roadmaps that become stale before implementation.
 
 After two consecutive merged conformance-only increments, another conformance-only increment requires concrete repository evidence that it blocks correctness or safe capability growth.
@@ -76,15 +78,18 @@ After several consecutive cleanup/refactor/documentation-only increments, the pl
 
 ## Human decision boundary
 
-Autonomous development must stop and escalate rather than invent policy when the next useful step requires a material decision about:
+Human approval is reserved for Red decisions under `docs/LOOP_ENGINEERING.md`, especially:
 
-- public API semantics, models, defaults, stabilization, or breaking behavior not already approved by `docs/PUBLIC_API.md`;
-- competing RF definitions or wave conventions;
-- externally visible behavior where authoritative sources disagree;
-- unavailable paid standards, papers, datasets, or fixtures;
-- licensing, copyright, attribution, or provenance uncertainty;
-- major crate/repository architecture;
-- releases, package publication, signing, or irreversible external actions.
+- declaring or changing an API stability or compatibility promise;
+- release, package publication, signing, credential use, or another irreversible external action;
+- externally visible RF behavior where authoritative sources materially disagree and explicit side-by-side semantics cannot resolve the conflict;
+- unavailable paid standards, papers, datasets, or fixtures that are necessary to establish correctness;
+- unresolved licensing, copyright, attribution, or provenance obligations;
+- a major, difficult-to-reverse change to the canonical data model, storage representation, or crate/repository architecture;
+- security or safety policy beyond a bounded defect fix;
+- relaxation of WIP, independent review, autonomous merge, or this decision envelope.
+
+Provisional public API design, ordinary dependency choices, and bounded architecture changes are not Red merely because they are externally visible. They may proceed as Green or Yellow when the semantics are explicit, the evidence and alternatives are recorded in proportion to risk, and the change remains reversible before stabilization.
 
 ## Role of ChatGPT
 
@@ -92,10 +97,11 @@ ChatGPT is not part of the normal scheduled execution path.
 
 Its role is repository governor and auditor:
 
-- help the human owner define or revise this direction;
+- help the human owner define or revise objectives and Red boundaries;
 - inspect autonomous development when asked;
 - determine whether recent work is materially advancing RF capability rather than merely producing activity;
 - identify loops, tunnel vision, over-engineering, weak task selection, or policy drift;
-- propose policy corrections when the autonomous system is optimizing the wrong thing.
+- propose policy corrections when the autonomous system is optimizing the wrong thing;
+- review batches of already-merged Green/Yellow decisions instead of requiring routine pre-approval.
 
 GitHub documents remain the source of truth for the autonomous system. Chat history is not an operational dependency.
