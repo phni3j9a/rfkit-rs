@@ -24,7 +24,9 @@ This project does **not** aim to blindly transliterate Python into Rust. scikit-
 The first vertical slice should make these excellent before expanding broadly:
 
 - Frequency and Network data model
-- Touchstone 1.x / 2.x / 2.1
+- Touchstone ingress (the current public slice is an explicitly limited
+  Touchstone 1.0 single-ended S-parameter reader; broader format support is
+  future work)
 - S/Z/Y conversions
 - renormalization including complex and per-port Z0
 - interpolation
@@ -37,10 +39,42 @@ Calibration, media models, vector fitting, VNA control, and bindings come after 
 
 The scope above is directional context rather than an ordered autonomous backlog.
 
+## Read Touchstone text and analyze it
+
+The `rfkit-touchstone` crate provides a pure in-memory parser. The caller
+chooses the port count explicitly and can then use the returned canonical
+`rfkit-core::Network` with existing analysis methods:
+
+```rust
+use rfkit_touchstone::parse_touchstone_v1_0_s;
+
+fn main() -> rfkit_touchstone::Result<()> {
+    let network = parse_touchstone_v1_0_s("# MHz S RI R 75\n10 0.2 0\n", 1)?;
+    let z = network.to_z_power()?;
+    assert!((z[[0, 0, 0]].re - 112.5).abs() < 1e-12);
+    Ok(())
+}
+```
+
+The supported input domain is Touchstone v1.0 single-ended S data in RI, MA,
+or DB pairs, with Hz/kHz/MHz/GHz units, one finite positive real `R` scalar,
+comments, and v1.0 row/continuation layout. Frequencies must be finite,
+non-negative, and strictly increasing. The reader does not infer filenames,
+perform I/O, sort or repair data, renormalize, preserve metadata, or accept
+Touchstone v2.x keywords or mixed-mode/noise data. Its case-insensitive
+HFSS/Ansys semantic-extension boundary rejects comment text beginning with
+`Gamma` or `Port Impedance` (including `Port Impedance0`), comment text
+containing `Terminal data exported` or `Modal data exported`, and explicit
+`S-parameter uses the power definition`, `S-parameter uses the pseudo
+definition`, or `S-parameter uses the traveling definition` comments.
+Ordinary comments, including `Port[n] = ...` port-name comments, remain
+ignorable; universal vendor-marker recognition is outside this reader's scope.
+
 ## Repository layout
 
 ```text
-crates/rfkit-core/   Rust RF numerical core
+crates/rfkit-core/       Rust RF numerical core
+crates/rfkit-touchstone/ pure Touchstone 1.0 S-parameter text ingress
 tools/oracle/        scikit-rf reference/differential-test tools
 docs/                architecture, development, conformance and provenance policy
 ```

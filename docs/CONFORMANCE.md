@@ -24,6 +24,15 @@ The conformance suite should deliberately vary:
 - well-conditioned and near-singular cases
 - DC and high-frequency boundaries where relevant
 
+Touchstone v1.0 S parsing is covered by an independently authored text fixture
+and direct Rust contract tests. The mutually supported oracle slice records
+the pinned `scikit-rf==2.0.1` parser, `numpy==2.5.1`, deterministic input text,
+port count, and mixed relative/absolute tolerance. Rust compares the parsed
+frequency, S, and expanded real scalar `z0` values; v1.0 record boundaries,
+unsupported v2/noise/vendor extensions, and deliberate domain rejections are
+specified directly in Rust rather than inferred from permissive oracle
+behavior.
+
 ## Reporting
 
 Eventually CI should publish a machine-generated coverage report such as:

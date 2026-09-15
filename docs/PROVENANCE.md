@@ -111,11 +111,22 @@ interpolation; no scikit-rf or SciPy source code or fixture values are copied.
 
 Before adding copied or closely adapted third-party code or fixtures, record an entry here and preserve the applicable license notice under `THIRD_PARTY_LICENSES/`.
 
+The Touchstone reader and its synthetic text cases are independent REWRITEs.
+The format boundary follows the IBIS Open Forum Touchstone File Format
+Specification Version 2.1 (January 2024), specifically the rules that define
+the historical v1.0 syntax. The implementation does not copy specification
+examples or scikit-rf code. scikit-rf 2.0.1 at commit
+`bd651e923cac6020de49a096e1d7e9b5f949f884` is consulted only for behavior and
+for one independently authored, mutually supported oracle input; deliberate
+v2/noise/vendor-extension rejections remain specification-driven Rust tests.
+
 ## Required record format
 
 | Local path | Source project | Source commit/tag | Source path | Use | License | Notes |
 |---|---|---|---|---|---|---|
 | _example_ | rust-rf | `<sha>` | `src/network.rs` | ADAPT | BSD-3-Clause | Renormalization math rewritten around local API |
+| `crates/rfkit-touchstone/src/lib.rs`; `crates/rfkit-touchstone/tests/public_parser.rs` | IBIS Open Forum Touchstone File Format Specification | Version 2.1 (2024-01-26) | v1.0 option-line, comment, pair-format, frequency, and row/continuation rules (pp. 4–9, 14–19) | REWRITE | IBIS Open Forum specification; no text/code copied | Pure parser and synthetic inputs independently authored; the supported real-scalar-R S subset is explicit and reversible |
+| `tools/oracle/generate_oracle.py`; `tools/oracle/fixtures/touchstone_v1_0_s_three_port.json` | scikit-rf | `bd651e923cac6020de49a096e1d7e9b5f949f884` (`v2.0.1`) | Public `skrf.io.touchstone.Touchstone` parser behavior | REWRITE | BSD-3-Clause | Deterministic text and expected frequency/S/z0 are independently authored and generated through the pinned public parser; no source or upstream fixture copied |
 
 `Use` should be one of:
 

@@ -14,7 +14,7 @@ The exact public representation may evolve, but these invariants should remain e
 
 ```text
 rfkit-core       numerical network analysis + file-independent RF math
-rfkit-touchstone optional dedicated parser/writer if I/O grows large
+rfkit-touchstone dedicated pure in-memory Touchstone parser (v1.0 S subset)
 rfkit-cal        calibration/de-embedding algorithms
 rfkit-plot       backend-neutral Smith/plot data and optional renderers
 rfkit-python     PyO3 binding
@@ -22,6 +22,13 @@ rfkit-wasm       wasm-bindgen binding
 ```
 
 Do not split crates merely for aesthetics. Split when dependency boundaries or compile-time/platform isolation justify it.
+
+`rfkit-touchstone` currently depends toward `rfkit-core` and owns only the
+bounded Touchstone 1.0 single-ended S-parameter text reader. It has no
+filesystem, async, instrument, or metadata responsibilities; callers provide
+text obtained through their own I/O layer. Touchstone v2.x, writers, and
+vendor-specific extensions remain outside this boundary until a separately
+verified design justifies them.
 
 ## API philosophy
 
