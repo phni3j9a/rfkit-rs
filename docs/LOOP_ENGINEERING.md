@@ -31,8 +31,8 @@ The Planner remains repository-policy-driven and does not depend on Axiom skill 
 The scheduled worker owns execution of one dispatched Issue:
 
 - find exactly one `loop:ready` Issue authorizing either initial implementation or a correction pass;
-- if no `loop:ready` Issue exists, complete a normal no-op without requiring Axiom skill or delegation routing;
-- after selecting one valid `loop:ready` Issue and before claiming it, discover and read the available `axiom:axiom` skill through runtime skill discovery; do not assume a hardcoded skill, plugin, or version path;
+- explicitly invoke `$axiom:axiom` from the canonical Worker prompt and verify that its full instructions loaded before claiming an Issue; do not infer unavailability merely because Codex abbreviates its initial skills list, and do not use a hardcoded plugin cache/version path as a fallback;
+- if no `loop:ready` Issue exists, complete a normal no-op without checking delegation routing, delegating, or mutating GitHub; loading the explicitly invoked Axiom skill before this check is acceptable;
 - before claiming it, verify that the directly exposed `collaboration.spawn_agent` tool definition includes explicit `model` and `reasoning_effort` parameters needed to request `gpt-5.6-luna` at MAX for bounded implementation and a fresh `gpt-5.6-sol` at XHIGH for independent review. If the skill or routing is unavailable, fail closed and report the blocker rather than reinstalling IssueFlow, creating a replacement orchestrator, or substituting models;
 - claim it before implementation;
 - update its existing autonomous PR rather than opening a duplicate when the dispatch is for bounded corrections;

@@ -32,7 +32,9 @@ A Red or otherwise blocked Issue without an unresolved PR does not consume WIP. 
 
 ### Worker
 
-The scheduled Worker performs one implementation cycle as the Main execution agent. It first checks fresh dispatch and WIP state; if no `loop:ready` Issue exists, it completes a normal no-op without requiring Axiom skill or delegation routing. After selecting one valid ready Issue and before claiming it, the Worker discovers and reads the available `axiom:axiom` skill at runtime without assuming a hardcoded skill, plugin, or version path. It then verifies that the directly exposed `collaboration.spawn_agent` tool definition includes explicit `model` and `reasoning_effort` parameters for the named `gpt-5.6-luna` MAX implementation route and a fresh `gpt-5.6-sol` XHIGH review route. If the skill or routing is unavailable, it fails closed and reports the blocker rather than reinstalling IssueFlow, creating a replacement orchestrator, or substituting models.
+The scheduled Worker performs one implementation cycle as the Main execution agent. Its canonical prompt explicitly invokes `$axiom:axiom`, and the Worker must verify that the full skill instructions loaded before claiming work. This avoids treating an omitted entry in Codex's size-bounded initial skills list as conclusive unavailability while still avoiding any hardcoded plugin cache/version path. If no `loop:ready` Issue exists, the Worker completes a normal no-op without checking delegation routing, delegating, or mutating GitHub; loading the explicitly invoked skill before that check is acceptable. After selecting one valid ready Issue and before claiming it, the Worker verifies that the directly exposed `collaboration.spawn_agent` tool definition includes explicit `model` and `reasoning_effort` parameters for the named `gpt-5.6-luna` MAX implementation route and a fresh `gpt-5.6-sol` XHIGH review route. If explicit skill activation or routing is unavailable, it fails closed and reports the blocker rather than reinstalling IssueFlow, creating a replacement orchestrator, or substituting models.
+
+OpenAI documents both explicit `$skill` invocation and possible omission from the initial skills list when its context budget is exceeded: <https://developers.openai.com/codex/skills>.
 
 The direct collaboration tool definitions are separate from the nested `functions.exec` tool registry. Collaboration tools are intentionally omitted from `ALL_TOOLS` and `tools.*`; an empty search there must not be treated as proof that the direct tool is unavailable. Use the direct tool definition for the pre-claim parameter check and its exposed recipient for subsequent calls.
 
@@ -85,7 +87,7 @@ codex exec "$(cat automation/planner-prompt.txt)"
 codex exec "$(cat automation/worker-prompt.txt)"
 ```
 
-Do not copy the prompt body into the unit file. Do not add host-specific strategic instructions that compete with repository policy. Do not hardcode an Axiom skill, plugin, or version path in the unit or wrapper; the Worker discovers the skill at runtime.
+Do not copy the prompt body into the unit file. Do not add host-specific strategic instructions that compete with repository policy. Do not hardcode an Axiom skill, plugin, or version path in the unit or wrapper; the canonical Worker prompt explicitly activates the installed skill at runtime.
 
 See `automation/README.md` for host-integration requirements.
 
@@ -95,7 +97,7 @@ Before enabling scheduled execution, verify that:
 
 1. the checkout can fetch, push, create/update Issues and PRs, and merge when authorized;
 2. Codex can read the repository policy and runtime prompt files;
-3. the Worker runtime can discover/read the available Axiom skill and exposes explicit model/effort routing for the named Luna MAX and fresh Sol XHIGH roles; the Planner has no such dependency;
+3. the Worker runtime resolves the canonical prompt's explicit `$axiom:axiom` invocation, supplies its full instructions, and exposes explicit model/effort routing for the named Luna MAX and fresh Sol XHIGH roles; the Planner has no such dependency;
 4. GitHub and Codex authentication work non-interactively under the systemd service account;
 5. `HOME`, `PATH`, working directory, and other required environment are explicit enough for non-interactive execution;
 6. Planner and Worker share a host-level lock so they cannot mutate the same checkout concurrently;
