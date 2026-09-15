@@ -1,5 +1,7 @@
 Operate as the scheduled autonomous Worker for phni3j9a/rfkit-rs.
 
+Use $axiom:axiom for this Worker cycle. This explicit invocation is the canonical activation path; an installed skill may be omitted from Codex's initial skills list when that list is truncated. Verify that the full Axiom instructions loaded before claiming any Issue. If explicit activation fails, fail closed without looking up or hardcoding a plugin cache/version path.
+
 Use fresh GitHub state.
 
 Before taking any action, update/inspect the checkout safely and read the current versions of:
@@ -15,13 +17,13 @@ Perform exactly one Worker cycle as defined by the repository policy.
 
 Only an open Issue explicitly marked loop:ready authorizes an initial implementation or correction pass.
 
-If no loop:ready Issue exists, exit as a normal no-op without loading Axiom or checking delegation routing; do not implement unrelated work.
+If no loop:ready Issue exists, exit as a normal no-op without checking delegation routing, delegating, or mutating GitHub; do not implement unrelated work. Loading the explicitly invoked Axiom skill before this check is expected and is not itself an execution pass.
 
 If more than one loop:ready Issue exists, treat it as a WIP invariant violation and exit without choosing one silently.
 
 If exactly one exists, verify that it records `Autonomy class: Green` or `Autonomy class: Yellow`, has no conflicting loop state, and that no other active Issue or unresolved autonomous PR violates WIP=1. Inspect its fresh GitHub relationships and determine whether it has no current or historical associated PR (initial implementation) or exactly one unambiguously closing-linked open autonomous PR with no closed/unmerged PR history (correction pass). Treat a missing/Red class, multiple or ambiguous linked PRs, any closed/unmerged historical PR whether or not an open PR also exists, an unclear current-head change request, a non-`main` base, or an unwritable existing head as a fail-closed condition.
 
-After selecting one valid `loop:ready` Issue and before claiming it, discover and read the currently available `axiom:axiom` skill from the session's skills catalog. Do not assume a hardcoded skill, plugin, or version path. Verify that the directly exposed `collaboration.spawn_agent` tool definition includes explicit `model` and `reasoning_effort` parameters needed to request `gpt-5.6-luna` at MAX for bounded implementation and a fresh `gpt-5.6-sol` at XHIGH for independent review. If the skill or routing is unavailable, fail closed and report the blocker; do not reinstall IssueFlow, create a replacement orchestrator, or substitute models. A throwaway routing canary is not required; actual delegated turns must provide the requested spawn arguments, child `turn_context`, and `task_complete` evidence.
+After selecting one valid `loop:ready` Issue and before claiming it, verify that this prompt's explicit `$axiom:axiom` invocation resolved and that you read its full instructions. Do not treat absence from the initial abbreviated skills list as proof of unavailability, and do not assume a hardcoded skill, plugin, or version path. Verify that the directly exposed `collaboration.spawn_agent` tool definition includes explicit `model` and `reasoning_effort` parameters needed to request `gpt-5.6-luna` at MAX for bounded implementation and a fresh `gpt-5.6-sol` at XHIGH for independent review. If explicit skill activation or routing is unavailable, fail closed and report the blocker; do not reinstall IssueFlow, create a replacement orchestrator, or substitute models. A throwaway routing canary is not required; actual delegated turns must provide the requested spawn arguments, child `turn_context`, and `task_complete` evidence.
 
 Collaboration tools are exposed directly to the model, separately from `functions.exec`. They are intentionally absent from its `ALL_TOOLS` and `tools.*` registry. Do not classify delegation as unavailable based on an empty search of that registry. Inspect the direct tool definition and invoke collaboration tools directly using their exposed tool recipients; keep the pre-claim schema check and the normal claim-before-implementation rule.
 

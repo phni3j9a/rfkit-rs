@@ -48,8 +48,8 @@ The systemd integration should remain simple and operational rather than becomin
 - Do not discard unrelated local user work. Fail closed if the checkout cannot be made safe for automation.
 - Preserve interrupted, dirty, or unpublished checkouts before creating a fresh one, and log the preserved path. Bound service runtime and terminate its child processes as required by `docs/CODEX_AUTOMATION.md`.
 - Ensure non-interactive `HOME`, `PATH`, Git/GitHub authentication, and Codex authentication are available to the service.
-- Leave Axiom skill/plugin discovery to the Worker runtime; do not hardcode a skill, plugin, or version path in systemd units or shell wrappers. The Worker must fail closed if the available skill or explicit Luna MAX/Sol XHIGH routing cannot be established.
-- During migration, remove any legacy fixed-path preflight for the removed IssueFlow workflow; do not replace it with an Axiom skill/version path gate, because the Worker discovers the skill at runtime after selecting a valid Issue.
+- Leave Axiom activation to the canonical Worker prompt's explicit `$axiom:axiom` invocation; do not hardcode a skill, plugin, or version path in systemd units or shell wrappers. The Worker must verify that the full skill loaded and fail closed if activation or explicit Luna MAX/Sol XHIGH routing cannot be established.
+- During migration, remove any legacy fixed-path preflight for the removed IssueFlow workflow; do not replace it with an Axiom skill/version path gate. Initial skills-list omission is not a reliable availability test because Codex may abbreviate that list.
 - Keep stdout/stderr visible through the systemd journal.
 - Prefer `Persistent=true` for timers so a powered-off host can recover a missed opportunity without inventing additional work.
 - Avoid duplicate legacy timers/workers after migration.
