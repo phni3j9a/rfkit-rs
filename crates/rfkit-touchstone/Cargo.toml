@@ -1,0 +1,20 @@
+[package]
+name = "rfkit-touchstone"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Touchstone 1.0 S-parameter text parser for rfkit-core"
+keywords = ["rf", "microwave", "touchstone", "s-parameters"]
+categories = ["science", "parser-implementations"]
+
+[dependencies]
+ndarray.workspace = true
+num-complex.workspace = true
+rfkit-core.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+serde.workspace = true
+serde_json.workspace = true

@@ -35,6 +35,7 @@ import json
 import math
 import sys
 from importlib.metadata import PackageNotFoundError, version
+from io import StringIO
 from pathlib import Path
 from typing import Any, Callable, NamedTuple
 
@@ -46,6 +47,35 @@ RANDOM_SEED = 20_250_308
 SCHEMA_VERSION = 1
 DEFAULT_FIXTURE = (
     Path(__file__).resolve().parent / "fixtures" / "three_port_complex_z0.json"
+)
+TOUCHSTONE_V1_FIXTURE = (
+    Path(__file__).resolve().parent
+    / "fixtures"
+    / "touchstone_v1_0_s_three_port.json"
+)
+TOUCHSTONE_V1_CASE_ID = "touchstone_v1_0_s_three_port"
+TOUCHSTONE_V1_NPORTS = 3
+TOUCHSTONE_V1_INPUT_RECIPE = (
+    "literal TOUCHSTONE_V1_TEXT below: two MHz frequency records, three "
+    "RI matrix rows per record, scalar R=73.5, and no random generation"
+)
+TOUCHSTONE_V1_RTOL = 1e-12
+TOUCHSTONE_V1_ATOL = 1e-12
+TOUCHSTONE_V1_TOLERANCE_JUSTIFICATION = (
+    "Strict binary64 tolerance for a deterministic, independently authored "
+    "Touchstone v1.0 RI three-port text input; the parser output is compared "
+    "through frequency-major S and expanded real-scalar z0 while the text, "
+    "port count, metadata, and frequency axis remain exact."
+)
+TOUCHSTONE_V1_TEXT = (
+    "! Independently authored Touchstone v1.0 oracle input\n"
+    "# MHz S RI R 73.5\n"
+    "10 0.10 0.20 0.30 -0.40 0.50 0.60\n"
+    "0.70 -0.80 0.90 1.00 1.10 -1.20\n"
+    "1.30 1.40 1.50 -1.60 1.70 1.80\n"
+    "20 -0.11 0.21 -0.31 -0.41 -0.51 0.61\n"
+    "0.71 0.81 -0.91 1.01 -1.11 -1.21\n"
+    "1.31 -1.41 1.51 1.61 -1.71 1.81\n"
 )
 S_TO_Z_FIXTURE = (
     Path(__file__).resolve().parent
@@ -1795,6 +1825,74 @@ def _network_fixture(np: Any, skrf: Any) -> dict[str, Any]:
         "data": {
             "frequency_hz": [float(value) for value in frequency],
             "s": _complex_array(network_s),
+            "z0_ohm": _complex_array(network_z0),
+        },
+    }
+
+
+def _touchstone_v1_fixture(np: Any, skrf: Any) -> dict[str, Any]:
+    """Build the Touchstone v1.0 parser fixture through public scikit-rf."""
+
+    # This text is authored in this repository rather than copied from the
+    # specification or an upstream fixture.  StringIO receives a synthetic
+    # .s3p name only because scikit-rf's public v1 parser uses the filename
+    # extension to determine the rank; rfkit-touchstone receives the explicit
+    # port count and performs no filename inference.
+    stream = StringIO(TOUCHSTONE_V1_TEXT)
+    stream.name = f"{TOUCHSTONE_V1_CASE_ID}.s3p"
+    from skrf.io.touchstone import Touchstone
+
+    parsed = Touchstone(stream)
+    frequency = np.asarray(parsed.f, dtype=np.float64)
+    network_s = np.asarray(parsed.s, dtype=np.complex128)
+    network_z0 = np.asarray(parsed.z0, dtype=np.complex128)
+    if network_s.shape != (2, TOUCHSTONE_V1_NPORTS, TOUCHSTONE_V1_NPORTS):
+        raise ValueError(f"unexpected Touchstone S shape: {network_s.shape}")
+    if network_z0.shape != (2, TOUCHSTONE_V1_NPORTS):
+        raise ValueError(f"unexpected Touchstone z0 shape: {network_z0.shape}")
+    if not np.isfinite(frequency).all() or not np.isfinite(network_s).all():
+        raise ValueError("Touchstone oracle output must be finite")
+    if not np.isfinite(network_z0).all() or not np.all(network_z0 == 73.5):
+        raise ValueError("Touchstone oracle z0 output must be expanded 73.5 ohm")
+
+    return {
+        "metadata": {
+            "case_id": TOUCHSTONE_V1_CASE_ID,
+            "numpy_version": np.__version__,
+            "operation": "touchstone_v1_0_s_parse",
+            "port_count": TOUCHSTONE_V1_NPORTS,
+            "input_recipe": TOUCHSTONE_V1_INPUT_RECIPE,
+            "reference_impedance": {
+                "complex": False,
+                "frequency_dependent": False,
+                "per_port": False,
+                "unit": "ohm",
+            },
+            "schema": "rfkit-rs.oracle.fixture",
+            "schema_version": SCHEMA_VERSION,
+            "scikit_rf_version": skrf.__version__,
+            "shape": {
+                "frequency": list(frequency.shape),
+                "s": list(network_s.shape),
+                "z0": list(network_z0.shape),
+            },
+            "tolerance_policy": {
+                "atol": TOUCHSTONE_V1_ATOL,
+                "comparison": "abs(actual-expected) <= atol + rtol*abs(expected)",
+                "justification": TOUCHSTONE_V1_TOLERANCE_JUSTIFICATION,
+                "regeneration": (
+                    "canonical UTF-8 JSON serialization; parsed S and z0 are "
+                    "checked with the recorded numeric tolerance"
+                ),
+                "rtol": TOUCHSTONE_V1_RTOL,
+            },
+            "wave_definition": "power",
+        },
+        "data": {
+            "frequency_hz": [float(value) for value in frequency],
+            "nports": TOUCHSTONE_V1_NPORTS,
+            "s": _complex_array(network_s),
+            "touchstone_text": TOUCHSTONE_V1_TEXT,
             "z0_ohm": _complex_array(network_z0),
         },
     }
@@ -4114,6 +4212,13 @@ _CASES = (
         DEFAULT_FIXTURE,
         _network_fixture,
         "exact",
+    ),
+    _OracleCase(
+        TOUCHSTONE_V1_CASE_ID,
+        TOUCHSTONE_V1_FIXTURE,
+        _touchstone_v1_fixture,
+        "numeric_output",
+        ("s", "z0_ohm"),
     ),
     _OracleCase(
         INTERPOLATION_CASE_ID,

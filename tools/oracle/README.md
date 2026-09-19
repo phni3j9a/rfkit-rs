@@ -66,7 +66,7 @@ version.
 
 ## Generate and verify
 
-The harness has thirty-three registered canonical cases. The original three cases
+The harness has thirty-four registered canonical cases. The original three cases
 remain unchanged:
 
 - `three_port_complex_z0` — the representative four-frequency, three-port
@@ -79,6 +79,15 @@ remain unchanged:
   non-symmetric, diagonally dominant complex Z input with frequency-dependent
   per-port `z0`; the complete expected power-wave Z-to-S result is obtained
   from public `Network.from_z(..., s_def="power").s`.
+
+The Touchstone v1.0 ingress case is:
+
+- `touchstone_v1_0_s_three_port` — independently authored v1.0 text with a
+  scalar 73.5-ohm reference, MHz frequencies, RI pairs, and asymmetric
+  three-port row-major data. Its metadata records the deterministic literal
+  input recipe (no random seed). Expected frequency/S/z0 values are read
+  through the pinned public `skrf.io.touchstone.Touchstone` parser; the text
+  and explicit port count remain exact contract fields.
 
 The additional interpolation case is:
 
@@ -531,6 +540,9 @@ The JSON representation is deliberately machine-readable and byte-stable:
   the well-conditioned, modest-magnitude deterministic cases: they allow
   normal cross-language linear-algebra rounding while catching material
   disagreement.
+- The Touchstone v1.0 parser case keeps its independently authored text,
+  explicit port count, frequency axis, and all metadata exact; only parsed `s`
+  and expanded `z0_ohm` are numeric-tolerance outputs.
 - The checker removes exactly the registered computed output field(s) for the
   contract projection. Existing cases register one output; interpolation
   registers both `s` and `z0_ohm`. It never tolerates drift in inputs, z0,

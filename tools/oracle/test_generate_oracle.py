@@ -507,6 +507,79 @@ COMPOSITION_CASE_SPECS = {
     },
 }
 
+TOUCHSTONE_CASE_SPECS = {
+    "touchstone_v1_0_s_three_port": {
+        "operation": "touchstone_v1_0_s_parse",
+        "ports": 3,
+        "frequencies": 2,
+        "output": ("s", "z0_ohm"),
+        "input_recipe": oracle.TOUCHSTONE_V1_INPUT_RECIPE,
+        "z0": 73.5,
+    },
+}
+
+
+class TouchstoneRegistrationAndCheckerTests(unittest.TestCase):
+    """Protect the pinned Touchstone v1.0 parser fixture contract."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.np, cls.skrf = oracle._load_dependencies()
+        cls.fixture_path = oracle.TOUCHSTONE_V1_FIXTURE
+        cls.fixture = oracle._read_canonical_json(cls.fixture_path)
+
+    def test_case_is_registered_with_parser_contract(self) -> None:
+        case_id = next(iter(TOUCHSTONE_CASE_SPECS))
+        spec = TOUCHSTONE_CASE_SPECS[case_id]
+        registered = {case.case_id: case for case in oracle._CASES}
+        self.assertIn(case_id, registered)
+        case = registered[case_id]
+        self.assertEqual(case.path, oracle.TOUCHSTONE_V1_FIXTURE)
+        self.assertEqual(case.comparison, "numeric_output")
+        self.assertEqual(case.numeric_output_key, spec["output"])
+        self.assertEqual(case.path.stem, case_id)
+        metadata = self.fixture["metadata"]
+        self.assertEqual(metadata["case_id"], case_id)
+        self.assertEqual(metadata["operation"], spec["operation"])
+        self.assertEqual(metadata["port_count"], spec["ports"])
+        self.assertEqual(metadata["input_recipe"], spec["input_recipe"])
+        self.assertEqual(metadata["scikit_rf_version"], oracle.EXPECTED_SCIKIT_RF_VERSION)
+
+    def test_builder_uses_public_touchstone_parser_and_preserves_text_contract(self) -> None:
+        case_id = next(iter(TOUCHSTONE_CASE_SPECS))
+        case = next(case for case in oracle._CASES if case.case_id == case_id)
+        regenerated = case.builder(self.np, self.skrf)
+        self.assertEqual(
+            regenerated["metadata"]["input_recipe"],
+            self.fixture["metadata"]["input_recipe"],
+        )
+        self.assertEqual(regenerated["data"]["touchstone_text"], self.fixture["data"]["touchstone_text"])
+        self.assertEqual(regenerated["data"]["nports"], self.fixture["data"]["nports"])
+        self.assertEqual(regenerated["data"]["frequency_hz"], self.fixture["data"]["frequency_hz"])
+
+    def test_checker_tolerates_only_parsed_outputs(self) -> None:
+        case_id = next(iter(TOUCHSTONE_CASE_SPECS))
+        case = next(case for case in oracle._CASES if case.case_id == case_id)
+        adjusted = copy.deepcopy(self.fixture)
+        adjusted["data"]["s"][0][0][0]["real"] += 1e-13
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / self.fixture_path.name
+            path.write_bytes(oracle._canonical_bytes(adjusted))
+            self.assertEqual(
+                oracle._check_numeric_fixture(path, self.fixture, case.numeric_output_key),
+                0,
+            )
+
+        drifted = copy.deepcopy(self.fixture)
+        drifted["data"]["touchstone_text"] += "! contract drift\n"
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / self.fixture_path.name
+            path.write_bytes(oracle._canonical_bytes(drifted))
+            self.assertEqual(
+                oracle._check_numeric_fixture(path, self.fixture, case.numeric_output_key),
+                1,
+            )
+
 
 class InterpolationRegistrationAndCheckerTests(unittest.TestCase):
     """Protect the direct interpolation case and both-output checker path."""
@@ -920,7 +993,8 @@ class MatrixRegistrationAndCheckerTests(unittest.TestCase):
             + len(POWER_WAVE_ADMITTANCE_CASE_SPECS)
             + len(COMPOSITION_CASE_SPECS)
             + len(MATCHED_CONNECTION_CASE_SPECS)
-            + len(INNER_CONNECT_CASE_SPECS),
+            + len(INNER_CONNECT_CASE_SPECS)
+            + len(TOUCHSTONE_CASE_SPECS)
         )
         self.assertTrue(set(MATRIX_CASE_SPECS).issubset(registered))
         self.assertTrue(set(IMPEDANCE_ADMITTANCE_CASE_SPECS).issubset(registered))
