@@ -2,6 +2,27 @@
 //!
 //! The project starts deliberately small: a trustworthy core data model first,
 //! then numerical operations backed by differential tests against scikit-rf.
+//!
+//! The canonical [`Network`] owns frequency-major S-parameter data.  The
+//! provisional parameter-ingress constructors [`Network::from_z_power`] and
+//! [`Network::from_y_via_z_power`] accept owned frequency-major matrices in
+//! ohms and siemens respectively, plus explicit complex reference impedances
+//! in ohms, and return that canonical S representation.  They use Kurokawa
+//! power-wave semantics; S itself is dimensionless.  The supplied frequency
+//! samples and reference values are pointwise data and are retained exactly.
+//! The constructors require a nonempty axis with a matching first dimension,
+//! but do not impose finite, nonnegative, sorted, or unique sample policy.
+//! Those restrictions belong to consuming formats or operations such as the
+//! Touchstone writer.  No 50-ohm default, broadcasting, regularization,
+//! pseudoinverse, cutoff, or fallback is applied.
+//!
+//! `from_y_via_z_power` is intentionally named for its composed Y→Z→S path:
+//! singular or zero Y is rejected while forming the intermediate impedance,
+//! even though a future direct Y→S operation could choose a different domain.
+//! Both constructors return structured crate-level errors that retain Z/Y
+//! input kind, conversion stage, and matrix location where the existing
+//! kernels provide that context.  Inputs are borrowed during computation and
+//! are not mutated; the returned arrays are newly owned.
 
 use ndarray::{Array2, Array3};
 use num_complex::Complex64;
@@ -23,6 +44,18 @@ mod power_waves;
 pub enum Error {
     #[error("frequency axis must not be empty")]
     EmptyFrequency,
+
+    #[error("{parameter} constructor frequency axis must not be empty")]
+    EmptyParameterFrequency { parameter: ParameterKind },
+
+    #[error(
+        "{parameter} constructor frequency length does not match the parameter first axis: expected {expected}, got {actual}"
+    )]
+    ParameterFrequencyLengthMismatch {
+        parameter: ParameterKind,
+        expected: usize,
+        actual: usize,
+    },
 
     #[error("S-parameter shape must be (nfreq, nport, nport)")]
     InvalidSShape,
@@ -449,14 +482,18 @@ impl fmt::Display for InterpolationQuantity {
 
 /// High-level conversion stage associated with a public conversion error.
 ///
-/// `to_y_power` is intentionally a composed `S→Z→Y` operation, so preserving
-/// this stage lets callers distinguish a singular or invalid intermediate
-/// impedance conversion from a failure while inverting that impedance.
+/// `to_y_power` is intentionally a composed `S→Z→Y` operation, and
+/// [`Network::from_y_via_z_power`] is intentionally a composed `Y→Z→S`
+/// operation. Preserving these stages lets callers distinguish a singular or
+/// invalid intermediate impedance conversion from a failure while inverting
+/// that impedance or converting it back to S.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConversionStage {
     /// Conversion from scattering parameters to impedance parameters.
     SToZ,
+    /// Conversion from admittance parameters to impedance parameters.
+    YToZ,
     /// Conversion from impedance parameters to admittance parameters.
     ZToY,
     /// Conversion from impedance parameters to scattering parameters.
@@ -467,6 +504,7 @@ impl fmt::Display for ConversionStage {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             Self::SToZ => "S→Z",
+            Self::YToZ => "Y→Z",
             Self::ZToY => "Z→Y",
             Self::ZToS => "Z→S",
         })
@@ -575,6 +613,141 @@ impl Network {
     #[must_use]
     pub fn nports(&self) -> usize {
         self.s.dim().1
+    }
+
+    /// Constructs a scattering [`Network`] from frequency-major impedance
+    /// parameters using the Kurokawa power-wave convention.
+    ///
+    /// `z` contains physical impedance matrices in ohms with shape
+    /// `(nfreq, nport, nport)`, and `z0` contains the explicit reference
+    /// impedances in ohms with shape `(nfreq, nport)`. The returned S-parameter
+    /// matrices are dimensionless and retain the supplied frequency samples,
+    /// frequency order, port order, and `z0` values exactly. Both arrays are
+    /// owned at this boundary; the conversion borrows them while evaluating
+    /// and does not mutate them.
+    ///
+    /// The conversion uses power waves, with
+    /// `G = diag(z0)` and `F = diag(1/(2*sqrt(abs(Re(z0)))))`, and delegates
+    /// the numerical work to the existing `Z→S` kernel. References may be
+    /// finite complex values, may vary by frequency and port, and may have a
+    /// negative real part because the kernel uses `abs(Re(z0))`. A zero real
+    /// part or non-finite reference is outside this normalization domain.
+    /// `z` itself need not be invertible; for example, a zero impedance matrix
+    /// succeeds whenever the `Z + G` conversion system is nonsingular.
+    ///
+    /// Frequency samples are pointwise labels for this constructor. The axis
+    /// must be non-empty and its length must equal the first axis of `z`; the
+    /// constructor does not require samples to be finite, non-negative,
+    /// sorted, or unique. Those policies belong to operations such as the
+    /// Touchstone writer. No frequency sorting, resampling, broadcasting,
+    /// 50-ohm default, regularization, pseudoinverse, cutoff, fallback, or
+    /// identity shortcut is applied.
+    ///
+    /// This is a provisional additive 0.x API. Its name and signature are not
+    /// a `1.0` stability promise.
+    ///
+    /// # Errors
+    ///
+    /// Returns a structured [`enum@Error`] identifying an empty or mismatched Z
+    /// frequency axis before kernel execution. Kernel diagnostics preserve
+    /// the `Z→S` stage and identify Z, z0, non-finite input, exact singularity,
+    /// and non-finite computation failures.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use ndarray::{Array2, Array3};
+    /// use num_complex::Complex64;
+    /// use rfkit_core::{Frequency, Network};
+    ///
+    /// # fn example() -> rfkit_core::Result<()> {
+    /// let frequency = Frequency::from_hz(vec![1.0e9])?;
+    /// let z = Array3::from_elem((1, 1, 1), Complex64::new(100.0, 0.0));
+    /// let z0 = Array2::from_elem((1, 1), Complex64::new(50.0, 0.0));
+    /// let network = Network::from_z_power(frequency, z, z0)?;
+    ///
+    /// assert!((network.s()[[0, 0, 0]].re - 1.0 / 3.0).abs() < 1.0e-14);
+    /// # Ok(())
+    /// # }
+    /// # example().unwrap();
+    /// ```
+    pub fn from_z_power(
+        frequency: Frequency,
+        z: Array3<Complex64>,
+        z0: Array2<Complex64>,
+    ) -> Result<Network> {
+        validate_parameter_frequency(&frequency, z.dim().0, ParameterKind::Z)?;
+
+        let s = power_waves::z_to_s_power(&z, &z0)
+            .map_err(|error| map_power_wave_error(ConversionStage::ZToS, error))?;
+        Network::new(frequency, s, z0)
+    }
+
+    /// Constructs a scattering [`Network`] from frequency-major admittance
+    /// parameters through the explicit composed `Y→Z→S` power-wave path.
+    ///
+    /// `y` contains physical admittance matrices in siemens with shape
+    /// `(nfreq, nport, nport)`, and `z0` contains explicit reference
+    /// impedances in ohms with shape `(nfreq, nport)`. The result stores
+    /// dimensionless S-parameters and exact owned copies of the supplied
+    /// frequency labels and references. The public name intentionally states
+    /// the composed path: the existing kernel first inverts `Y` to form `Z`,
+    /// then applies the verified power-wave `Z→S` conversion.
+    ///
+    /// Consequently, singular or zero Y is rejected in the `Y→Z` stage,
+    /// even where a future direct Y→S implementation could represent an ideal
+    /// open. This constructor does not add a direct Y→S equation or broaden
+    /// the inverse-domain policy. References otherwise follow
+    /// [`Network::from_z_power`]: finite complex, per-port,
+    /// frequency-dependent, and negative-real values are accepted under the
+    /// existing `abs(Re(z0))` normalization, while zero-real and non-finite
+    /// values are rejected.
+    ///
+    /// Frequency samples are pointwise labels. The axis must be non-empty and
+    /// have the same length as the first axis of `y`; samples need not be
+    /// finite, non-negative, sorted, or unique. No sorting, resampling,
+    /// broadcasting, 50-ohm default, regularization, pseudoinverse, cutoff,
+    /// fallback, or identity shortcut is used.
+    ///
+    /// This is a provisional additive 0.x API. Its name and signature are not
+    /// a `1.0` stability promise.
+    ///
+    /// # Errors
+    ///
+    /// Returns a structured [`enum@Error`] identifying an empty or mismatched Y
+    /// frequency axis before kernel execution. Kernel diagnostics preserve
+    /// the `Y→Z` versus `Z→S` stage and identify Y, intermediate Z, z0,
+    /// non-finite input, exact singularity, and non-finite computation
+    /// failures.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use ndarray::{Array2, Array3};
+    /// use num_complex::Complex64;
+    /// use rfkit_core::{Frequency, Network};
+    ///
+    /// # fn example() -> rfkit_core::Result<()> {
+    /// let frequency = Frequency::from_hz(vec![1.0e9])?;
+    /// let y = Array3::from_elem((1, 1, 1), Complex64::new(0.02, 0.0));
+    /// let z0 = Array2::from_elem((1, 1), Complex64::new(50.0, 0.0));
+    /// let network = Network::from_y_via_z_power(frequency, y, z0)?;
+    ///
+    /// assert!(network.s()[[0, 0, 0]].norm() < 1.0e-14);
+    /// # Ok(())
+    /// # }
+    /// # example().unwrap();
+    /// ```
+    pub fn from_y_via_z_power(
+        frequency: Frequency,
+        y: Array3<Complex64>,
+        z0: Array2<Complex64>,
+    ) -> Result<Network> {
+        validate_parameter_frequency(&frequency, y.dim().0, ParameterKind::Y)?;
+
+        let s = power_wave_admittance::y_to_s_power(&y, &z0)
+            .map_err(map_power_wave_admittance_error)?;
+        Network::new(frequency, s, z0)
     }
 
     /// Converts this network's S-parameters to impedance parameters using
@@ -1091,6 +1264,24 @@ impl Network {
     }
 }
 
+fn validate_parameter_frequency(
+    frequency: &Frequency,
+    parameter_frequency_length: usize,
+    parameter: ParameterKind,
+) -> Result<()> {
+    if frequency.is_empty() {
+        return Err(Error::EmptyParameterFrequency { parameter });
+    }
+    if parameter_frequency_length != frequency.len() {
+        return Err(Error::ParameterFrequencyLengthMismatch {
+            parameter,
+            expected: frequency.len(),
+            actual: parameter_frequency_length,
+        });
+    }
+    Ok(())
+}
+
 fn map_power_wave_admittance_error(
     error: power_wave_admittance::PowerWaveAdmittanceError,
 ) -> Error {
@@ -1101,12 +1292,11 @@ fn map_power_wave_admittance_error(
         power_wave_admittance::PowerWaveAdmittanceError::ZToY(error) => {
             map_impedance_admittance_error(ConversionStage::ZToY, error)
         }
-        // These stages belong to the inverse Y→S kernel, which is not exposed
-        // by this increment and therefore cannot be returned by
-        // `s_to_y_power`.
-        power_wave_admittance::PowerWaveAdmittanceError::YToZ(_)
-        | power_wave_admittance::PowerWaveAdmittanceError::ZToS(_) => {
-            unreachable!("S-to-Y kernel returned an inverse-direction stage")
+        power_wave_admittance::PowerWaveAdmittanceError::YToZ(error) => {
+            map_impedance_admittance_error(ConversionStage::YToZ, error)
+        }
+        power_wave_admittance::PowerWaveAdmittanceError::ZToS(error) => {
+            map_power_wave_error(ConversionStage::ZToS, error)
         }
     }
 }

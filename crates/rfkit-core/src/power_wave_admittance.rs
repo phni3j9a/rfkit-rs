@@ -64,7 +64,6 @@ pub(crate) fn s_to_y_power(
 /// [`crate::impedance_admittance::y_to_z`] followed by
 /// [`crate::power_waves::z_to_s_power`].  This preserves the existing
 /// complex-Z0 semantics and exact-zero singularity policy at each stage.
-#[allow(dead_code)] // Internal kernel is staged for a future Network call site.
 pub(crate) fn y_to_s_power(
     y: &Array3<Complex64>,
     z0: &Array2<Complex64>,

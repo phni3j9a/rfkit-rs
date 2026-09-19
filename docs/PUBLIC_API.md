@@ -35,6 +35,47 @@ Keep the existing owned, frequency-major core model as the current baseline:
 - ports use zero-based `usize` indices initially;
 - `ndarray` remains part of the initial public data boundary because it is already exposed by construction and accessors.
 
+The Yellow parameter-ingress slice adds two associated constructors while
+keeping this owned model:
+
+```rust
+impl Network {
+    pub fn from_z_power(
+        frequency: Frequency,
+        z: Array3<Complex64>,
+        z0: Array2<Complex64>,
+    ) -> Result<Network>;
+
+    pub fn from_y_via_z_power(
+        frequency: Frequency,
+        y: Array3<Complex64>,
+        z0: Array2<Complex64>,
+    ) -> Result<Network>;
+}
+```
+
+`z` is a frequency-major `(nfreq, nport, nport)` stack in ohms, `y` is the
+same shape in siemens, `z0` is `(nfreq, nport)` in ohms, and the returned S
+stack is dimensionless. Both paths use Kurokawa power-wave semantics and
+preserve the supplied frequency samples/order, port order, and references
+exactly. The constructors require a nonempty frequency axis and exact
+first-axis length agreement, but treat samples as pointwise labels: they do
+not require finite/nonnegative/sorted/unique frequencies, and do not sort,
+resample, broadcast, default to 50 ohms, regularize, use a pseudoinverse,
+apply a cutoff, fall back, or take an identity shortcut. The Touchstone writer
+retains its separate finite/nonnegative/strictly-increasing/common-positive-
+reference contract.
+
+`from_z_power` delegates to the existing `Z→S` power-wave kernel. The
+explicitly named `from_y_via_z_power` delegates to the existing composed
+`Y→Z→S` path; singular or zero Y therefore fails at `Y→Z`, even where a
+future direct Y→S conversion could support an ideal open. Finite complex
+references, including per-port/frequency-dependent and negative-real values,
+remain within the existing `abs(Re(z0))` domain. Zero-real and non-finite
+references are rejected. Errors retain the supplied Z/Y kind, stage, and
+available row/column/pivot context through the crate-level structured
+boundary. These additive entrypoints are provisional during 0.x.
+
 Do **not** introduce view lifetimes, generic storage traits, port-index newtypes, builders, parameter-container hierarchies, or alternate owned network representations merely to make the API look more abstract. A concrete supporting type or bounded internal architecture change may be Yellow when demonstrated usage justifies it. Replacing the canonical model or storage representation in a difficult-to-reverse way is Red.
 
 ## Operation style

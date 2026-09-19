@@ -221,7 +221,6 @@ pub(crate) fn s_to_z_power(
 /// existing exact-pivot left solver is reused by transposing the two systems
 /// without conjugation: `A^T S^T = B^T`.  This avoids an explicit matrix
 /// inverse and preserves the exact-zero-pivot singularity rule.
-#[allow(dead_code)] // Internal kernel is staged for a future Network call site.
 pub(crate) fn z_to_s_power(
     z: &Array3<Complex64>,
     z0: &Array2<Complex64>,
