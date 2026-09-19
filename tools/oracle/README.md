@@ -64,6 +64,28 @@ The harness checks all three imported versions before doing any work. A
 mismatch fails clearly instead of silently regenerating a fixture with another
 version.
 
+## Check the Rust Touchstone writer
+
+The writer interoperability check is a separate machine-executed step because
+its source of truth is the actual Rust public API rather than a checked-in
+JSON fixture. From the repository root, with the pinned Python environment
+active, run:
+
+```bash
+cd tools/oracle
+python check_touchstone_writer.py
+```
+
+The script invokes `cargo run --package rfkit-touchstone --example
+touchstone_writer_oracle` for deterministic legacy two-port and five-port
+continuation cases. It writes the emitted ASCII to temporary `.s2p`/`.s5p`
+files, asks scikit-rf 2.0.1 to parse those files, and compares frequency, S,
+and z0 with the independently reproduced construction recipe using
+`rtol=1e-12`, `atol=1e-12`. This deliberately crosses the Rust/Python parser
+boundary; a Rust writer→Rust reader round trip alone is not sufficient
+interoperability evidence. CI runs this check after the canonical fixture
+checker.
+
 ## Generate and verify
 
 The harness has thirty-four registered canonical cases. The original three cases

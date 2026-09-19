@@ -33,6 +33,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -41,6 +42,9 @@ jobs:
         working-directory: tools/oracle
       - name: Check oracle fixture
         run: python generate_oracle.py check
+        working-directory: tools/oracle
+      - name: Check Rust Touchstone writer interoperability
+        run: python check_touchstone_writer.py
         working-directory: tools/oracle
       - name: Test oracle checker semantics
         run: python -m unittest discover -s . -p 'test_*.py'

@@ -119,6 +119,11 @@ examples or scikit-rf code. scikit-rf 2.0.1 at commit
 `bd651e923cac6020de49a096e1d7e9b5f949f884` is consulted only for behavior and
 for one independently authored, mutually supported oracle input; deliberate
 v2/noise/vendor-extension rejections remain specification-driven Rust tests.
+The Touchstone writer is likewise an independent REWRITE of the v1.0 physical
+record rules. Its fixed RI/Hz output, common real-positive reference contract,
+and shortest-round-tripping binary64 formatting are local policy decisions
+recorded in Issue #72; scikit-rf is used only as a pinned interoperability
+oracle through the public parser, not as a source of writer code or fixtures.
 
 ## Required record format
 
@@ -127,6 +132,7 @@ v2/noise/vendor-extension rejections remain specification-driven Rust tests.
 | _example_ | rust-rf | `<sha>` | `src/network.rs` | ADAPT | BSD-3-Clause | Renormalization math rewritten around local API |
 | `crates/rfkit-touchstone/src/lib.rs`; `crates/rfkit-touchstone/tests/public_parser.rs` | IBIS Open Forum Touchstone File Format Specification | Version 2.1 (2024-01-26) | v1.0 option-line, comment, pair-format, frequency, and row/continuation rules (pp. 4–9, 14–19) | REWRITE | IBIS Open Forum specification; no text/code copied | Pure parser and synthetic inputs independently authored; the supported real-scalar-R S subset is explicit and reversible |
 | `tools/oracle/generate_oracle.py`; `tools/oracle/fixtures/touchstone_v1_0_s_three_port.json` | scikit-rf | `bd651e923cac6020de49a096e1d7e9b5f949f884` (`v2.0.1`) | Public `skrf.io.touchstone.Touchstone` parser behavior | REWRITE | BSD-3-Clause | Deterministic text and expected frequency/S/z0 are independently authored and generated through the pinned public parser; no source or upstream fixture copied |
+| `crates/rfkit-touchstone/src/writer.rs`; `crates/rfkit-touchstone/tests/public_writer.rs`; `tools/oracle/check_touchstone_writer.py`; `crates/rfkit-touchstone/examples/touchstone_writer_oracle.rs` | IBIS Open Forum Touchstone File Format Specification; scikit-rf | Version 2.1 (2024-01-26); `bd651e923cac6020de49a096e1d7e9b5f949f884` (`v2.0.1`) | v1.0 S/RI/Hz option line, 2-port order, row-major and four-pair physical-line/continuation rules; public scikit-rf reader interoperability | REWRITE | IBIS specification; scikit-rf BSD-3-Clause | Independently authored deterministic writer, contract tests, and Rust-generated two-/five-port oracle inputs; no code or fixture values copied. The oracle compares frequency/S/z0 after feeding actual Rust output to pinned scikit-rf. |
 
 `Use` should be one of:
 

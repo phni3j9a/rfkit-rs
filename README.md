@@ -39,11 +39,12 @@ Calibration, media models, vector fitting, VNA control, and bindings come after 
 
 The scope above is directional context rather than an ordered autonomous backlog.
 
-## Read Touchstone text and analyze it
+## Read, analyze, and write Touchstone text
 
-The `rfkit-touchstone` crate provides a pure in-memory parser. The caller
-chooses the port count explicitly and can then use the returned canonical
-`rfkit-core::Network` with existing analysis methods:
+The `rfkit-touchstone` crate provides pure in-memory Touchstone v1.0 ingress
+and an explicit S/RI/Hz egress function. The caller chooses the port count for
+parsing and can then use the returned canonical `rfkit-core::Network` with
+existing analysis methods:
 
 ```rust
 use rfkit_touchstone::parse_touchstone_v1_0_s;
@@ -52,6 +53,52 @@ fn main() -> rfkit_touchstone::Result<()> {
     let network = parse_touchstone_v1_0_s("# MHz S RI R 75\n10 0.2 0\n", 1)?;
     let z = network.to_z_power()?;
     assert!((z[[0, 0, 0]].re - 112.5).abs() < 1e-12);
+    Ok(())
+}
+```
+
+To export a validated network, borrow it with the explicitly scoped writer:
+
+```rust
+use rfkit_touchstone::write_touchstone_v1_0_s_ri_hz;
+
+fn write(network: &rfkit_core::Network) -> rfkit_touchstone::Result<String> {
+    write_touchstone_v1_0_s_ri_hz(network)
+}
+```
+
+The writer always emits ASCII `# Hz S RI R <reference>` text with LF line
+endings and a final newline. It requires a nonempty finite, nonnegative,
+strictly increasing frequency axis; finite S components; positive finite real
+reference impedance; and one exact common reference scalar at every frequency
+and port. It never sorts, repairs, interpolates, renormalizes, or emits a
+partial result. Two-port records use the v1.0 physical order
+`S11,S21,S12,S22`; three-port and larger records are row-major with at most
+four parameter pairs per physical line and continuation lines for wider rows.
+Rust's shortest binary64 representation is used so the existing reader
+reconstructs finite values numerically, including extreme and subnormal
+values. MA/DB, Touchstone v2.x, metadata, noise, mixed-mode, and filesystem
+I/O remain outside this API.
+
+The ingress, existing public transformation, and egress APIs compose directly:
+
+```rust
+use ndarray::Array2;
+use num_complex::Complex64;
+use rfkit_touchstone::{parse_touchstone_v1_0_s, write_touchstone_v1_0_s_ri_hz};
+
+fn main() -> rfkit_touchstone::Result<()> {
+    let source = parse_touchstone_v1_0_s("# Hz S RI R 75\n1000000000 0.2 0\n", 1)?;
+    let transformed = source.renormalize_power(Array2::from_elem(
+        (1, 1),
+        Complex64::new(100.0, 0.0),
+    ))?;
+    let text = write_touchstone_v1_0_s_ri_hz(&transformed)?;
+    let reread = parse_touchstone_v1_0_s(&text, 1)?;
+
+    assert_eq!(reread.z0()[[0, 0]], Complex64::new(100.0, 0.0));
+    // z=75*(1+0.2)/(1-0.2)=112.5 ohm, so S at 100 ohm is 1/17.
+    assert!((reread.s()[[0, 0, 0]].re - 1.0 / 17.0).abs() < 1.0e-12);
     Ok(())
 }
 ```
@@ -74,7 +121,7 @@ ignorable; universal vendor-marker recognition is outside this reader's scope.
 
 ```text
 crates/rfkit-core/       Rust RF numerical core
-crates/rfkit-touchstone/ pure Touchstone 1.0 S-parameter text ingress
+crates/rfkit-touchstone/ pure Touchstone 1.0 S-parameter text ingress/egress
 tools/oracle/        scikit-rf reference/differential-test tools
 docs/                architecture, development, conformance and provenance policy
 ```
