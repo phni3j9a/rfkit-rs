@@ -24,11 +24,16 @@ The conformance suite should deliberately vary:
 - well-conditioned and near-singular cases
 - DC and high-frequency boundaries where relevant
 
-Touchstone v1.0 S parsing is covered by an independently authored text fixture
-and direct Rust contract tests. The mutually supported oracle slice records
-the pinned `scikit-rf==2.0.1` parser, `numpy==2.5.1`, deterministic input text,
-port count, and mixed relative/absolute tolerance. Rust compares the parsed
-frequency, S, and expanded real scalar `z0` values; v1.0 record boundaries,
+Touchstone v1.0 S parsing and the explicit S/RI/Hz writer are covered by
+independently authored text/Network contract tests. The mutually supported
+oracle slice records the pinned `scikit-rf==2.0.1` parser, `numpy==2.5.1`,
+deterministic input text, port count, and mixed relative/absolute tolerance.
+Rust compares parsed frequency, S, and expanded real scalar `z0` values;
+writer tests independently assert option/ordering/continuation layout,
+full-domain validation, unchanged input, and exact writer→reader numeric
+round trips. A CI oracle check invokes the actual public Rust writer for a
+legacy two-port and a multiport continuation case, then feeds those emitted
+texts to scikit-rf and compares frequency, S, and z0. v1.0 record boundaries,
 unsupported v2/noise/vendor extensions, and deliberate domain rejections are
 specified directly in Rust rather than inferred from permissive oracle
 behavior.

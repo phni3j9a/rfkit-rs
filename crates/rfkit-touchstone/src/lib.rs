@@ -1,4 +1,5 @@
-//! Pure in-memory parsing for a deliberately small Touchstone 1.0 S subset.
+//! Pure in-memory parsing and deterministic writing for a deliberately small
+//! Touchstone 1.0 S subset.
 //!
 //! [`parse_touchstone_v1_0_s`] accepts Touchstone text and an explicit positive
 //! port count.  It returns the canonical frequency-major
@@ -11,6 +12,11 @@
 //! positive, real scalar.  It is expanded over every frequency and port so
 //! that the resulting network can be used directly with the core's explicit
 //! power-wave transformations.
+//!
+//! [`write_touchstone_v1_0_s_ri_hz`] emits the complementary fixed S/RI/Hz
+//! representation.  It borrows and validates the complete Network, uses one
+//! exact common finite positive real reference scalar, and leaves filesystem
+//! and metadata policy to callers.
 //!
 //! Comment handling has one deliberate vendor-extension boundary: matching is
 //! case-insensitive; comments beginning with `Gamma` or `Port Impedance` (or
@@ -42,13 +48,41 @@
 //! # }
 //! # example().unwrap();
 //! ```
+//!
+//! A parsed network can be transformed through the existing public core API,
+//! exported, and read back without a format-specific adapter:
+//!
+//! ```
+//! use ndarray::Array2;
+//! use num_complex::Complex64;
+//! use rfkit_touchstone::{parse_touchstone_v1_0_s, write_touchstone_v1_0_s_ri_hz};
+//!
+//! # fn workflow() -> rfkit_touchstone::Result<()> {
+//! let source = parse_touchstone_v1_0_s("# Hz S RI R 75\n1000000000 0.2 0\n", 1)?;
+//! let transformed = source.renormalize_power(Array2::from_elem(
+//!     (1, 1),
+//!     Complex64::new(100.0, 0.0),
+//! ))?;
+//! let text = write_touchstone_v1_0_s_ri_hz(&transformed)?;
+//! let reread = parse_touchstone_v1_0_s(&text, 1)?;
+//!
+//! assert_eq!(reread.z0()[[0, 0]], Complex64::new(100.0, 0.0));
+//! // z=75*(1+0.2)/(1-0.2)=112.5 ohm, so S at 100 ohm is 1/17.
+//! assert!((reread.s()[[0, 0, 0]].re - 1.0 / 17.0).abs() < 1.0e-12);
+//! # Ok(())
+//! # }
+//! # workflow().unwrap();
+//! ```
 
 use ndarray::{Array2, Array3};
 use num_complex::Complex64;
 use rfkit_core::{Frequency, Network};
 use thiserror::Error;
 
-/// The crate-wide public error boundary for Touchstone v1.0 S parsing.
+mod writer;
+
+/// The crate-wide public error boundary for Touchstone v1.0 S parsing and
+/// deterministic S/RI/Hz writing.
 ///
 /// The enum is non-exhaustive so future format-specific diagnostics can be
 /// added without freezing the provisional 0.x API.  Errors identify the
@@ -224,6 +258,80 @@ pub enum Error {
         quantity: &'static str,
         shape: Vec<usize>,
     },
+
+    /// The writer cannot emit a Touchstone record for an empty frequency axis.
+    #[error("Touchstone writer requires a nonempty frequency axis")]
+    WriterEmptyFrequency,
+
+    /// The serde-readable Network state has an S-parameter dimension that is
+    /// not frequency-major square data with a positive port count.
+    #[error(
+        "Touchstone writer received invalid S-parameter shape {shape:?} for frequency length {frequency_length}"
+    )]
+    WriterInvalidSShape {
+        shape: Vec<usize>,
+        frequency_length: usize,
+    },
+
+    /// The serde-readable Network state has a reference-impedance dimension
+    /// that does not match its frequency and port dimensions.
+    #[error(
+        "Touchstone writer received invalid reference-impedance shape {shape:?}; expected ({frequency_length}, {nports})"
+    )]
+    WriterInvalidZ0Shape {
+        shape: Vec<usize>,
+        frequency_length: usize,
+        nports: usize,
+    },
+
+    /// A writer frequency is outside the finite, non-negative domain.
+    #[error(
+        "Touchstone writer frequency at index {index} is not finite and non-negative: {value:?}"
+    )]
+    WriterInvalidFrequency { index: usize, value: f64 },
+
+    /// Writer frequencies must be strictly increasing after validation.
+    #[error(
+        "Touchstone writer frequencies must be strictly increasing at index {index}: previous={previous:?}, current={current:?}"
+    )]
+    WriterFrequencyNotStrictlyIncreasing {
+        index: usize,
+        previous: f64,
+        current: f64,
+    },
+
+    /// A scattering component cannot be represented by finite RI text.
+    #[error(
+        "Touchstone writer received a non-finite S-parameter at frequency {frequency}, row {row}, column {column}: {value:?}"
+    )]
+    WriterNonFiniteS {
+        frequency: usize,
+        row: usize,
+        column: usize,
+        value: Complex64,
+    },
+
+    /// A reference impedance must be one finite, strictly positive real
+    /// scalar shared by every frequency and port.
+    #[error(
+        "Touchstone writer received an invalid reference impedance at frequency {frequency}, port {port}: {value:?}; expected one finite, strictly positive real scalar"
+    )]
+    WriterInvalidZ0 {
+        frequency: usize,
+        port: usize,
+        value: Complex64,
+    },
+
+    /// Every reference impedance must exactly equal the first valid scalar.
+    #[error(
+        "Touchstone writer reference impedance differs at frequency {frequency}, port {port}: expected {expected:?}, got {actual:?}"
+    )]
+    WriterMismatchedZ0 {
+        frequency: usize,
+        port: usize,
+        expected: f64,
+        actual: Complex64,
+    },
 }
 
 /// Quantity used to identify checked port-count arithmetic in [`Error`].
@@ -293,6 +401,32 @@ impl std::fmt::Display for DataFormat {
 /// The crate-wide result alias.
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// Serialize a network as deterministic Touchstone v1.0 S-parameter text in
+/// RI/Hz form.
+///
+/// The emitted option line is always `# Hz S RI R <reference>`.  The input is
+/// borrowed and never modified.  Frequencies are written in their existing
+/// order and must be finite, non-negative, and strictly increasing.  The S
+/// array must be a positive square frequency-major shape and contain only
+/// finite components.  Every reference impedance must be finite, strictly
+/// positive, real, and exactly equal to one common scalar; the writer never
+/// sorts, interpolates, repairs, or renormalizes a network.
+///
+/// Two-port data uses the Touchstone v1.0 physical order `S11, S21, S12,
+/// S22`.  Three-port and larger matrices use row-major order, with no more
+/// than four parameter pairs on each physical line and continuation lines for
+/// rows wider than four ports.  All output is ASCII with LF line endings and
+/// one final newline.  Finite binary64 values are formatted with Rust's
+/// shortest round-tripping representation so the existing public reader can
+/// reconstruct their numeric values without precision-control policy.
+///
+/// This is a provisional additive 0.x API.  It intentionally covers only the
+/// explicit Touchstone v1.0 S/RI/Hz subset; it does not write MA/DB, v2.x,
+/// metadata, noise, mixed-mode, or filesystem data.
+pub fn write_touchstone_v1_0_s_ri_hz(network: &Network) -> Result<String> {
+    writer::write_touchstone_v1_0_s_ri_hz(network)
+}
+
 #[derive(Clone, Copy)]
 enum FrequencyUnit {
     Hz,
@@ -343,7 +477,8 @@ struct DataLine<'a> {
 /// line contains at most four parameter pairs; rows for five or more ports
 /// continue on following physical lines, while each row starts on its own
 /// physical line.  No sorting, interpolation, renormalization, repair,
-/// filename inference, metadata extraction, or writer behavior is provided.
+/// filename inference, metadata extraction, or other writer behavior is
+/// provided by this parser entrypoint.
 /// Case-insensitive comments beginning with `Gamma` or `Port Impedance` (also
 /// `Port Impedance0`), containing `Terminal data exported` or `Modal data
 /// exported`, or containing the complete `S-parameter uses the power
