@@ -18,6 +18,13 @@ well-conditioned and an explicitly nonsingular near-singular three-port case.
 Two direct power-wave S↔Y cases are also registered: each direction has an
 independently constructed three-port input, explicit `s_def="power"`, and a
 non-50 Ω complex per-port frequency-dependent reference-impedance array.
+The direct Y→S constructor also has a separate rank-deficient case: an
+independently constructed non-reciprocal three-port Y with exact rank two at
+each of three frequencies and an explicit complex per-port,
+frequency-dependent reference profile. Its output is generated through the
+public `skrf.network.y2s(..., s_def="power")` call and compared with strict
+`rtol=1e-12`, `atol=1e-12`; the composed Y→Z→S path is intentionally not used
+to generate this fixture.
 One matched-junction connection case is also registered: independent
 three-port A and four-port B inputs use explicit `s_def="power"`, a
 frequency-dependent real-positive junction impedance that is exactly equal on
@@ -88,7 +95,7 @@ checker.
 
 ## Generate and verify
 
-The harness has thirty-four registered canonical cases. The original three cases
+The harness has thirty-five registered canonical cases. The original three cases
 remain unchanged:
 
 - `three_port_complex_z0` — the representative four-frequency, three-port
@@ -301,10 +308,18 @@ directly from `skrf.network.s2y(..., z0=..., s_def="power")` and
 `skrf.network.y2s(..., z0=..., s_def="power")`, respectively. The fixtures
 record `rtol=1e-12`, `atol_s=1e-12` for S→Y, and `atol=1e-12` for Y→S.
 
+The rank-deficient direct Y→S case is serialized as
+`power_wave_y_to_s_three_port_rank_deficient_complex_z0.json` with seed
+`20260945`. Its metadata records `operation="y_to_s_direct"`, input rank
+`[2, 2, 2]`, the direct-system equation, and the same pinned dependency
+versions. Its `y_s`, frequency, and z0 fields are exact contract inputs; only
+the computed `s` field is numeric-tolerance output.
+
 | Direction | Ports | Reference-impedance profile | Seed | Input/output units | Case id |
 | --- | ---: | --- | ---: | --- | --- |
 | S→Y | 3 | complex, per-port, frequency-dependent | `20260937` | dimensionless → S | `power_wave_s_to_y_three_port_complex_z0` |
 | Y→S | 3 | complex, per-port, frequency-dependent | `20260938` | S → dimensionless | `power_wave_y_to_s_three_port_complex_z0` |
+| direct Y→S | 3 | complex, per-port, frequency-dependent | `20260945` | S → dimensionless | `power_wave_y_to_s_three_port_rank_deficient_complex_z0` |
 
 The matched-junction case uses a three-port A network and a four-port B network
 at three exactly shared frequencies. A port 1 is connected to B port 2 through
@@ -536,7 +551,8 @@ The JSON representation is deliberately machine-readable and byte-stable:
   `determinant`, and `determinant_factors_nonzero`; the interpolation case
   additionally records its explicit `basis`, `coords`, `kind`, source/target
   frequency shapes, and the actually used `scipy_version`;
-- direct impedance/admittance and power-wave S/Y cases record `input_unit` and
+- direct impedance/admittance, power-wave S/Y, and direct rank-deficient Y→S
+  cases record `input_unit` and
   `output_unit`,
   use `y_s` for Z→Y outputs and `z_ohm` for Y→Z outputs, and use exactly one
   of `tolerance_policy.atol_s`, `tolerance_policy.atol_ohm`, or

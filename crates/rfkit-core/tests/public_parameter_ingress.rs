@@ -9,6 +9,9 @@ const Z_TO_S_FIXTURE_JSON: &str =
     include_str!("../../../tools/oracle/fixtures/power_wave_z_to_s_three_port_complex_z0.json");
 const Y_TO_S_FIXTURE_JSON: &str =
     include_str!("../../../tools/oracle/fixtures/power_wave_y_to_s_three_port_complex_z0.json");
+const DIRECT_Y_TO_S_RANK_DEFICIENT_FIXTURE_JSON: &str = include_str!(
+    "../../../tools/oracle/fixtures/power_wave_y_to_s_three_port_rank_deficient_complex_z0.json"
+);
 const Z_TO_S_NEAR_FIXTURE_JSON: &str = include_str!(
     "../../../tools/oracle/fixtures/power_wave_z_to_s_three_port_near_singular_real_equal_z0.json"
 );
@@ -185,6 +188,183 @@ fn from_y_via_z_power_matches_pinned_y_to_s_fixture_and_round_trips_y() {
 }
 
 #[test]
+fn from_y_direct_power_matches_the_existing_pinned_y_to_s_fixture() {
+    let fixture: FixtureDocument = serde_json::from_str(Y_TO_S_FIXTURE_JSON).unwrap();
+    assert_eq!(fixture.metadata.operation, "y_to_s");
+    let frequency = Frequency::from_hz(fixture.data.frequency_hz.clone()).unwrap();
+    let y = array3(fixture.data.y_s.as_deref().unwrap());
+    let z0 = z0_array(&fixture.data.z0_ohm);
+    let expected = array3(&fixture.data.s);
+    let network = Network::from_y_direct_power(frequency.clone(), y.clone(), z0.clone()).unwrap();
+    let tolerance = &fixture.metadata.tolerance_policy;
+    assert_array3_close(
+        network.s(),
+        &expected,
+        tolerance.rtol,
+        tolerance.atol.unwrap_or(1.0e-12),
+    );
+    assert_eq!(network.frequency(), &frequency);
+    assert_eq!(network.z0(), &z0);
+    assert_array3_close(&network.to_y_power().unwrap(), &y, 1.0e-12, 1.0e-12);
+
+    let composed = Network::from_y_via_z_power(frequency, y, z0).unwrap();
+    assert_array3_close(composed.s(), network.s(), 1.0e-12, 1.0e-12);
+}
+
+#[test]
+fn from_y_direct_power_matches_pinned_rank_deficient_nonreciprocal_fixture() {
+    let fixture: FixtureDocument =
+        serde_json::from_str(DIRECT_Y_TO_S_RANK_DEFICIENT_FIXTURE_JSON).unwrap();
+    assert_eq!(fixture.metadata.operation, "y_to_s_direct");
+    let frequency = Frequency::from_hz(fixture.data.frequency_hz.clone()).unwrap();
+    let y = array3(fixture.data.y_s.as_deref().unwrap());
+    let z0 = z0_array(&fixture.data.z0_ohm);
+    let expected = array3(&fixture.data.s);
+    let network = Network::from_y_direct_power(frequency.clone(), y, z0.clone()).unwrap();
+    let tolerance = &fixture.metadata.tolerance_policy;
+    assert_array3_close(
+        network.s(),
+        &expected,
+        tolerance.rtol,
+        tolerance.atol.unwrap_or(1.0e-12),
+    );
+    assert_eq!(network.frequency(), &frequency);
+    assert_eq!(network.z0(), &z0);
+}
+
+#[test]
+fn from_y_direct_power_supports_zero_and_floating_series_admittance() {
+    let frequency = Frequency::from_hz(vec![1.0e9, 2.0e9]).unwrap();
+    let z0 = Array2::from_elem((2, 2), Complex64::new(50.0, 0.0));
+    let series_y = Array3::from_shape_vec(
+        (2, 2, 2),
+        vec![
+            Complex64::new(0.01, 0.0),
+            Complex64::new(-0.01, 0.0),
+            Complex64::new(-0.01, 0.0),
+            Complex64::new(0.01, 0.0),
+            Complex64::new(0.005, 0.0),
+            Complex64::new(-0.005, 0.0),
+            Complex64::new(-0.005, 0.0),
+            Complex64::new(0.005, 0.0),
+        ],
+    )
+    .unwrap();
+    let network = Network::from_y_direct_power(frequency, series_y, z0).unwrap();
+    let expected = [
+        [0.5, 0.5, 0.5, 0.5],
+        [2.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0, 2.0 / 3.0],
+    ];
+    for frequency in 0..2 {
+        for (index, expected) in expected[frequency].iter().enumerate() {
+            let row = index / 2;
+            let column = index % 2;
+            assert!((network.s()[[frequency, row, column]].re - expected).abs() < 1.0e-14);
+            assert_eq!(network.s()[[frequency, row, column]].im, 0.0);
+        }
+    }
+
+    let zero = Network::from_y_direct_power(
+        Frequency::from_hz(vec![1.0e9]).unwrap(),
+        Array3::zeros((1, 2, 2)),
+        Array2::from_elem((1, 2), Complex64::new(50.0, 0.0)),
+    )
+    .unwrap();
+    assert_eq!(
+        zero.s(),
+        &Array3::from_shape_fn((1, 2, 2), |(_, row, column)| {
+            if row == column {
+                Complex64::new(1.0, 0.0)
+            } else {
+                Complex64::new(0.0, 0.0)
+            }
+        })
+    );
+}
+
+#[test]
+fn from_y_direct_power_uses_complex_and_negative_real_references() {
+    let frequency = Frequency::from_hz(vec![1.0e9, 2.0e9]).unwrap();
+    let y = Array3::from_shape_vec(
+        (2, 1, 1),
+        vec![Complex64::new(0.006, 0.004), Complex64::new(-0.003, 0.002)],
+    )
+    .unwrap();
+    let z0 = Array2::from_shape_vec(
+        (2, 1),
+        vec![Complex64::new(75.0, 20.0), Complex64::new(-60.0, 12.0)],
+    )
+    .unwrap();
+    let network = Network::from_y_direct_power(frequency, y.clone(), z0.clone()).unwrap();
+    for index in 0..2 {
+        let expected = (Complex64::new(1.0, 0.0) - z0[[index, 0]].conj() * y[[index, 0, 0]])
+            / (Complex64::new(1.0, 0.0) + z0[[index, 0]] * y[[index, 0, 0]]);
+        assert!((network.s()[[index, 0, 0]] - expected).norm() < 1.0e-14);
+    }
+}
+
+#[test]
+fn from_y_direct_power_preserves_asymmetric_rank_deficient_nport_and_satisfies_wave_equation() {
+    let frequency = Frequency::from_hz(vec![2.0e9, 1.0e9]).unwrap();
+    let y = Array3::from_shape_fn((2, 3, 3), |(f, row, column)| {
+        // Each frequency is deliberately rank deficient: the final row is
+        // twice the second row, while the matrix remains non-symmetric.
+        let base_row = match (row.min(1), column) {
+            (0, 0) => 0.01,
+            (0, 1) => -0.003,
+            (0, 2) => 0.002,
+            (1, 0) => 0.004,
+            (1, 1) => 0.006,
+            (1, 2) => -0.001,
+            _ => unreachable!(),
+        };
+        let scale = if row == 2 { 2.0 } else { 1.0 };
+        Complex64::new(
+            scale * base_row * (1.0 + 0.1 * f as f64),
+            scale * 0.001 * (1 + row.min(1) + 2 * column) as f64,
+        )
+    });
+    let z0 = Array2::from_shape_fn((2, 3), |(f, port)| {
+        Complex64::new(
+            [42.0, -57.0, 71.0][port] + 1.5 * f as f64,
+            [2.0, -1.5, 3.25][port] + 0.2 * f as f64,
+        )
+    });
+    let network = Network::from_y_direct_power(frequency.clone(), y.clone(), z0.clone()).unwrap();
+    assert_eq!(network.frequency(), &frequency);
+    assert_eq!(network.z0(), &z0);
+
+    for f in 0..2 {
+        for row in 0..3 {
+            for column in 0..3 {
+                let mut left = Complex64::new(0.0, 0.0);
+                let row_normalization = 1.0 / (2.0 * z0[[f, row]].re.abs().sqrt());
+                for index in 0..3 {
+                    let identity = if index == column {
+                        Complex64::new(1.0, 0.0)
+                    } else {
+                        Complex64::new(0.0, 0.0)
+                    };
+                    let a = (identity + z0[[f, index]] * y[[f, index, column]])
+                        * (1.0 / (2.0 * z0[[f, index]].re.abs().sqrt()));
+                    left += network.s()[[f, row, index]] * a;
+                }
+                let b_row = (if row == column {
+                    Complex64::new(1.0, 0.0)
+                } else {
+                    Complex64::new(0.0, 0.0)
+                }) - z0[[f, row]].conj() * y[[f, row, column]];
+                let expected = b_row * row_normalization;
+                assert!(
+                    (left - expected).norm() < 2.0e-12,
+                    "f={f}, row={row}, col={column}, actual={left:?}, expected={expected:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn constructors_cover_analytical_zero_and_negative_reference_cases() {
     let frequency = Frequency::from_hz(vec![1.0e9]).unwrap();
     let z0 = Array2::from_elem((1, 1), Complex64::new(50.0, 0.0));
@@ -306,6 +486,21 @@ fn constructors_report_parameter_specific_frequency_and_shape_errors() {
         }
     );
 
+    let error = Network::from_y_direct_power(
+        Frequency::from_hz(vec![1.0]).unwrap(),
+        Array3::from_elem((2, 1, 1), Complex64::new(0.02, 0.0)),
+        z0.clone(),
+    )
+    .unwrap_err();
+    assert_eq!(
+        error,
+        Error::ParameterFrequencyLengthMismatch {
+            parameter: ParameterKind::Y,
+            expected: 1,
+            actual: 2,
+        }
+    );
+
     let malformed_empty: Frequency = serde_json::from_value(json!({ "hz": [] })).unwrap();
     let error = Network::from_z_power(
         malformed_empty.clone(),
@@ -355,6 +550,51 @@ fn constructors_report_parameter_specific_frequency_and_shape_errors() {
             stage: ConversionStage::YToZ,
             parameter: ParameterKind::Y,
             shape: vec![1, 1, 2],
+        }
+    );
+
+    let error = Network::from_y_direct_power(
+        Frequency::from_hz(vec![1.0]).unwrap(),
+        Array3::zeros((1, 1, 2)),
+        Array2::from_elem((1, 1), Complex64::new(50.0, 0.0)),
+    )
+    .unwrap_err();
+    assert_eq!(
+        error,
+        Error::InvalidShape {
+            stage: ConversionStage::YToS,
+            parameter: ParameterKind::Y,
+            shape: vec![1, 1, 2],
+        }
+    );
+
+    let error = Network::from_y_direct_power(
+        Frequency::from_hz(vec![1.0]).unwrap(),
+        Array3::zeros((1, 1, 1)),
+        Array2::zeros((1, 2)),
+    )
+    .unwrap_err();
+    assert_eq!(
+        error,
+        Error::InvalidShape {
+            stage: ConversionStage::YToS,
+            parameter: ParameterKind::Z0,
+            shape: vec![1, 2],
+        }
+    );
+
+    let error = Network::from_y_direct_power(
+        Frequency::from_hz(vec![1.0]).unwrap(),
+        Array3::zeros((1, 0, 0)),
+        Array2::zeros((1, 0)),
+    )
+    .unwrap_err();
+    assert_eq!(
+        error,
+        Error::InvalidShape {
+            stage: ConversionStage::YToS,
+            parameter: ParameterKind::Y,
+            shape: vec![1, 0, 0],
         }
     );
 }
@@ -472,9 +712,9 @@ fn constructors_report_distinct_z_y_z0_nonfinite_reference_and_singular_stages()
     );
 
     let error = Network::from_y_via_z_power(
-        frequency,
+        frequency.clone(),
         Array3::from_elem((1, 1, 1), Complex64::new(-0.02, 0.0)),
-        valid_z0,
+        valid_z0.clone(),
     )
     .unwrap_err();
     assert_eq!(
@@ -485,19 +725,119 @@ fn constructors_report_distinct_z_y_z0_nonfinite_reference_and_singular_stages()
             pivot: 0,
         }
     );
+
+    let error = Network::from_y_direct_power(
+        frequency.clone(),
+        Array3::from_elem((1, 1, 1), Complex64::new(f64::NAN, 0.0)),
+        valid_z0.clone(),
+    )
+    .unwrap_err();
+    assert_eq!(
+        error,
+        Error::NonFiniteY {
+            stage: ConversionStage::YToS,
+            frequency: 0,
+            row: 0,
+            column: 0,
+        }
+    );
+
+    let error = Network::from_y_direct_power(
+        frequency.clone(),
+        Array3::zeros((1, 1, 1)),
+        Array2::from_elem((1, 1), Complex64::new(f64::INFINITY, 0.0)),
+    )
+    .unwrap_err();
+    assert_eq!(
+        error,
+        Error::NonFiniteZ0 {
+            stage: ConversionStage::YToS,
+            frequency: 0,
+            port: 0,
+        }
+    );
+
+    let error = Network::from_y_direct_power(
+        frequency.clone(),
+        Array3::zeros((1, 1, 1)),
+        Array2::from_elem((1, 1), Complex64::new(0.0, 10.0)),
+    )
+    .unwrap_err();
+    assert_eq!(
+        error,
+        Error::ZeroRealReferenceImpedance {
+            stage: ConversionStage::YToS,
+            frequency: 0,
+            port: 0,
+        }
+    );
+
+    let error = Network::from_y_direct_power(
+        frequency.clone(),
+        Array3::from_elem((1, 1, 1), Complex64::new(-0.02, 0.0)),
+        valid_z0.clone(),
+    )
+    .unwrap_err();
+    assert_eq!(
+        error,
+        Error::Singular {
+            stage: ConversionStage::YToS,
+            frequency: 0,
+            pivot: 0,
+        }
+    );
+
+    let near = Network::from_y_direct_power(
+        frequency.clone(),
+        Array3::from_elem((1, 1, 1), Complex64::new(-0.02 + 1.0e-10, 0.0)),
+        valid_z0.clone(),
+    )
+    .unwrap();
+    assert!(near.s()[[0, 0, 0]].re.is_finite());
+    assert!(near.s()[[0, 0, 0]].norm() > 1.0e8);
+
+    let error = Network::from_y_direct_power(
+        frequency,
+        Array3::from_elem((1, 1, 1), Complex64::new(f64::MAX, 0.0)),
+        Array2::from_elem((1, 1), Complex64::new(f64::MAX, 0.0)),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        Error::NonFiniteComputation {
+            stage: ConversionStage::YToS,
+            frequency: 0,
+            ..
+        }
+    ));
 }
 
 #[test]
 fn malformed_empty_frequency_never_panics_at_parameter_ingress() {
     let frequency: Frequency = serde_json::from_value(json!({ "hz": [] })).unwrap();
     let result = catch_unwind(AssertUnwindSafe(|| {
-        Network::from_z_power(frequency, Array3::zeros((0, 1, 1)), Array2::zeros((0, 1)))
+        Network::from_z_power(
+            frequency.clone(),
+            Array3::zeros((0, 1, 1)),
+            Array2::zeros((0, 1)),
+        )
     }));
     assert!(result.is_ok());
     assert!(matches!(
         result.unwrap(),
         Err(Error::EmptyParameterFrequency {
             parameter: ParameterKind::Z
+        })
+    ));
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        Network::from_y_direct_power(frequency, Array3::zeros((0, 1, 1)), Array2::zeros((0, 1)))
+    }));
+    assert!(result.is_ok());
+    assert!(matches!(
+        result.unwrap(),
+        Err(Error::EmptyParameterFrequency {
+            parameter: ParameterKind::Y
         })
     ));
 }
