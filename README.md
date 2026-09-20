@@ -240,6 +240,66 @@ choose the domain explicitly by the method name. Direct renormalization does
 not silently fall back, route through Y, regularize, or choose a target
 reference.
 
+## Reorder physical ports before Touchstone export
+
+`Network::permute_ports` is the explicit, wave-definition-independent way to
+put an owned network's physical ports into a caller's required order. Its
+mapping is deliberately written as `order[new_port] = old_port`: for example,
+`[2, 0, 1]` places original port 2 first, original port 0 second, and original
+port 1 third.
+
+```rust
+use rfkit_touchstone::{parse_touchstone_v1_0_s, write_touchstone_v1_0_s_ri_hz};
+
+fn reorder_for_export() -> rfkit_touchstone::Result<String> {
+    let source = parse_touchstone_v1_0_s(
+        "# Hz S RI R 50\n\
+         1000000000 0.11 0.01 0.12 0.02 0.13 0.03\n\
+         0.21 0.01 0.22 0.02 0.23 0.03\n\
+         0.31 0.01 0.32 0.02 0.33 0.03\n",
+        3,
+    )?;
+    let reordered = source.permute_ports(&[2, 0, 1])?;
+    assert_eq!(
+        reordered.s()[[0, 0, 0]],
+        num_complex::Complex64::new(0.33, 0.03),
+    );
+    assert_eq!(
+        reordered.s()[[0, 0, 1]],
+        num_complex::Complex64::new(0.31, 0.01),
+    );
+    assert_eq!(
+        reordered.s()[[0, 1, 0]],
+        num_complex::Complex64::new(0.13, 0.03),
+    );
+    write_touchstone_v1_0_s_ri_hz(&reordered)
+}
+```
+
+For every frequency, the returned network copies the source values according
+to `out.s[f, new_row, new_column] = source.s[f, order[new_row],
+order[new_column]]` and `out.z0[f, new_port] = source.z0[f, order[new_port]]`.
+The frequency samples and order are retained exactly, the source and mapping
+slice are not modified, and no conversion, renormalization, interpolation,
+finite-value check, or reference-impedance selection is performed. A complete
+mapping with exactly one occurrence of every port is required; wrong length,
+out-of-range indices, and duplicates return structured errors. This is a
+provisional additive 0.x operation, so its name and signature are not a 1.0
+stability promise.
+
+The Touchstone writer remains a separate format boundary. It accepts only one
+finite, strictly positive, real reference scalar shared by every frequency and
+port. Touchstone v1 ingress therefore starts with a common scalar, as in the
+example above; a network with per-port or complex references must be explicitly
+renormalized to a writer-compatible common reference before export. Port
+permutation itself does not relax or silently satisfy that writer contract.
+
+Run the complete deterministic workflow example with:
+
+```text
+cargo run -p rfkit-touchstone --example permute_ports_touchstone
+```
+
 ## Repository layout
 
 ```text

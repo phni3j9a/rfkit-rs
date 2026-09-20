@@ -24,7 +24,7 @@ The README initial scope is directional context, not an ordered backlog.
 
 ### Completed public baseline
 
-The first public `Network` surface defined in `docs/PUBLIC_API.md` is implemented: power-wave Z/Y conversion and renormalization, Cartesian interpolation, exact-grid and explicit-grid matched connection, and matched inner connection are available through verified public methods.
+The first public `Network` surface defined in `docs/PUBLIC_API.md` is implemented: power-wave Z/Y conversion and renormalization, exact physical-port permutation, Cartesian interpolation, exact-grid and explicit-grid matched connection, and matched inner connection are available through verified public methods.
 
 That list is a baseline, not a permanent allowlist or ceiling. The next useful increments should close concrete workflow gaps, with data ingress/egress and additional high-leverage RF transformations generally worth more than further private-only kernels. This is an outcome horizon rather than a fixed backlog; current repository evidence still determines the next bounded increment.
 

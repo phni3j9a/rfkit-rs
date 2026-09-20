@@ -91,6 +91,27 @@ Touchstone, and extracts the analytical physical Y through the direct path.
 The existing composed renormalization and conversion paths remain separately
 regression-tested with their documented singular-stage behavior.
 
+Issue #82 adds the pure `Network::permute_ports` reindexing operation. The
+external Touchstone workflow test in
+`crates/rfkit-touchstone/tests/public_permutation_workflow.rs` parses an
+asymmetric three-port, two-frequency v1.0 S/RI/Hz input, applies the explicit
+non-involutive `[2, 0, 1]` new-to-old mapping, and independently spells out the
+expected S values after both row and column moves and the expected port-aligned
+z0 values. It also snapshots and compares the source network, fixes the exact
+writer text, and reparses that text to verify the exported physical order.
+The executable counterpart is
+`crates/rfkit-touchstone/examples/permute_ports_touchstone.rs`.
+
+The Touchstone fixture uses the writer-supported common 50-ohm reference, so
+the workflow observes z0 alignment through an independently expected common
+vector while S proves both axes and the non-involutive direction. Core-level
+permutation coverage additionally exercises unequal complex and
+frequency-dependent references, identity/swap/cycle and inverse round trips,
+component preservation, malformed serde shapes, and structured mapping
+diagnostics. These checks characterize permutation as exact coordinate copying,
+not a wave conversion or renormalization, and leave the writer's separate
+common finite positive-real validation unchanged.
+
 The pinned direct S→Y differential case is independently specified as a
 non-reciprocal three-port with singular `I-S` and nonsingular direct `A`, plus
 complex per-port/frequency-dependent references. Its expected Y is generated

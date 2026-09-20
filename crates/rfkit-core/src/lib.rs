@@ -88,6 +88,43 @@ pub enum Error {
     #[error("reference-impedance shape must be (nfreq, nport)")]
     InvalidZ0Shape,
 
+    #[error("port permutation frequency axis must not be empty")]
+    EmptyPortPermutationFrequency,
+
+    #[error(
+        "port permutation frequency length does not match the S-parameter frequency dimension: expected {expected}, got {actual}"
+    )]
+    PortPermutationFrequencyLengthMismatch { expected: usize, actual: usize },
+
+    #[error("port permutation received an invalid S-parameter shape {shape:?}")]
+    InvalidPortPermutationSShape { shape: Vec<usize> },
+
+    #[error("port permutation received an invalid reference-impedance shape {shape:?}")]
+    InvalidPortPermutationZ0Shape { shape: Vec<usize> },
+
+    #[error(
+        "port permutation length does not match the network port count: expected {expected}, got {actual}"
+    )]
+    PortPermutationLengthMismatch { expected: usize, actual: usize },
+
+    #[error(
+        "port permutation entry at position {position} refers to old port {port}, out of range for {nports} ports"
+    )]
+    PortPermutationOutOfRange {
+        position: usize,
+        port: usize,
+        nports: usize,
+    },
+
+    #[error(
+        "port permutation repeats old port {port} at positions {first_position} and {second_position}"
+    )]
+    PortPermutationDuplicate {
+        port: usize,
+        first_position: usize,
+        second_position: usize,
+    },
+
     #[error("{stage} conversion received an invalid {parameter} shape {shape:?}")]
     InvalidShape {
         stage: ConversionStage,
@@ -727,6 +764,130 @@ impl Network {
     #[must_use]
     pub fn nports(&self) -> usize {
         self.s.dim().1
+    }
+
+    /// Returns an owned network with its ports in an explicitly requested
+    /// order.
+    ///
+    /// `order[new_port] = old_port` uses zero-based port indices.  For
+    /// example, `[2, 0, 1]` places the original port 2 first, the original
+    /// port 0 second, and the original port 1 third.  The argument must be a
+    /// complete bijection of all ports; it is not a port-selection or partial
+    /// renumbering operation.
+    ///
+    /// For every frequency `f`, the returned values are copied according to
+    /// `out.s[f, i, j] = self.s[f, order[i], order[j]]` and
+    /// `out.z0[f, i] = self.z0[f, order[i]]`.  Frequency samples and every
+    /// copied S/z0 scalar are retained exactly, including non-finite values,
+    /// signed zero, and complex references that other RF operations may
+    /// reject.  No RF arithmetic, normalization, interpolation, tolerance,
+    /// or implicit reference selection is performed.
+    ///
+    /// The result owns independent copies of the frequency, S-parameter, and
+    /// reference arrays.  Neither this network nor `order` is modified.
+    /// Downstream operations continue to apply their own validation rules.
+    ///
+    /// This additive operation is provisional while `rfkit-core` is in the
+    /// `0.x` series; its name and signature are not a `1.0` stability promise.
+    ///
+    /// # Errors
+    ///
+    /// Returns a structured [`enum@Error`] when a serde-created network has
+    /// an empty or mismatched frequency axis, a non-square/zero-port S array,
+    /// or a mismatched z0 array.  A permutation with the wrong length, an
+    /// out-of-range old-port index, or a duplicate old-port index is rejected
+    /// before any array indexing occurs.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use ndarray::{Array2, Array3};
+    /// use num_complex::Complex64;
+    /// use rfkit_core::{Frequency, Network};
+    ///
+    /// # fn example() -> rfkit_core::Result<()> {
+    /// let network = Network::new(
+    ///     Frequency::from_hz(vec![1.0e9])?,
+    ///     Array3::from_shape_fn((1, 3, 3), |(_, row, column)| {
+    ///         Complex64::new((10 * row + column) as f64, 0.0)
+    ///     }),
+    ///     Array2::from_shape_fn((1, 3), |(_, port)| {
+    ///         Complex64::new([50.0, 60.0, 70.0][port], 0.0)
+    ///     }),
+    /// )?;
+    ///
+    /// // New port 0 is old port 2; new port 1 is old port 0; new port 2 is old port 1.
+    /// let reordered = network.permute_ports(&[2, 0, 1])?;
+    /// assert_eq!(reordered.s()[[0, 0, 0]], network.s()[[0, 2, 2]]);
+    /// assert_eq!(reordered.z0()[[0, 0]], network.z0()[[0, 2]]);
+    /// # Ok(())
+    /// # }
+    /// # example().unwrap();
+    /// ```
+    pub fn permute_ports(&self, order: &[usize]) -> Result<Network> {
+        if self.frequency.is_empty() {
+            return Err(Error::EmptyPortPermutationFrequency);
+        }
+
+        let (parameter_frequency_length, nport_rows, nport_columns) = self.s.dim();
+        if parameter_frequency_length != self.frequency.len() {
+            return Err(Error::PortPermutationFrequencyLengthMismatch {
+                expected: self.frequency.len(),
+                actual: parameter_frequency_length,
+            });
+        }
+        if nport_rows == 0 || nport_rows != nport_columns {
+            return Err(Error::InvalidPortPermutationSShape {
+                shape: vec![parameter_frequency_length, nport_rows, nport_columns],
+            });
+        }
+        if self.z0.dim() != (parameter_frequency_length, nport_rows) {
+            let (z0_frequencies, z0_ports) = self.z0.dim();
+            return Err(Error::InvalidPortPermutationZ0Shape {
+                shape: vec![z0_frequencies, z0_ports],
+            });
+        }
+
+        if order.len() != nport_rows {
+            return Err(Error::PortPermutationLengthMismatch {
+                expected: nport_rows,
+                actual: order.len(),
+            });
+        }
+
+        let mut first_positions = vec![None; nport_rows];
+        for (position, &port) in order.iter().enumerate() {
+            if port >= nport_rows {
+                return Err(Error::PortPermutationOutOfRange {
+                    position,
+                    port,
+                    nports: nport_rows,
+                });
+            }
+            if let Some(first_position) = first_positions[port] {
+                return Err(Error::PortPermutationDuplicate {
+                    port,
+                    first_position,
+                    second_position: position,
+                });
+            }
+            first_positions[port] = Some(position);
+        }
+
+        let output_s = Array3::from_shape_fn(
+            (parameter_frequency_length, nport_rows, nport_rows),
+            |(frequency, row, column)| self.s[[frequency, order[row], order[column]]],
+        );
+        let output_z0 = Array2::from_shape_fn(
+            (parameter_frequency_length, nport_rows),
+            |(frequency, port)| self.z0[[frequency, order[port]]],
+        );
+
+        Ok(Network {
+            frequency: self.frequency.clone(),
+            s: output_s,
+            z0: output_z0,
+        })
     }
 
     /// Constructs a scattering [`Network`] from frequency-major impedance

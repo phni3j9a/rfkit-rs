@@ -232,6 +232,53 @@ diagnostics, tests, and documentation with no storage or data migration.
 No broader wave convention, dependency, crate, default-reference, or API
 architecture change is implied.
 
+## Explicit port permutation (Issue #82 Green decision)
+
+The provisional public surface adds one owned, borrowing transformation:
+
+```rust
+impl Network {
+    pub fn permute_ports(&self, order: &[usize]) -> Result<Network>;
+}
+```
+
+`order` is a complete zero-based new-to-old mapping. If there are `nport`
+ports, it must contain each index in `0..nport` exactly once. Thus
+`[2, 0, 1]` puts old port 2 at new port 0, old port 0 at new port 1, and old
+port 1 at new port 2. For every frequency, the operation applies the same
+coordinate relabeling to both S axes and the reference vector:
+
+```text
+out.s[f, i, j] = input.s[f, order[i], order[j]]
+out.z0[f, i]   = input.z0[f, order[i]]
+```
+
+Equivalently, for the scattering relation `b = S a`, it copies the same
+incident/reflected coordinate permutation on both sides, `S' = P S Pᵀ` and
+`z0' = P z0`. This is pure data reindexing: it does not perform wave
+arithmetic, select a wave convention, renormalize, interpolate, change units,
+choose a default reference, or apply finite-value/writer-domain checks. The
+frequency samples/order, scalar components, and port count are copied exactly;
+the input network and `order` slice remain unchanged, and the result is a new
+owned `Network`.
+
+The public error boundary rejects malformed source shapes before indexing and
+reports an incomplete mapping, an out-of-range port (with its position), or a
+duplicate port with structured context. This includes identity mappings and
+serde-created malformed `Network` values; no validation bypass is available for
+the identity case. Downstream operations retain their own domains, so a
+permuted network still has to satisfy the Touchstone writer's nonempty,
+finite/nonnegative/strictly increasing frequency and common finite positive-real
+reference contract when it is exported.
+
+This additive operation is provisional during the `0.x` phase. It makes no
+general scikit-rf API or `1.0` stability promise; rollback is limited to the
+method, its diagnostics, tests, and documentation, with no data migration. The
+implementation is an independent rewrite from the indexing equations rather
+than a port-name or in-place renumbering API. No new wave definition,
+parameter-container hierarchy, dependency, or storage representation is
+implied.
+
 ## Implemented public baseline
 
 The implemented shape is:
@@ -251,6 +298,8 @@ impl Network {
         &self,
         new_z0: Array2<Complex64>,
     ) -> Result<Network>;
+
+    pub fn permute_ports(&self, order: &[usize]) -> Result<Network>;
 
     pub fn interpolate_cartesian_linear(
         &self,
@@ -285,6 +334,7 @@ The exact internal delegation remains an implementation detail. The semantic dis
 - `to_z_power`, `to_y_power`, and `to_y_direct_power` explicitly select the verified power-wave conversion convention; the latter names the direct S→Y equation while `to_y_power` retains composed S→Z→Y semantics;
 - `renormalize_power` explicitly selects power-wave renormalization;
 - `renormalize_direct_power` explicitly selects the direct Kurokawa wave-change equation, while `renormalize_power` retains its composed S→Z→S domain and diagnostics;
+- `permute_ports` explicitly selects a complete new-to-old physical-port reindexing and carries S rows, S columns, and z0 together without wave arithmetic;
 - `interpolate_cartesian_linear` does not establish a vague interpolation default that would later need reinterpretation;
 - `connect_matched_power` requires the existing exactly matched real-positive junction contract and exact compatible frequency grids;
 - `connect_matched_power_on_grid` requires an explicit caller-provided grid and performs interpolation-before-connection under the existing verified composition semantics;
