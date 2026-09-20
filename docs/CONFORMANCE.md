@@ -38,6 +38,20 @@ unsupported v2/noise/vendor extensions, and deliberate domain rejections are
 specified directly in Rust rather than inferred from permissive oracle
 behavior.
 
+The parameter-ingress constructors are covered by the existing pinned
+scikit-rf 2.0.1 Z→S and Y→S fixture families, including the representative
+complex per-port/frequency-dependent three-port case and a near-singular
+three-port Z→S case. External-crate tests additionally cover analytical
+one-port values, asymmetric multi-frequency N-port data, negative-real and
+complex references, exact frequency/reference/order preservation, Z/Y round
+trips where the composed domain is invertible, zero-Z success, and explicit
+zero/singular-Y rejection. Boundary tests exercise empty or mismatched
+frequency axes (including a serde-deserialized empty `Frequency`), zero-port
+and nonsquare matrices, malformed z0, non-finite values, exact reference
+domain failures, and separate Y→Z versus Z→S stage errors. The constructors'
+pointwise frequency-label policy is intentionally looser than the Touchstone
+writer's format policy and is tested as such.
+
 ## Reporting
 
 Eventually CI should publish a machine-generated coverage report such as:

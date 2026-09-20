@@ -39,6 +39,47 @@ Calibration, media models, vector fitting, VNA control, and bindings come after 
 
 The scope above is directional context rather than an ordered autonomous backlog.
 
+## Construct a Network from modelled Z or Y parameters
+
+`rfkit-core` exposes the verified power-wave ingress paths as explicit,
+provisional 0.x constructors. `from_z_power` accepts owned frequency-major
+impedance matrices in ohms; `from_y_via_z_power` accepts admittance matrices in
+siemens and deliberately composes Y→Z→S. Both require an explicit
+`(frequency, port)` reference-impedance array in ohms. The returned S matrices
+are dimensionless and the supplied frequency labels, order, port order, and
+references are preserved exactly.
+
+Frequency samples are pointwise labels for these constructors: they must be
+nonempty and match the parameter first axis, but they are not required to be
+finite, non-negative, sorted, or unique. Reference values use the existing
+power-wave `abs(Re(z0))` domain, so finite complex and negative-real values are
+accepted; zero-real and non-finite values are rejected. A singular or zero Y
+is rejected in the composed Y→Z stage. The constructors do not add a 50-ohm
+default, broadcasting, regularization, pseudoinverse, cutoff, or fallback.
+
+```rust
+use ndarray::{Array2, Array3};
+use num_complex::Complex64;
+use rfkit_core::{Frequency, Network};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let frequency = Frequency::from_hz(vec![1.0e9, 2.0e9])?;
+    let z = Array3::from_shape_vec(
+        (2, 1, 1),
+        vec![Complex64::new(100.0, 0.0), Complex64::new(100.0, 0.0)],
+    )?;
+    let z0 = Array2::from_elem((2, 1), Complex64::new(50.0, 0.0));
+    let network = Network::from_z_power(frequency, z, z0)?;
+
+    // The existing analysis API is immediately available: z=100 Ω at a 50 Ω
+    // real reference gives the analytical one-port S=(z-z0)/(z+z0)=1/3.
+    let y_siemens = network.to_y_power()?;
+    assert!((network.s()[[0, 0, 0]].re - 1.0 / 3.0).abs() < 1.0e-14);
+    assert!(y_siemens[[0, 0, 0]].re > 0.0);
+    Ok(())
+}
+```
+
 ## Read, analyze, and write Touchstone text
 
 The `rfkit-touchstone` crate provides pure in-memory Touchstone v1.0 ingress
