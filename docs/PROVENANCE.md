@@ -49,6 +49,14 @@ is serialized in full. Expected outputs are obtained only from the public
 `skrf.network.s2y(..., s_def="power")` and
 `skrf.network.y2s(..., s_def="power")` calls; no source code, expected output,
 or opposite-direction round-trip fixture value is copied.
+The direct singular-capable Y→S case is an additional independent REWRITE:
+its three-port Y input is constructed with an exact row dependence (rank two at
+every frequency) and deliberately non-reciprocal entries, while its complex
+per-port/frequency-dependent z0 profile is independently authored. Expected S
+values come only from pinned public `skrf.network.y2s(..., s_def="power")` in
+scikit-rf 2.0.1; the Rust implementation derives and solves the Kurokawa
+`A=F(I+GY)`, `B=F(I-conj(G)Y)` equations locally and does not copy code or
+fixture values.
 The matched-junction connection case is a separate fixture-generator REWRITE:
 the A/B S and z0 inputs use independent local NumPy generators and the
 expected result is obtained only from public
@@ -108,6 +116,7 @@ interpolation; no scikit-rf or SciPy source code or fixture values are copied.
 | `crates/rfkit-core/src/power_waves.rs` | K. Kurokawa, “Power Waves and the Scattering Matrix,” IEEE Transactions on Microwave Theory and Techniques 13(2), 194–202 (1965) | DOI `10.1109/TMTT.1965.1125964` | Eq. (1) power-wave definitions, Eq. (18) Z-to-S relation, and Eq. (19) S-to-Z conversion | REWRITE | IEEE publication (mathematical reference) | Independent Rust implementation of the published equations; no source code copied |
 | `crates/rfkit-core/src/power_waves.rs` (behavior reference) | scikit-rf | `bd651e923cac6020de49a096e1d7e9b5f949f884` (`v2.0.1`) | `skrf/network.py::s2z`/`z2s`/`Network.renormalize`; conversion, renormalization, multiport, and complex-z0 tests in `skrf/tests/test_network.py` | REFERENCE | BSD-3-Clause | Used to check expected conversion and renormalization behavior while intentionally rewriting the algorithms and tests; no source code or fixture copied |
 | `crates/rfkit-core/src/power_wave_admittance.rs` (behavior reference) | scikit-rf | `bd651e923cac6020de49a096e1d7e9b5f949f884` (`v2.0.1`) | Public `skrf.network.s2y(..., s_def="power")` and `skrf.network.y2s(..., s_def="power")` behavior | REFERENCE | BSD-3-Clause | Used only to generate direct differential expected outputs; Rust uses the existing S↔Z and Z↔Y kernels as a private composition, with no scikit-rf source code or fixture values copied |
+| `crates/rfkit-core/src/power_waves.rs`; `crates/rfkit-core/tests/public_parameter_ingress.rs`; `tools/oracle/generate_oracle.py`; `tools/oracle/fixtures/power_wave_y_to_s_three_port_rank_deficient_complex_z0.json` | Kurokawa power-wave equations; scikit-rf | Kurokawa DOI `10.1109/TMTT.1965.1125964`; scikit-rf `bd651e923cac6020de49a096e1d7e9b5f949f884` (`v2.0.1`) | Direct Y→S solve from `A=F(I+GY)` and `B=F(I-conj(G)Y)`; pinned public `skrf.network.y2s` expected output for a rank-deficient non-reciprocal N-port | REWRITE | IEEE publication; scikit-rf BSD-3-Clause | Equations and Rust kernel are independently implemented; the fixture uses seed `20260945`, three rank-two Y slices, complex per-port/frequency-dependent z0, and strict `rtol=1e-12`/`atol=1e-12` output-only comparison. No source code or fixture values were copied. |
 | `crates/rfkit-core/src/lib.rs`; `crates/rfkit-core/tests/public_parameter_ingress.rs`; `crates/rfkit-core/examples/modelled_parameter_network.rs` | Published Kurokawa power-wave equations and local verified kernels; scikit-rf | Kurokawa DOI `10.1109/TMTT.1965.1125964`; scikit-rf commit `bd651e923cac6020de49a096e1d7e9b5f949f884` (`v2.0.1`) | Public Z→S and explicitly composed Y→Z→S parameter-ingress adapters; pinned Z→S/Y→S fixtures and locally authored analytical/boundary tests | REWRITE | BSD-3-Clause for scikit-rf behavior reference; published mathematics | The constructors are independent Rust adapters that reuse existing local kernels. scikit-rf `Network.from_z`/parameter-setter behavior and `test_constructor_from_parameters*`/`test_zy_singularities` were inspected as references only; no source code or fixture values were copied. The local API intentionally rejects empty/mismatched axes before the kernel, preserves pointwise labels and explicit z0, and retains the composed Y singularity domain. |
 
 Before adding copied or closely adapted third-party code or fixtures, record an entry here and preserve the applicable license notice under `THIRD_PARTY_LICENSES/`.

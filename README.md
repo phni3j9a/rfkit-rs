@@ -44,18 +44,27 @@ The scope above is directional context rather than an ordered autonomous backlog
 `rfkit-core` exposes the verified power-wave ingress paths as explicit,
 provisional 0.x constructors. `from_z_power` accepts owned frequency-major
 impedance matrices in ohms; `from_y_via_z_power` accepts admittance matrices in
-siemens and deliberately composes Y→Z→S. Both require an explicit
-`(frequency, port)` reference-impedance array in ohms. The returned S matrices
-are dimensionless and the supplied frequency labels, order, port order, and
-references are preserved exactly.
+siemens and deliberately composes Y→Z→S; `from_y_direct_power` solves the
+Kurokawa Y→S equation directly. All require an explicit `(frequency, port)`
+reference-impedance array in ohms. The returned S matrices are dimensionless
+and the supplied frequency labels, order, port order, and references are
+preserved exactly.
 
 Frequency samples are pointwise labels for these constructors: they must be
 nonempty and match the parameter first axis, but they are not required to be
 finite, non-negative, sorted, or unique. Reference values use the existing
 power-wave `abs(Re(z0))` domain, so finite complex and negative-real values are
 accepted; zero-real and non-finite values are rejected. A singular or zero Y
-is rejected in the composed Y→Z stage. The constructors do not add a 50-ohm
-default, broadcasting, regularization, pseudoinverse, cutoff, or fallback.
+is rejected in the composed Y→Z stage, but is supported by
+`from_y_direct_power` whenever the direct `A=F(I+G Y)` system is nonsingular
+and finite. The direct path has no hidden fallback to the composed path,
+inverse/pseudoinverse, cutoff, regularization, or identity shortcut.
+
+The direct constructor's ingress domain does not broaden existing downstream
+conversions. A network made from singular Y may not succeed through
+`to_z_power`, `to_y_power`, renormalization, or another operation that needs
+an invertible intermediate matrix; those restrictions remain explicit and
+unchanged on the composed constructor.
 
 ```rust
 use ndarray::{Array2, Array3};

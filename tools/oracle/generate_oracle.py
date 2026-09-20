@@ -382,6 +382,32 @@ POWER_WAVE_ADMITTANCE_TOLERANCE_JUSTIFICATION = (
     "singularity while allowing normal cross-language solve round-off."
 )
 
+# Direct Y→S conformance includes one deliberately rank-deficient,
+# non-reciprocal N-port input. Its finite complex, per-port,
+# frequency-dependent references exercise the direct equation without passing
+# through Y⁻¹. The existing well-conditioned Y→S fixture above remains the
+# common-domain comparison case.
+DIRECT_Y_TO_S_SINGULAR_FIXTURE = (
+    Path(__file__).resolve().parent
+    / "fixtures"
+    / "power_wave_y_to_s_three_port_rank_deficient_complex_z0.json"
+)
+DIRECT_Y_TO_S_SINGULAR_CASE_ID = (
+    "power_wave_y_to_s_three_port_rank_deficient_complex_z0"
+)
+DIRECT_Y_TO_S_SINGULAR_RANDOM_SEED = 20_260_945
+DIRECT_Y_TO_S_SINGULAR_NFREQ = 3
+DIRECT_Y_TO_S_SINGULAR_NPORTS = 3
+DIRECT_Y_TO_S_SINGULAR_RTOL = 1e-12
+DIRECT_Y_TO_S_SINGULAR_ATOL = 1e-12
+DIRECT_Y_TO_S_SINGULAR_TOLERANCE_JUSTIFICATION = (
+    "Strict binary64 tolerance for a deterministic, rank-deficient and "
+    "non-reciprocal three-port Y input with finite complex per-port, "
+    "frequency-dependent references; each direct A=F(I+GY) system is checked "
+    "finite and nonsingular at generation time, while Rust performs the same "
+    "operation without an inverse, cutoff, or regularization."
+)
+
 # Matched-junction connection is intentionally kept as one standalone oracle
 # case.  A and B use independent local generators so the fixture exercises all
 # four N-port blocks rather than certifying a symmetric or identity shortcut.
@@ -3057,6 +3083,146 @@ def _power_wave_y_to_s_fixture(np: Any, skrf: Any) -> dict[str, Any]:
     )
 
 
+def _direct_y_to_s_singular_inputs(np: Any) -> tuple[Any, Any, Any]:
+    """Build a rank-deficient, non-reciprocal direct Y→S input."""
+
+    frequency_hz = np.array(
+        [0.65e9, 1.25e9, 2.05e9],
+        dtype=np.float64,
+    )
+    rng = np.random.default_rng(DIRECT_Y_TO_S_SINGULAR_RANDOM_SEED)
+    y = np.zeros(
+        (
+            DIRECT_Y_TO_S_SINGULAR_NFREQ,
+            DIRECT_Y_TO_S_SINGULAR_NPORTS,
+            DIRECT_Y_TO_S_SINGULAR_NPORTS,
+        ),
+        dtype=np.complex128,
+    )
+    for frequency in range(DIRECT_Y_TO_S_SINGULAR_NFREQ):
+        row_zero = (
+            rng.normal(loc=0.0, scale=0.004, size=DIRECT_Y_TO_S_SINGULAR_NPORTS)
+            + 1j
+            * rng.normal(
+                loc=0.0,
+                scale=0.004,
+                size=DIRECT_Y_TO_S_SINGULAR_NPORTS,
+            )
+        )
+        row_one = (
+            rng.normal(loc=0.0, scale=0.003, size=DIRECT_Y_TO_S_SINGULAR_NPORTS)
+            + 1j
+            * rng.normal(
+                loc=0.0,
+                scale=0.003,
+                size=DIRECT_Y_TO_S_SINGULAR_NPORTS,
+            )
+        )
+        y[frequency, 0, :] = row_zero
+        y[frequency, 1, :] = row_one
+        # Exact row dependence makes every input matrix rank deficient while
+        # retaining a genuinely non-symmetric/non-reciprocal N-port.
+        y[frequency, 2, :] = 2.0 * row_zero
+
+    z0 = (
+        np.array(
+            [
+                [42.0, 57.0, 71.0],
+                [44.0, 55.0, 73.0],
+                [46.0, 53.0, 75.0],
+            ],
+            dtype=np.float64,
+        )
+        + 1j
+        * np.array(
+            [
+                [2.0, -1.5, 3.25],
+                [2.2, -1.3, 3.45],
+                [2.4, -1.1, 3.65],
+            ],
+            dtype=np.float64,
+        )
+    ).astype(np.complex128)
+
+    _assert_non_symmetric(np, y, name="direct rank-deficient Y input")
+    if not np.isfinite(y).all() or not np.isfinite(z0).all():
+        raise ValueError("direct rank-deficient Y/z0 input must be finite")
+    if not (z0.real != 0.0).all() or not (z0.imag != 0.0).all():
+        raise ValueError("direct rank-deficient z0 must be genuinely complex")
+    for frequency in range(DIRECT_Y_TO_S_SINGULAR_NFREQ):
+        if np.linalg.matrix_rank(y[frequency]) >= DIRECT_Y_TO_S_SINGULAR_NPORTS:
+            raise ValueError("direct rank-deficient Y input unexpectedly has full rank")
+        f = np.diag(1.0 / (2.0 * np.sqrt(np.abs(z0[frequency].real))))
+        g = np.diag(z0[frequency])
+        system = f @ (np.eye(DIRECT_Y_TO_S_SINGULAR_NPORTS) + g @ y[frequency])
+        determinant = np.linalg.det(system)
+        if not np.isfinite(system).all() or not np.isfinite(determinant) or determinant == 0.0:
+            raise ValueError(
+                f"direct rank-deficient Y system must be finite and nonsingular at {frequency}"
+            )
+    return frequency_hz, y, z0
+
+
+def _direct_y_to_s_singular_fixture(np: Any, skrf: Any) -> dict[str, Any]:
+    """Build direct Y→S output through pinned public scikit-rf behavior."""
+
+    frequency_hz, direct_y, z0 = _direct_y_to_s_singular_inputs(np)
+    expected_s = np.asarray(
+        skrf.network.y2s(direct_y, z0=z0, s_def="power"),
+        dtype=np.complex128,
+    )
+    if not np.isfinite(expected_s).all():
+        raise ValueError("direct rank-deficient Y→S output must be finite")
+
+    return {
+        "metadata": {
+            "case_id": DIRECT_Y_TO_S_SINGULAR_CASE_ID,
+            "direct_system": "A=F(I+GY), B=F(I-conj(G)Y), solve S A=B",
+            "input_rank": [
+                int(np.linalg.matrix_rank(direct_y[frequency]))
+                for frequency in range(DIRECT_Y_TO_S_SINGULAR_NFREQ)
+            ],
+            "input_unit": "S",
+            "numpy_version": np.__version__,
+            "operation": "y_to_s_direct",
+            "output_unit": "dimensionless",
+            "random_seed": DIRECT_Y_TO_S_SINGULAR_RANDOM_SEED,
+            "reference_impedance": {
+                "complex": True,
+                "frequency_dependent": True,
+                "per_port": True,
+                "unit": "ohm",
+            },
+            "schema": "rfkit-rs.oracle.fixture",
+            "schema_version": SCHEMA_VERSION,
+            "scikit_rf_version": skrf.__version__,
+            "shape": {
+                "frequency": list(frequency_hz.shape),
+                "input_y": list(direct_y.shape),
+                "input_z0": list(z0.shape),
+                "output_s": list(expected_s.shape),
+            },
+            "tolerance_policy": {
+                "atol": DIRECT_Y_TO_S_SINGULAR_ATOL,
+                "comparison": "abs(actual-expected) <= atol + rtol*abs(expected)",
+                "justification": DIRECT_Y_TO_S_SINGULAR_TOLERANCE_JUSTIFICATION,
+                "regeneration": (
+                    "canonical UTF-8 JSON serialization; s is checked with the "
+                    "recorded numeric tolerance"
+                ),
+                "rtol": DIRECT_Y_TO_S_SINGULAR_RTOL,
+            },
+            "wave_definition": "power",
+        },
+        "data": {
+            "frequency_hz": [float(value) for value in frequency_hz],
+            "s": _complex_array(expected_s),
+            "y_s": _complex_array(direct_y),
+            "z0_ohm": _complex_array(z0),
+        },
+    }
+
+
 def _matrix_reference_impedance_flags(z0_profile: str) -> dict[str, Any]:
     """Return the contract flags for one matrix-case z0 profile."""
 
@@ -4273,6 +4439,13 @@ _CASES = (
         "power_wave_y_to_s_three_port_complex_z0",
         POWER_WAVE_Y_TO_S_FIXTURE,
         _power_wave_y_to_s_fixture,
+        "numeric_output",
+        "s",
+    ),
+    _OracleCase(
+        DIRECT_Y_TO_S_SINGULAR_CASE_ID,
+        DIRECT_Y_TO_S_SINGULAR_FIXTURE,
+        _direct_y_to_s_singular_fixture,
         "numeric_output",
         "s",
     ),

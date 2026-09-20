@@ -41,16 +41,21 @@ behavior.
 The parameter-ingress constructors are covered by the existing pinned
 scikit-rf 2.0.1 Z→S and Y→S fixture families, including the representative
 complex per-port/frequency-dependent three-port case and a near-singular
-three-port Z→S case. External-crate tests additionally cover analytical
-one-port values, asymmetric multi-frequency N-port data, negative-real and
-complex references, exact frequency/reference/order preservation, Z/Y round
-trips where the composed domain is invertible, zero-Z success, and explicit
-zero/singular-Y rejection. Boundary tests exercise empty or mismatched
-frequency axes (including a serde-deserialized empty `Frequency`), zero-port
-and nonsquare matrices, malformed z0, non-finite values, exact reference
-domain failures, and separate Y→Z versus Z→S stage errors. The constructors'
-pointwise frequency-label policy is intentionally looser than the Touchstone
-writer's format policy and is tested as such.
+three-port Z→S case. Direct `from_y_direct_power` additionally uses the pinned
+`power_wave_y_to_s_three_port_rank_deficient_complex_z0` fixture: three
+frequency samples, a non-reciprocal rank-deficient three-port Y, and complex
+per-port/frequency-dependent references. External-crate tests additionally
+cover analytical one-port values, a floating series element and ideal open,
+asymmetric multi-frequency N-port data, negative-real and complex references,
+exact frequency/reference/order preservation, Z/Y round trips where the
+composed domain is invertible, zero-Z success, and explicit zero/singular-Y
+rejection. Boundary tests exercise empty or mismatched frequency axes
+(including a serde-deserialized empty `Frequency`), zero-port and nonsquare
+matrices, malformed z0, non-finite values, exact reference domain failures,
+finite-input overflow, finite near-singular direct systems, exact direct
+singularity, and separate composed Y→Z versus direct Y→S stage errors. The
+constructors' pointwise frequency-label policy is intentionally looser than
+the Touchstone writer's format policy and is tested as such.
 
 ## Reporting
 

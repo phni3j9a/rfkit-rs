@@ -4,10 +4,11 @@
 //! then numerical operations backed by differential tests against scikit-rf.
 //!
 //! The canonical [`Network`] owns frequency-major S-parameter data.  The
-//! provisional parameter-ingress constructors [`Network::from_z_power`] and
-//! [`Network::from_y_via_z_power`] accept owned frequency-major matrices in
-//! ohms and siemens respectively, plus explicit complex reference impedances
-//! in ohms, and return that canonical S representation.  They use Kurokawa
+//! provisional parameter-ingress constructors [`Network::from_z_power`],
+//! [`Network::from_y_via_z_power`], and [`Network::from_y_direct_power`]
+//! accept owned frequency-major matrices in ohms and siemens respectively,
+//! plus explicit complex reference impedances in ohms, and return that
+//! canonical S representation.  They use Kurokawa
 //! power-wave semantics; S itself is dimensionless.  The supplied frequency
 //! samples and reference values are pointwise data and are retained exactly.
 //! The constructors require a nonempty axis with a matching first dimension,
@@ -17,9 +18,10 @@
 //! pseudoinverse, cutoff, or fallback is applied.
 //!
 //! `from_y_via_z_power` is intentionally named for its composed Y→Z→S path:
-//! singular or zero Y is rejected while forming the intermediate impedance,
-//! even though a future direct Y→S operation could choose a different domain.
-//! Both constructors return structured crate-level errors that retain Z/Y
+//! singular or zero Y is rejected while forming the intermediate impedance.
+//! `from_y_direct_power` instead solves the explicit Y→S wave equations and
+//! accepts singular or zero Y whenever its conversion system is nonsingular.
+//! These constructors return structured crate-level errors that retain Z/Y
 //! input kind, conversion stage, and matrix location where the existing
 //! kernels provide that context.  Inputs are borrowed during computation and
 //! are not mutated; the returned arrays are newly owned.
@@ -484,7 +486,8 @@ impl fmt::Display for InterpolationQuantity {
 ///
 /// `to_y_power` is intentionally a composed `S→Z→Y` operation, and
 /// [`Network::from_y_via_z_power`] is intentionally a composed `Y→Z→S`
-/// operation. Preserving these stages lets callers distinguish a singular or
+/// operation. [`Network::from_y_direct_power`] uses the separate direct
+/// `Y→S` stage. Preserving these stages lets callers distinguish a singular or
 /// invalid intermediate impedance conversion from a failure while inverting
 /// that impedance or converting it back to S.
 #[non_exhaustive]
@@ -498,6 +501,8 @@ pub enum ConversionStage {
     ZToY,
     /// Conversion from impedance parameters to scattering parameters.
     ZToS,
+    /// Direct conversion from admittance parameters to scattering parameters.
+    YToS,
 }
 
 impl fmt::Display for ConversionStage {
@@ -507,6 +512,7 @@ impl fmt::Display for ConversionStage {
             Self::YToZ => "Y→Z",
             Self::ZToY => "Z→Y",
             Self::ZToS => "Z→S",
+            Self::YToS => "Y→S",
         })
     }
 }
@@ -695,7 +701,7 @@ impl Network {
     /// then applies the verified power-wave `Z→S` conversion.
     ///
     /// Consequently, singular or zero Y is rejected in the `Y→Z` stage,
-    /// even where a future direct Y→S implementation could represent an ideal
+    /// even where [`Network::from_y_direct_power`] can represent an ideal
     /// open. This constructor does not add a direct Y→S equation or broaden
     /// the inverse-domain policy. References otherwise follow
     /// [`Network::from_z_power`]: finite complex, per-port,
@@ -747,6 +753,87 @@ impl Network {
 
         let s = power_wave_admittance::y_to_s_power(&y, &z0)
             .map_err(map_power_wave_admittance_error)?;
+        Network::new(frequency, s, z0)
+    }
+
+    /// Constructs a scattering [`Network`] directly from frequency-major
+    /// admittance parameters using Kurokawa power waves.
+    ///
+    /// `y` contains physical admittance matrices in siemens with shape
+    /// `(nfreq, nport, nport)`, and `z0` contains explicit reference
+    /// impedances in ohms with shape `(nfreq, nport)`. The result stores
+    /// dimensionless S-parameters and preserves the supplied frequency
+    /// samples, their order, port order, and `z0` values exactly.
+    ///
+    /// Unlike [`Network::from_y_via_z_power`], this constructor does not form
+    /// `Y⁻¹`. At each frequency it forms
+    /// `A = F (I + G Y)` and `B = F (I - conj(G) Y)` and solves `S A = B`,
+    /// where `G = diag(z0)` and
+    /// `F = diag(1/(2*sqrt(abs(Re(z0)))))`. Consequently a singular or zero
+    /// Y is supported whenever the direct conversion system `A` is nonsingular
+    /// and its arithmetic remains finite. Zero Y follows the ordinary
+    /// validation and solve path and produces identity S for valid references;
+    /// it is not an identity shortcut.
+    ///
+    /// References may be finite complex values, may vary by frequency and
+    /// port, and may have a negative real part because the normalization uses
+    /// `abs(Re(z0))`. A zero real part or non-finite reference is outside this
+    /// wave normalization domain. The direct solver uses exact-zero pivot
+    /// detection only: it does not use an explicit inverse, pseudoinverse,
+    /// rank cutoff, regularization, nudge, clipping, or fallback. A finite
+    /// near-singular `A` is therefore not rejected merely for being near
+    /// singular.
+    ///
+    /// This is a provisional additive 0.x API. Its name and signature are not
+    /// a `1.0` stability promise. Existing downstream conversions retain
+    /// their own domains: a network constructed from singular Y is not
+    /// promised to succeed through `to_z_power`, `to_y_power`, or any other
+    /// operation whose intermediate conversion is singular.
+    ///
+    /// # Errors
+    ///
+    /// Returns a structured [`enum@Error`] identifying an empty or mismatched
+    /// Y frequency axis before kernel execution. Kernel diagnostics use the
+    /// direct `Y→S` stage and preserve Y versus z0 attribution, exact
+    /// singularity, and non-finite computation context.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use ndarray::{Array2, Array3};
+    /// use num_complex::Complex64;
+    /// use rfkit_core::{Frequency, Network};
+    ///
+    /// # fn example() -> rfkit_core::Result<()> {
+    /// let frequency = Frequency::from_hz(vec![1.0e9])?;
+    /// let series_y = Array3::from_shape_vec(
+    ///     (1, 2, 2),
+    ///     vec![
+    ///         Complex64::new(0.01, 0.0),
+    ///         Complex64::new(-0.01, 0.0),
+    ///         Complex64::new(-0.01, 0.0),
+    ///         Complex64::new(0.01, 0.0),
+    ///     ],
+    /// )
+    /// .expect("series admittance shape is valid");
+    /// let z0 = Array2::from_elem((1, 2), Complex64::new(50.0, 0.0));
+    /// let network = Network::from_y_direct_power(frequency, series_y, z0)?;
+    ///
+    /// assert!((network.s()[[0, 0, 0]].re - 0.5).abs() < 1.0e-14);
+    /// assert!((network.s()[[0, 0, 1]].re - 0.5).abs() < 1.0e-14);
+    /// # Ok(())
+    /// # }
+    /// # example().unwrap();
+    /// ```
+    pub fn from_y_direct_power(
+        frequency: Frequency,
+        y: Array3<Complex64>,
+        z0: Array2<Complex64>,
+    ) -> Result<Network> {
+        validate_parameter_frequency(&frequency, y.dim().0, ParameterKind::Y)?;
+
+        let s = power_waves::y_to_s_power_direct(&y, &z0)
+            .map_err(|error| map_power_wave_error(ConversionStage::YToS, error))?;
         Network::new(frequency, s, z0)
     }
 
@@ -1629,6 +1716,11 @@ fn map_power_wave_error(stage: ConversionStage, error: power_waves::PowerWaveErr
             parameter: ParameterKind::Z,
             shape: vec![shape.0, shape.1, shape.2],
         },
+        power_waves::PowerWaveError::InvalidYShape { shape } => Error::InvalidShape {
+            stage,
+            parameter: ParameterKind::Y,
+            shape: vec![shape.0, shape.1, shape.2],
+        },
         power_waves::PowerWaveError::InvalidZ0Shape { shape } => Error::InvalidShape {
             stage,
             parameter: ParameterKind::Z0,
@@ -1661,6 +1753,16 @@ fn map_power_wave_error(stage: ConversionStage, error: power_waves::PowerWaveErr
             row,
             column,
         } => Error::NonFiniteZ {
+            stage,
+            frequency,
+            row,
+            column,
+        },
+        power_waves::PowerWaveError::NonFiniteY {
+            frequency,
+            row,
+            column,
+        } => Error::NonFiniteY {
             stage,
             frequency,
             row,

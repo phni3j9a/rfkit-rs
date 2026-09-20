@@ -35,7 +35,7 @@ Keep the existing owned, frequency-major core model as the current baseline:
 - ports use zero-based `usize` indices initially;
 - `ndarray` remains part of the initial public data boundary because it is already exposed by construction and accessors.
 
-The Yellow parameter-ingress slice adds two associated constructors while
+The Yellow parameter-ingress slice adds three associated constructors while
 keeping this owned model:
 
 ```rust
@@ -47,6 +47,12 @@ impl Network {
     ) -> Result<Network>;
 
     pub fn from_y_via_z_power(
+        frequency: Frequency,
+        y: Array3<Complex64>,
+        z0: Array2<Complex64>,
+    ) -> Result<Network>;
+
+    pub fn from_y_direct_power(
         frequency: Frequency,
         y: Array3<Complex64>,
         z0: Array2<Complex64>,
@@ -68,13 +74,22 @@ reference contract.
 
 `from_z_power` delegates to the existing `Z→S` power-wave kernel. The
 explicitly named `from_y_via_z_power` delegates to the existing composed
-`Y→Z→S` path; singular or zero Y therefore fails at `Y→Z`, even where a
-future direct Y→S conversion could support an ideal open. Finite complex
-references, including per-port/frequency-dependent and negative-real values,
-remain within the existing `abs(Re(z0))` domain. Zero-real and non-finite
-references are rejected. Errors retain the supplied Z/Y kind, stage, and
+`Y→Z→S` path; singular or zero Y therefore fails at `Y→Z`, even though
+`from_y_direct_power` can support an ideal open. The direct constructor forms
+`A=F(I+GY)` and `B=F(I-conj(G)Y)` and solves
+`S A=B` directly, so singular or zero Y is accepted whenever `A` is
+nonsingular and its arithmetic remains finite. Finite complex references,
+including per-port/frequency-dependent and negative-real values, remain within
+the existing `abs(Re(z0))` domain. Zero-real and non-finite references are
+rejected. Errors retain the supplied Z/Y kind, direct/composed stage, and
 available row/column/pivot context through the crate-level structured
 boundary. These additive entrypoints are provisional during 0.x.
+
+The direct constructor's broader Y domain does not alter downstream conversion
+domains. A network created from singular Y is not promised to succeed through
+`to_z_power`, `to_y_power`, renormalization, or another operation that requires
+an invertible intermediate parameter matrix; callers should select the direct
+entrypoint intentionally and handle those existing restrictions.
 
 Do **not** introduce view lifetimes, generic storage traits, port-index newtypes, builders, parameter-container hierarchies, or alternate owned network representations merely to make the API look more abstract. A concrete supporting type or bounded internal architecture change may be Yellow when demonstrated usage justifies it. Replacing the canonical model or storage representation in a difficult-to-reverse way is Red.
 

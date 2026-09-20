@@ -38,6 +38,9 @@ pub(crate) enum PowerWaveError {
     #[error("Z-parameter shape must be (nfreq, nport, nport), got {shape:?}")]
     InvalidZShape { shape: (usize, usize, usize) },
 
+    #[error("Y-parameter shape must be (nfreq, nport, nport), got {shape:?}")]
+    InvalidYShape { shape: (usize, usize, usize) },
+
     #[error("reference-impedance shape must be (nfreq, nport), got {shape:?}")]
     InvalidZ0Shape { shape: (usize, usize) },
 
@@ -58,6 +61,13 @@ pub(crate) enum PowerWaveError {
 
     #[error("non-finite Z-parameter at frequency {frequency}, row {row}, column {column}")]
     NonFiniteZ {
+        frequency: usize,
+        row: usize,
+        column: usize,
+    },
+
+    #[error("non-finite Y-parameter at frequency {frequency}, row {row}, column {column}")]
+    NonFiniteY {
         frequency: usize,
         row: usize,
         column: usize,
@@ -312,6 +322,126 @@ pub(crate) fn z_to_s_power(
         for row in 0..nport {
             for column in 0..nport {
                 // The solved value is S^T[row, column] = S[column, row].
+                let value = b_transpose[row * nport + column];
+                if !is_finite(value) {
+                    return Err(PowerWaveError::NonFiniteComputation {
+                        frequency,
+                        row,
+                        column,
+                    });
+                }
+                s[[frequency, column, row]] = value;
+            }
+        }
+    }
+
+    Ok(s)
+}
+
+/// Convert frequency-major admittance matrices directly to S-parameters using
+/// Kurokawa power waves.
+///
+/// With currents directed into the network, `I = Y V` and
+///
+/// ```text
+/// a = F (I + G Y) V
+/// b = F (I - conj(G) Y) V
+/// ```
+///
+/// where `G = diag(z0)` and
+/// `F = diag(1 / (2 * sqrt(abs(Re(z0)))))`.  For every frequency this forms
+/// `A = F (I + G Y)` and `B = F (I - conj(G) Y)`, then solves `S A = B` by
+/// plain-transposing both matrices into the existing exact-pivot multiple-RHS
+/// solver.  This is deliberately a direct solve: it does not invert `Y`, use
+/// a pseudoinverse, regularize, classify near-singular systems, or fall back to
+/// an identity result for zero `Y`.
+pub(crate) fn y_to_s_power_direct(
+    y: &Array3<Complex64>,
+    z0: &Array2<Complex64>,
+) -> Result<Array3<Complex64>, PowerWaveError> {
+    let (nfreq, nport_rows, nport_columns) = y.dim();
+    if nport_rows == 0 || nport_rows != nport_columns {
+        return Err(PowerWaveError::InvalidYShape {
+            shape: (nfreq, nport_rows, nport_columns),
+        });
+    }
+    let (z0_nfreq, z0_nport) = z0.dim();
+    if (z0_nfreq, z0_nport) != (nfreq, nport_rows) {
+        return Err(PowerWaveError::InvalidZ0Shape {
+            shape: (z0_nfreq, z0_nport),
+        });
+    }
+
+    let nport = nport_rows;
+    let mut s = Array3::from_elem((nfreq, nport, nport), ZERO);
+
+    for frequency in 0..nfreq {
+        let mut normalization = vec![ZERO; nport];
+        for port in 0..nport {
+            let impedance = z0[[frequency, port]];
+            if !is_finite(impedance) {
+                return Err(PowerWaveError::NonFiniteZ0 { frequency, port });
+            }
+            if impedance.re == 0.0 {
+                return Err(PowerWaveError::ZeroRealReferenceImpedance { frequency, port });
+            }
+
+            let scale = 2.0 * impedance.re.abs().sqrt();
+            let f = Complex64::new(1.0 / scale, 0.0);
+            if !is_finite(f) {
+                return Err(PowerWaveError::NonFiniteComputation {
+                    frequency,
+                    row: port,
+                    column: port,
+                });
+            }
+            normalization[port] = f;
+        }
+
+        // A and B are stored as plain transposes so the existing left solver
+        // computes A^T S^T = B^T.  Do not conjugate while transposing: the
+        // conjugate in the Kurokawa equation applies only to G in B.
+        let mut a_transpose = vec![ZERO; nport * nport];
+        let mut b_transpose = vec![ZERO; nport * nport];
+        for row in 0..nport {
+            for column in 0..nport {
+                let y_value = y[[frequency, row, column]];
+                if !is_finite(y_value) {
+                    return Err(PowerWaveError::NonFiniteY {
+                        frequency,
+                        row,
+                        column,
+                    });
+                }
+
+                // G and conj(G) multiply Y from the left, so they scale the
+                // current matrix row by the corresponding port reference.
+                let identity = if row == column {
+                    Complex64::new(1.0, 0.0)
+                } else {
+                    ZERO
+                };
+                let impedance = z0[[frequency, row]];
+                let a_value = (identity + impedance * y_value) * normalization[row];
+                let b_value = (identity - impedance.conj() * y_value) * normalization[row];
+                if !is_finite(a_value) || !is_finite(b_value) {
+                    return Err(PowerWaveError::NonFiniteComputation {
+                        frequency,
+                        row,
+                        column,
+                    });
+                }
+
+                let index = column * nport + row;
+                a_transpose[index] = a_value;
+                b_transpose[index] = b_value;
+            }
+        }
+
+        solve_multiple_rhs(&mut a_transpose, &mut b_transpose, nport, frequency)?;
+
+        for row in 0..nport {
+            for column in 0..nport {
                 let value = b_transpose[row * nport + column];
                 if !is_finite(value) {
                     return Err(PowerWaveError::NonFiniteComputation {
