@@ -1,6 +1,6 @@
 use ndarray::{Array2, Array3};
 use num_complex::Complex64;
-use rfkit_core::{Frequency, Network};
+use rfkit_core::{ConversionStage, Error, Frequency, Network};
 use rfkit_touchstone::{parse_touchstone_v1_0_s, write_touchstone_v1_0_s_ri_hz};
 
 #[test]
@@ -26,7 +26,7 @@ fn modelled_real_common_reference_crosses_writer_reader_boundary() {
 }
 
 #[test]
-fn direct_floating_series_admittance_crosses_touchstone_writer_reader_boundary() {
+fn direct_floating_series_admittance_crosses_touchstone_writer_reader_boundary_and_extracts_y() {
     let frequency = Frequency::from_hz(vec![1.0e9, 2.0e9]).unwrap();
     let y = Array3::from_shape_vec(
         (2, 2, 2),
@@ -50,11 +50,29 @@ fn direct_floating_series_admittance_crosses_touchstone_writer_reader_boundary()
     assert_eq!(reread.frequency(), network.frequency());
     assert_eq!(reread.z0(), network.z0());
     assert_eq!(reread.s(), network.s());
-    let expected = 100.0 / (100.0 + 2.0 * 50.0);
-    for row in 0..2 {
-        for column in 0..2 {
-            assert!((reread.s()[[0, row, column]].re - expected).abs() < 1.0e-14);
-            assert_eq!(reread.s()[[0, row, column]].im, 0.0);
+
+    // The floating series model has S=0.5 for every entry at both frequencies,
+    // so I-S is singular even though its physical admittance is finite.
+    let expected_y = Array3::from_shape_fn((2, 2, 2), |(_, row, column)| {
+        if row == column {
+            Complex64::new(0.01, 0.0)
+        } else {
+            Complex64::new(-0.01, 0.0)
         }
+    });
+    let extracted_y = reread.to_y_direct_power().unwrap();
+    for (actual, expected) in extracted_y.iter().zip(expected_y.iter()) {
+        assert!((actual - expected).norm() < 1.0e-14);
     }
+
+    let composed_error = reread
+        .to_y_power()
+        .expect_err("composed S-to-Z-to-Y must retain its singular stage");
+    assert!(matches!(
+        composed_error,
+        Error::Singular {
+            stage: ConversionStage::SToZ,
+            ..
+        }
+    ));
 }

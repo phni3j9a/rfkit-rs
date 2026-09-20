@@ -57,6 +57,27 @@ singularity, and separate composed Y→Z versus direct Y→S stage errors. The
 constructors' pointwise frequency-label policy is intentionally looser than
 the Touchstone writer's format policy and is tested as such.
 
+Issue #78 adds the complementary direct `Network::to_y_direct_power` path.
+Its deterministic coverage includes ideal-open and floating-series networks
+whose `I-S` is singular but whose direct `A Y = B` system is nonsingular,
+including the public Touchstone writer→reader workflow. The floating-series
+case checks the analytical `0.01[[1,-1],[-1,1]]` siemens result directly after
+the reread, while the same network must still return a structured
+`ConversionStage::SToZ` singular error through the existing composed
+`to_y_power` method. Direct and composed extraction are compared on their
+well-conditioned common domain; this does not broaden renormalization or any
+other conversion domain.
+
+The pinned direct S→Y differential case is independently specified as a
+non-reciprocal three-port with singular `I-S` and nonsingular direct `A`, plus
+complex per-port/frequency-dependent references. Its expected Y is generated
+only by public `skrf.network.s2y(..., s_def="power")` from pinned
+`scikit-rf==2.0.1` (`bd651e923cac6020de49a096e1d7e9b5f949f884`), with the local
+seed `20260946` and fixture name
+`power_wave_s_to_y_three_port_singular_i_minus_s_complex_z0.json`; the fixture
+metadata records operation, units, versions, and strict tolerances. The
+input is not derived from an opposite-direction fixture or a round trip.
+
 ## Reporting
 
 Eventually CI should publish a machine-generated coverage report such as:

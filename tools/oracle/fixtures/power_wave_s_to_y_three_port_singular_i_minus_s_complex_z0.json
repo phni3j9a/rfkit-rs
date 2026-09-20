@@ -1,0 +1,384 @@
+{
+  "data": {
+    "frequency_hz": [
+      710000000.0,
+      1330000000.0,
+      2210000000.0
+    ],
+    "s": [
+      [
+        [
+          {
+            "imag": 0.0,
+            "real": 1.0
+          },
+          {
+            "imag": 0.006970060005369327,
+            "real": 0.03348152095192445
+          },
+          {
+            "imag": -0.01629163022701837,
+            "real": -0.00034428167472965354
+          }
+        ],
+        [
+          {
+            "imag": 0.0,
+            "real": 0.0
+          },
+          {
+            "imag": 0.0,
+            "real": 0.375
+          },
+          {
+            "imag": 0.02508364383001125,
+            "real": 0.00664925339698534
+          }
+        ],
+        [
+          {
+            "imag": 0.0,
+            "real": 0.0
+          },
+          {
+            "imag": 0.0,
+            "real": 0.0
+          },
+          {
+            "imag": 0.0,
+            "real": 0.25
+          }
+        ]
+      ],
+      [
+        [
+          {
+            "imag": 0.0,
+            "real": 1.0
+          },
+          {
+            "imag": 0.0075084019416906105,
+            "real": 0.003002337138274116
+          },
+          {
+            "imag": -0.0494131591497621,
+            "real": 0.04417382501854155
+          }
+        ],
+        [
+          {
+            "imag": 0.0,
+            "real": 0.0
+          },
+          {
+            "imag": 0.0,
+            "real": 0.375
+          },
+          {
+            "imag": -0.03790281027422941,
+            "real": -0.05831662148784627
+          }
+        ],
+        [
+          {
+            "imag": 0.0,
+            "real": 0.0
+          },
+          {
+            "imag": 0.0,
+            "real": 0.0
+          },
+          {
+            "imag": 0.0,
+            "real": 0.25
+          }
+        ]
+      ],
+      [
+        [
+          {
+            "imag": 0.0,
+            "real": 1.0
+          },
+          {
+            "imag": 0.031158291221836498,
+            "real": -0.017480974215243358
+          },
+          {
+            "imag": 0.02810093278667116,
+            "real": 0.0005905112847874517
+          }
+        ],
+        [
+          {
+            "imag": 0.0,
+            "real": 0.0
+          },
+          {
+            "imag": 0.0,
+            "real": 0.375
+          },
+          {
+            "imag": 0.021515507921272346,
+            "real": -0.013003720470494466
+          }
+        ],
+        [
+          {
+            "imag": 0.0,
+            "real": 0.0
+          },
+          {
+            "imag": 0.0,
+            "real": 0.0
+          },
+          {
+            "imag": 0.0,
+            "real": 0.25
+          }
+        ]
+      ]
+    ],
+    "y_s": [
+      [
+        [
+          {
+            "imag": -0.0,
+            "real": 0.0
+          },
+          {
+            "imag": -0.00011071523990304105,
+            "real": -0.0005780788713380744
+          },
+          {
+            "imag": 0.00028168364000107836,
+            "real": -9.874997132160194e-07
+          }
+        ],
+        [
+          {
+            "imag": -0.0,
+            "real": 0.0
+          },
+          {
+            "imag": -0.00015083341004395242,
+            "real": 0.00941821557421503
+          },
+          {
+            "imag": -0.000532872838203465,
+            "real": -0.00013453575393854858
+          }
+        ],
+        [
+          {
+            "imag": 0.0,
+            "real": 0.0
+          },
+          {
+            "imag": 0.0,
+            "real": 0.0
+          },
+          {
+            "imag": 0.00026705701329575573,
+            "real": 0.009592565132749847
+          }
+        ]
+      ],
+      [
+        [
+          {
+            "imag": -0.0,
+            "real": 0.0
+          },
+          {
+            "imag": -0.00012130922228190019,
+            "real": -5.034403329045689e-05
+          },
+          {
+            "imag": 0.0007528787430163762,
+            "real": -0.000718326542332327
+          }
+        ],
+        [
+          {
+            "imag": -0.0,
+            "real": 0.0
+          },
+          {
+            "imag": -0.0001162993545385823,
+            "real": 0.008955050299470838
+          },
+          {
+            "imag": 0.0007864191125078508,
+            "real": 0.0011684086686839807
+          }
+        ],
+        [
+          {
+            "imag": 0.0,
+            "real": 0.0
+          },
+          {
+            "imag": 0.0,
+            "real": 0.0
+          },
+          {
+            "imag": 0.0002681756330937339,
+            "real": 0.00922297150851466
+          }
+        ]
+      ],
+      [
+        [
+          {
+            "imag": -0.0,
+            "real": 0.0
+          },
+          {
+            "imag": -0.0004818696838627211,
+            "real": 0.00026389453966126455
+          },
+          {
+            "imag": -0.0004306208246198411,
+            "real": -9.77799689360098e-07
+          }
+        ],
+        [
+          {
+            "imag": -0.0,
+            "real": 0.0
+          },
+          {
+            "imag": -8.74281108697731e-05,
+            "real": 0.0085351693236616
+          },
+          {
+            "imag": -0.0004122637600925861,
+            "real": 0.0002605465600870441
+          }
+        ],
+        [
+          {
+            "imag": 0.0,
+            "real": 0.0
+          },
+          {
+            "imag": 0.0,
+            "real": 0.0
+          },
+          {
+            "imag": 0.0002683968262864694,
+            "real": 0.008880777340361119
+          }
+        ]
+      ]
+    ],
+    "z0_ohm": [
+      [
+        {
+          "imag": 1.1,
+          "real": 37.0
+        },
+        {
+          "imag": -1.7,
+          "real": 48.25
+        },
+        {
+          "imag": 2.9,
+          "real": 62.5
+        }
+      ],
+      [
+        {
+          "imag": 1.4,
+          "real": 39.5
+        },
+        {
+          "imag": -1.45,
+          "real": 50.75
+        },
+        {
+          "imag": 3.15,
+          "real": 65.0
+        }
+      ],
+      [
+        {
+          "imag": 1.7,
+          "real": 42.0
+        },
+        {
+          "imag": -1.2,
+          "real": 53.25
+        },
+        {
+          "imag": 3.4,
+          "real": 67.5
+        }
+      ]
+    ]
+  },
+  "metadata": {
+    "case_id": "power_wave_s_to_y_three_port_singular_i_minus_s_complex_z0",
+    "direct_system": "A=(S G+conj(G))F, B=(I-S)F, solve A Y=B",
+    "direct_system_nonsingular": true,
+    "exact_singularity": {
+      "determinant": 0.0,
+      "determinant_factors": [
+        0.0,
+        0.625,
+        0.75
+      ],
+      "matrix_structure": "upper_triangular",
+      "rank_per_frequency": [
+        2,
+        2,
+        2
+      ],
+      "system_matrix": "I-S",
+      "zero_diagonal_exact": true,
+      "zero_diagonal_port": 0
+    },
+    "input_unit": "dimensionless",
+    "numpy_version": "2.5.1",
+    "operation": "s_to_y_direct",
+    "output_unit": "S",
+    "random_seed": 20260946,
+    "reference_impedance": {
+      "complex": true,
+      "frequency_dependent": true,
+      "per_port": true,
+      "unit": "ohm"
+    },
+    "schema": "rfkit-rs.oracle.fixture",
+    "schema_version": 1,
+    "scikit_rf_version": "2.0.1",
+    "shape": {
+      "frequency": [
+        3
+      ],
+      "input_s": [
+        3,
+        3,
+        3
+      ],
+      "input_z0": [
+        3,
+        3
+      ],
+      "output_y": [
+        3,
+        3,
+        3
+      ]
+    },
+    "tolerance_policy": {
+      "atol_s": 1e-12,
+      "comparison": "abs(actual-expected) <= atol_s + rtol*abs(expected)",
+      "justification": "Strict binary64 tolerance for a deterministic, non-reciprocal three-port S input with finite complex per-port, frequency-dependent references. The input-derived I-S system is exactly singular by its upper-triangular zero diagonal factor and determinant 0, while the direct A=(S G+conj(G))F system is finite and nonsingular at every frequency. The output-only contract allows normal cross-language solve rounding and does not reproduce scikit-rf's eigenvalue-nudge policy in Rust.",
+      "regeneration": "canonical UTF-8 JSON serialization; y_s is checked with the recorded numeric tolerance",
+      "rtol": 1e-12
+    },
+    "wave_definition": "power"
+  }
+}

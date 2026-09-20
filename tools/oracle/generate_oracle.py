@@ -22,6 +22,11 @@ direction.  The matched-junction fixture uses independent three-port and
 four-port inputs and the public ``skrf.network.connect`` operation with
 explicit power-wave Network constructors; its output-only comparison leaves
 inputs, z0, and port-order metadata exact.
+The direct S-to-Y singular-domain fixture adds an independently constructed
+non-reciprocal three-port S input whose ``I-S`` system is exactly singular
+while the direct Kurokawa ``A`` system remains nonsingular.  Its expected Y is
+obtained only from the public ``skrf.network.s2y`` operation; the singular
+evidence is recorded structurally and the checker tolerates only ``y_s``.
 The interpolation fixture uses the public
 ``Network.interpolate(..., basis="s", coords="cart", kind="linear")`` operation
 for both S and z0 outputs.  SciPy is pinned explicitly because scikit-rf
@@ -406,6 +411,35 @@ DIRECT_Y_TO_S_SINGULAR_TOLERANCE_JUSTIFICATION = (
     "frequency-dependent references; each direct A=F(I+GY) system is checked "
     "finite and nonsingular at generation time, while Rust performs the same "
     "operation without an inverse, cutoff, or regularization."
+)
+
+# Direct S→Y conformance adds the complementary singular-domain case.  Its
+# independently generated S input has an exactly singular I-S system at every
+# frequency, while the direct Kurokawa A=(S G+conj(G))F system remains finite
+# and nonsingular.  Expected Y is obtained only through public s2y; no Y input
+# or opposite-direction fixture participates in the construction.
+DIRECT_S_TO_Y_SINGULAR_FIXTURE = (
+    Path(__file__).resolve().parent
+    / "fixtures"
+    / "power_wave_s_to_y_three_port_singular_i_minus_s_complex_z0.json"
+)
+DIRECT_S_TO_Y_SINGULAR_CASE_ID = (
+    "power_wave_s_to_y_three_port_singular_i_minus_s_complex_z0"
+)
+DIRECT_S_TO_Y_SINGULAR_RANDOM_SEED = 20_260_946
+DIRECT_S_TO_Y_SINGULAR_NFREQ = 3
+DIRECT_S_TO_Y_SINGULAR_NPORTS = 3
+DIRECT_S_TO_Y_SINGULAR_DIAGONAL_FACTORS = (0.0, 0.625, 0.75)
+DIRECT_S_TO_Y_SINGULAR_RTOL = 1e-12
+DIRECT_S_TO_Y_SINGULAR_ATOL_S = 1e-12
+DIRECT_S_TO_Y_SINGULAR_TOLERANCE_JUSTIFICATION = (
+    "Strict binary64 tolerance for a deterministic, non-reciprocal three-port "
+    "S input with finite complex per-port, frequency-dependent references. "
+    "The input-derived I-S system is exactly singular by its upper-triangular "
+    "zero diagonal factor and determinant 0, while the direct "
+    "A=(S G+conj(G))F system is finite and nonsingular at every frequency. "
+    "The output-only contract allows normal cross-language solve rounding and "
+    "does not reproduce scikit-rf's eigenvalue-nudge policy in Rust."
 )
 
 # Matched-junction connection is intentionally kept as one standalone oracle
@@ -3223,6 +3257,183 @@ def _direct_y_to_s_singular_fixture(np: Any, skrf: Any) -> dict[str, Any]:
     }
 
 
+def _direct_s_to_y_singular_inputs(np: Any) -> tuple[Any, Any, Any]:
+    """Build a direct S input with exact singular ``I-S`` systems.
+
+    The upper-triangular ``I-S`` construction makes the zero determinant an
+    input-derived, exact fact rather than a tolerance classification.  The
+    nonzero diagonal factors keep the matrix rank exactly two, and the random
+    upper couplings make S non-reciprocal at every frequency.  The complex,
+    per-port, frequency-dependent z0 profile is authored independently of S.
+    """
+
+    frequency_hz = np.array(
+        [0.71e9, 1.33e9, 2.21e9],
+        dtype=np.float64,
+    )
+    rng = np.random.default_rng(DIRECT_S_TO_Y_SINGULAR_RANDOM_SEED)
+    singular_system = np.zeros(
+        (
+            DIRECT_S_TO_Y_SINGULAR_NFREQ,
+            DIRECT_S_TO_Y_SINGULAR_NPORTS,
+            DIRECT_S_TO_Y_SINGULAR_NPORTS,
+        ),
+        dtype=np.complex128,
+    )
+    for frequency in range(DIRECT_S_TO_Y_SINGULAR_NFREQ):
+        for row, factor in enumerate(DIRECT_S_TO_Y_SINGULAR_DIAGONAL_FACTORS):
+            singular_system[frequency, row, row] = complex(factor, 0.0)
+            for column in range(row + 1, DIRECT_S_TO_Y_SINGULAR_NPORTS):
+                singular_system[frequency, row, column] = complex(
+                    rng.normal(loc=0.0, scale=0.03125),
+                    rng.normal(loc=0.0, scale=0.03125),
+                )
+
+    identity = np.eye(DIRECT_S_TO_Y_SINGULAR_NPORTS, dtype=np.complex128)
+    direct_s = identity[None, :, :] - singular_system
+    z0 = (
+        np.array(
+            [
+                [37.0, 48.25, 62.5],
+                [39.5, 50.75, 65.0],
+                [42.0, 53.25, 67.5],
+            ],
+            dtype=np.float64,
+        )
+        + 1j
+        * np.array(
+            [
+                [1.1, -1.7, 2.9],
+                [1.4, -1.45, 3.15],
+                [1.7, -1.2, 3.4],
+            ],
+            dtype=np.float64,
+        )
+    ).astype(np.complex128)
+
+    _assert_non_symmetric(np, direct_s, name="direct singular-domain S input")
+    if not np.isfinite(direct_s).all() or not np.isfinite(z0).all():
+        raise ValueError("direct singular-domain S/z0 input must be finite")
+    if not (z0.real != 0.0).all() or not (z0.imag != 0.0).all():
+        raise ValueError(
+            "direct singular-domain z0 must have non-zero real and imaginary parts"
+        )
+
+    expected_diagonal = np.asarray(
+        DIRECT_S_TO_Y_SINGULAR_DIAGONAL_FACTORS,
+        dtype=np.complex128,
+    )
+    for frequency in range(DIRECT_S_TO_Y_SINGULAR_NFREQ):
+        system = identity - direct_s[frequency]
+        if not np.array_equal(
+            np.tril(system, k=-1),
+            np.zeros_like(system),
+        ):
+            raise ValueError("direct singular-domain I-S system must be upper triangular")
+        if not np.array_equal(np.diag(system), expected_diagonal):
+            raise ValueError(
+                "direct singular-domain I-S system has unexpected diagonal factors"
+            )
+        if np.linalg.matrix_rank(system) != DIRECT_S_TO_Y_SINGULAR_NPORTS - 1:
+            raise ValueError(
+                "direct singular-domain I-S system must have exact rank two"
+            )
+        determinant = np.linalg.det(system)
+        if determinant != 0.0:
+            raise ValueError(
+                "direct singular-domain I-S system must have exact determinant zero"
+            )
+
+        f = np.diag(1.0 / (2.0 * np.sqrt(np.abs(z0[frequency].real))))
+        g = np.diag(z0[frequency])
+        direct_a = (direct_s[frequency] @ g + np.conjugate(g)) @ f
+        direct_a_determinant = np.linalg.det(direct_a)
+        if (
+            not np.isfinite(direct_a).all()
+            or not np.isfinite(direct_a_determinant)
+            or direct_a_determinant == 0.0
+        ):
+            raise ValueError(
+                "direct singular-domain A system must be finite and nonsingular"
+            )
+
+    return frequency_hz, direct_s, z0
+
+
+def _direct_s_to_y_singular_fixture(np: Any, skrf: Any) -> dict[str, Any]:
+    """Build direct S→Y output through pinned public scikit-rf behavior."""
+
+    frequency_hz, direct_s, z0 = _direct_s_to_y_singular_inputs(np)
+    expected_y = np.asarray(
+        skrf.network.s2y(direct_s, z0=z0, s_def="power"),
+        dtype=np.complex128,
+    )
+    if not np.isfinite(expected_y).all():
+        raise ValueError("direct singular-domain S→Y output must be finite")
+
+    return {
+        "metadata": {
+            "case_id": DIRECT_S_TO_Y_SINGULAR_CASE_ID,
+            "direct_system": (
+                "A=(S G+conj(G))F, B=(I-S)F, solve A Y=B"
+            ),
+            "direct_system_nonsingular": True,
+            "exact_singularity": {
+                "determinant": 0.0,
+                "determinant_factors": [
+                    float(value)
+                    for value in DIRECT_S_TO_Y_SINGULAR_DIAGONAL_FACTORS
+                ],
+                "matrix_structure": "upper_triangular",
+                "rank_per_frequency": [
+                    DIRECT_S_TO_Y_SINGULAR_NPORTS - 1
+                ]
+                * DIRECT_S_TO_Y_SINGULAR_NFREQ,
+                "system_matrix": "I-S",
+                "zero_diagonal_exact": True,
+                "zero_diagonal_port": 0,
+            },
+            "input_unit": "dimensionless",
+            "numpy_version": np.__version__,
+            "operation": "s_to_y_direct",
+            "output_unit": "S",
+            "random_seed": DIRECT_S_TO_Y_SINGULAR_RANDOM_SEED,
+            "reference_impedance": {
+                "complex": True,
+                "frequency_dependent": True,
+                "per_port": True,
+                "unit": "ohm",
+            },
+            "schema": "rfkit-rs.oracle.fixture",
+            "schema_version": SCHEMA_VERSION,
+            "scikit_rf_version": skrf.__version__,
+            "shape": {
+                "frequency": list(frequency_hz.shape),
+                "input_s": list(direct_s.shape),
+                "input_z0": list(z0.shape),
+                "output_y": list(expected_y.shape),
+            },
+            "tolerance_policy": {
+                "atol_s": DIRECT_S_TO_Y_SINGULAR_ATOL_S,
+                "comparison": "abs(actual-expected) <= atol_s + rtol*abs(expected)",
+                "justification": DIRECT_S_TO_Y_SINGULAR_TOLERANCE_JUSTIFICATION,
+                "regeneration": (
+                    "canonical UTF-8 JSON serialization; y_s is checked with the "
+                    "recorded numeric tolerance"
+                ),
+                "rtol": DIRECT_S_TO_Y_SINGULAR_RTOL,
+            },
+            "wave_definition": "power",
+        },
+        "data": {
+            "frequency_hz": [float(value) for value in frequency_hz],
+            "s": _complex_array(direct_s),
+            "y_s": _complex_array(expected_y),
+            "z0_ohm": _complex_array(z0),
+        },
+    }
+
+
 def _matrix_reference_impedance_flags(z0_profile: str) -> dict[str, Any]:
     """Return the contract flags for one matrix-case z0 profile."""
 
@@ -4448,6 +4659,13 @@ _CASES = (
         _direct_y_to_s_singular_fixture,
         "numeric_output",
         "s",
+    ),
+    _OracleCase(
+        DIRECT_S_TO_Y_SINGULAR_CASE_ID,
+        DIRECT_S_TO_Y_SINGULAR_FIXTURE,
+        _direct_s_to_y_singular_fixture,
+        "numeric_output",
+        "y_s",
     ),
     _OracleCase(
         "power_wave_s_to_z_one_port_real_scalar_z0",

@@ -463,6 +463,20 @@ DIRECT_Y_TO_S_CASE_SPECS = {
     },
 }
 
+DIRECT_S_TO_Y_SINGULAR_CASE_SPECS = {
+    "power_wave_s_to_y_three_port_singular_i_minus_s_complex_z0": {
+        "operation": "s_to_y_direct",
+        "ports": 3,
+        "frequencies": 3,
+        "input": "s",
+        "output": "y_s",
+        "input_unit": "dimensionless",
+        "output_unit": "S",
+        "seed": 20_260_946,
+        "absolute_tolerance": "atol_s",
+    },
+}
+
 MATCHED_CONNECTION_CASE_SPECS = {
     "power_wave_connect_matched_three_to_four_port_real_frequency_dependent_z0": {
         "operation": "connect_matched",
@@ -1006,6 +1020,7 @@ class MatrixRegistrationAndCheckerTests(unittest.TestCase):
             + len(IMPEDANCE_ADMITTANCE_CASE_SPECS)
             + len(POWER_WAVE_ADMITTANCE_CASE_SPECS)
             + len(DIRECT_Y_TO_S_CASE_SPECS)
+            + len(DIRECT_S_TO_Y_SINGULAR_CASE_SPECS)
             + len(COMPOSITION_CASE_SPECS)
             + len(MATCHED_CONNECTION_CASE_SPECS)
             + len(INNER_CONNECT_CASE_SPECS)
@@ -1015,6 +1030,9 @@ class MatrixRegistrationAndCheckerTests(unittest.TestCase):
         self.assertTrue(set(IMPEDANCE_ADMITTANCE_CASE_SPECS).issubset(registered))
         self.assertTrue(set(POWER_WAVE_ADMITTANCE_CASE_SPECS).issubset(registered))
         self.assertTrue(set(DIRECT_Y_TO_S_CASE_SPECS).issubset(registered))
+        self.assertTrue(
+            set(DIRECT_S_TO_Y_SINGULAR_CASE_SPECS).issubset(registered)
+        )
         self.assertTrue(set(INNER_CONNECT_CASE_SPECS).issubset(registered))
         for case_id, spec in MATRIX_CASE_SPECS.items():
             case = registered[case_id]
@@ -3033,6 +3051,186 @@ class DirectYToSRegistrationAndCheckerTests(unittest.TestCase):
                 oracle._check_numeric_fixture(path, fixture, "s"),
                 1,
             )
+
+
+class DirectSToYSingularRegistrationAndCheckerTests(unittest.TestCase):
+    """Protect the exact-singular I-S, direct-nonsingular A S→Y contract."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.np, cls.skrf = oracle._load_dependencies()
+
+    @staticmethod
+    def _complex(value: dict[str, float]) -> complex:
+        return complex(value["real"], value["imag"])
+
+    def _nested_complex_equal(self, values: object, expected: object) -> None:
+        if isinstance(expected, list):
+            if not isinstance(values, list):
+                raise AssertionError("serialized complex array is not a list")
+            self.assertEqual(len(values), len(expected))
+            for actual_item, expected_item in zip(values, expected):
+                self._nested_complex_equal(actual_item, expected_item)
+            return
+
+        if not isinstance(values, dict) or not isinstance(expected, complex):
+            raise AssertionError("serialized complex leaf has an unexpected shape")
+        self.assertEqual(self._complex(values), expected)
+
+    def test_case_is_registered_and_reconstructs_exact_singular_system(self) -> None:
+        case_id = next(iter(DIRECT_S_TO_Y_SINGULAR_CASE_SPECS))
+        spec = DIRECT_S_TO_Y_SINGULAR_CASE_SPECS[case_id]
+        registered = {case.case_id: case for case in oracle._CASES}
+        case = registered[case_id]
+        self.assertEqual(case.path, oracle.DIRECT_S_TO_Y_SINGULAR_FIXTURE)
+        self.assertEqual(case.path.stem, case_id)
+        self.assertEqual(case.comparison, "numeric_output")
+        self.assertEqual(case.numeric_output_key, "y_s")
+
+        fixture = oracle._read_canonical_json(case.path)
+        metadata = fixture["metadata"]
+        data = fixture["data"]
+        self.assertEqual(metadata["case_id"], case_id)
+        self.assertEqual(metadata["operation"], spec["operation"])
+        self.assertEqual(metadata["random_seed"], spec["seed"])
+        self.assertEqual(metadata["input_unit"], spec["input_unit"])
+        self.assertEqual(metadata["output_unit"], spec["output_unit"])
+        self.assertEqual(metadata["numpy_version"], "2.5.1")
+        self.assertEqual(metadata["scikit_rf_version"], "2.0.1")
+        self.assertEqual(metadata["wave_definition"], "power")
+        self.assertEqual(
+            metadata["reference_impedance"],
+            {
+                "complex": True,
+                "frequency_dependent": True,
+                "per_port": True,
+                "unit": "ohm",
+            },
+        )
+        self.assertEqual(
+            metadata["shape"],
+            {
+                "frequency": [3],
+                "input_s": [3, 3, 3],
+                "input_z0": [3, 3],
+                "output_y": [3, 3, 3],
+            },
+        )
+        self.assertEqual(
+            metadata["direct_system"],
+            "A=(S G+conj(G))F, B=(I-S)F, solve A Y=B",
+        )
+        self.assertTrue(metadata["direct_system_nonsingular"])
+        singularity = metadata["exact_singularity"]
+        self.assertEqual(
+            singularity,
+            {
+                "determinant": 0.0,
+                "determinant_factors": [0.0, 0.625, 0.75],
+                "matrix_structure": "upper_triangular",
+                "rank_per_frequency": [2, 2, 2],
+                "system_matrix": "I-S",
+                "zero_diagonal_exact": True,
+                "zero_diagonal_port": 0,
+            },
+        )
+
+        frequency, direct_s, direct_z0 = oracle._direct_s_to_y_singular_inputs(
+            self.np
+        )
+        self.assertEqual(data["frequency_hz"], [float(value) for value in frequency])
+        self._nested_complex_equal(data["s"], direct_s.tolist())
+        self._nested_complex_equal(data["z0_ohm"], direct_z0.tolist())
+
+        identity = self.np.eye(oracle.DIRECT_S_TO_Y_SINGULAR_NPORTS)
+        expected_diagonal = [complex(value, 0.0) for value in (0.0, 0.625, 0.75)]
+        for frequency_index in range(3):
+            system = identity - direct_s[frequency_index]
+            self.assertTrue(
+                self.np.array_equal(
+                    self.np.tril(system, k=-1),
+                    self.np.zeros_like(system),
+                )
+            )
+            self.assertEqual(self.np.linalg.matrix_rank(system), 2)
+            self.assertEqual(self.np.linalg.det(system), 0.0j)
+            self.assertEqual(self.np.diag(system).tolist(), expected_diagonal)
+
+            g = self.np.diag(direct_z0[frequency_index])
+            f = self.np.diag(
+                1.0 / (2.0 * self.np.sqrt(self.np.abs(direct_z0[frequency_index].real)))
+            )
+            direct_a = (direct_s[frequency_index] @ g + self.np.conjugate(g)) @ f
+            determinant = self.np.linalg.det(direct_a)
+            self.assertTrue(self.np.isfinite(direct_a).all())
+            self.assertTrue(self.np.isfinite(determinant))
+            self.assertNotEqual(determinant, 0.0j)
+
+        self.assertEqual(metadata["tolerance_policy"]["rtol"], 1e-12)
+        self.assertEqual(metadata["tolerance_policy"]["atol_s"], 1e-12)
+        self.assertIn("exactly singular", metadata["tolerance_policy"]["justification"])
+        self.assertIn("output-only", metadata["tolerance_policy"]["justification"])
+
+    def test_public_builder_uses_only_s2y_with_explicit_power_definition(self) -> None:
+        case_id = next(iter(DIRECT_S_TO_Y_SINGULAR_CASE_SPECS))
+        case = {case.case_id: case for case in oracle._CASES}[case_id]
+        frequency, direct_s, direct_z0 = oracle._direct_s_to_y_singular_inputs(self.np)
+        with mock.patch.object(
+            self.skrf.network,
+            "y2s",
+            side_effect=AssertionError("direct S→Y builder must not call y2s"),
+        ):
+            with mock.patch.object(
+                self.skrf.network,
+                "s2y",
+                wraps=self.skrf.network.s2y,
+            ) as conversion:
+                document = case.builder(self.np, self.skrf)
+
+        self.assertEqual(conversion.call_count, 1)
+        args, kwargs = conversion.call_args
+        self.assertEqual(len(args), 1)
+        self.np.testing.assert_array_equal(args[0], direct_s)
+        self.np.testing.assert_array_equal(kwargs["z0"], direct_z0)
+        self.assertEqual(kwargs["s_def"], "power")
+        self.assertEqual(
+            document["data"]["frequency_hz"],
+            [float(value) for value in frequency],
+        )
+        expected_y = self.skrf.network.s2y(direct_s, z0=direct_z0, s_def="power")
+        self._nested_complex_equal(document["data"]["y_s"], expected_y.tolist())
+
+    def test_checker_tolerates_only_computed_y_output(self) -> None:
+        case_id = next(iter(DIRECT_S_TO_Y_SINGULAR_CASE_SPECS))
+        case = {case.case_id: case for case in oracle._CASES}[case_id]
+        fixture = oracle._read_canonical_json(case.path)
+
+        adjusted = copy.deepcopy(fixture)
+        adjusted["data"]["y_s"][0][0][1]["real"] += 1e-13
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / case.path.name
+            path.write_bytes(oracle._canonical_bytes(adjusted))
+            self.assertEqual(
+                oracle._check_numeric_fixture(path, fixture, "y_s"),
+                0,
+            )
+
+        for field in ("s", "z0", "metadata"):
+            with self.subTest(field=field):
+                drifted = copy.deepcopy(fixture)
+                if field == "s":
+                    drifted["data"]["s"][0][0][1]["real"] += 1e-3
+                elif field == "z0":
+                    drifted["data"]["z0_ohm"][1][2]["imag"] += 1.0
+                else:
+                    drifted["metadata"]["operation"] = "wrong"
+                with tempfile.TemporaryDirectory() as directory:
+                    path = Path(directory) / case.path.name
+                    path.write_bytes(oracle._canonical_bytes(drifted))
+                    self.assertEqual(
+                        oracle._check_numeric_fixture(path, fixture, "y_s"),
+                        1,
+                    )
 
 
 if __name__ == "__main__":
