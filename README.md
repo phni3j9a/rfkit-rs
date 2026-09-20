@@ -164,7 +164,7 @@ changing the domain or error behavior of existing conversions:
 ```rust
 use ndarray::{Array2, Array3};
 use num_complex::Complex64;
-use rfkit_core::{ConversionStage, Error, Frequency, Network};
+use rfkit_core::{Frequency, Network};
 use rfkit_touchstone::{parse_touchstone_v1_0_s, write_touchstone_v1_0_s_ri_hz};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -182,9 +182,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Complex64::new(0.01, 0.0),
         ],
     )?;
-    let z0 = Array2::from_elem((2, 2), Complex64::new(50.0, 0.0));
-    let source = Network::from_y_direct_power(frequency, y, z0)?;
-    let text = write_touchstone_v1_0_s_ri_hz(&source)?;
+    // Keep unequal complex references in the model, then make the explicit
+    // common positive-real reference required by the Touchstone writer.
+    let source_z0 = Array2::from_shape_vec(
+        (2, 2),
+        vec![
+            Complex64::new(43.0, 7.0),
+            Complex64::new(68.0, -11.0),
+            Complex64::new(47.0, 5.0),
+            Complex64::new(71.0, -9.0),
+        ],
+    )?;
+    let source = Network::from_y_direct_power(frequency, y, source_z0)?;
+    let common_z0 = Array2::from_elem((2, 2), Complex64::new(75.0, 0.0));
+    let transformed = source.renormalize_direct_power(common_z0)?;
+    let text = write_touchstone_v1_0_s_ri_hz(&transformed)?;
     let reread = parse_touchstone_v1_0_s(&text, 2)?;
 
     let extracted_y = reread.to_y_direct_power()?;
@@ -201,14 +213,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         assert!((*actual - expected).norm() < 1.0e-14);
     }
 
-    let composed_error = reread.to_y_power().expect_err("I-S is singular");
-    assert!(matches!(
-        composed_error,
-        Error::Singular {
-            stage: ConversionStage::SToZ,
-            ..
-        }
-    ));
     Ok(())
 }
 ```
@@ -226,6 +230,15 @@ containing `Terminal data exported` or `Modal data exported`, and explicit
 definition`, or `S-parameter uses the traveling definition` comments.
 Ordinary comments, including `Port[n] = ...` port-name comments, remain
 ignorable; universal vendor-marker recognition is outside this reader's scope.
+
+`renormalize_direct_power` is the explicit direct Kurokawa wave-change path
+for this workflow. It supports singular physical Z/Y cases because it solves
+the direct wave relation between the stored source references and the caller's
+target references. The existing `renormalize_power` remains the composed
+S→Z→S operation, including its existing singular-stage behavior; callers
+choose the domain explicitly by the method name. Direct renormalization does
+not silently fall back, route through Y, regularize, or choose a target
+reference.
 
 ## Repository layout
 
