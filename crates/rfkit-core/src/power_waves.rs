@@ -86,6 +86,71 @@ pub(crate) enum PowerWaveError {
     },
 }
 
+/// Identifies which reference-impedance array supplied a value to the direct
+/// renormalization kernel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DirectRenormalizationReference {
+    Source,
+    Target,
+}
+
+/// Failure modes for direct Kurokawa power-wave renormalization.
+///
+/// This operation deliberately has a separate private error boundary from the
+/// composed S→Z→S kernels.  In particular, mapping these variants at the
+/// public boundary must not make a direct failure look like either of those
+/// composed stages.
+#[derive(Debug, Error, PartialEq)]
+pub(crate) enum DirectRenormalizationError {
+    #[error("S-parameter shape must be (nfreq, nport, nport), got {shape:?}")]
+    InvalidSShape { shape: (usize, usize, usize) },
+
+    #[error("{reference:?} reference-impedance shape must be (nfreq, nport), got {shape:?}")]
+    InvalidZ0Shape {
+        reference: DirectRenormalizationReference,
+        shape: (usize, usize),
+    },
+
+    #[error("non-finite S-parameter at frequency {frequency}, row {row}, column {column}")]
+    NonFiniteS {
+        frequency: usize,
+        row: usize,
+        column: usize,
+    },
+
+    #[error(
+        "{reference:?} reference impedance is non-finite at frequency {frequency}, port {port}"
+    )]
+    NonFiniteZ0 {
+        reference: DirectRenormalizationReference,
+        frequency: usize,
+        port: usize,
+    },
+
+    #[error(
+        "{reference:?} reference impedance has a zero real part at frequency {frequency}, port {port}"
+    )]
+    ZeroRealReferenceImpedance {
+        reference: DirectRenormalizationReference,
+        frequency: usize,
+        port: usize,
+    },
+
+    #[error(
+        "direct power-wave renormalization system is exactly singular at frequency {frequency}, pivot {pivot}"
+    )]
+    Singular { frequency: usize, pivot: usize },
+
+    #[error(
+        "non-finite value while evaluating direct power-wave renormalization at frequency {frequency}, row {row}, column {column}"
+    )]
+    NonFiniteComputation {
+        frequency: usize,
+        row: usize,
+        column: usize,
+    },
+}
+
 /// Convert frequency-major power-wave S-parameters to Z-parameters.
 ///
 /// This uses the Kurokawa convention (independent of scikit-rf naming): port
@@ -608,6 +673,316 @@ pub(crate) fn renormalize_s_power(
 ) -> Result<Array3<Complex64>, PowerWaveError> {
     let z = s_to_z_power(s, source_z0)?;
     z_to_s_power(&z, target_z0)
+}
+
+/// Renormalize frequency-major S-parameters directly between two explicit
+/// Kurokawa power-wave reference-impedance arrays.
+///
+/// For source references `G = diag(source_z0)` and target references
+/// `H = diag(target_z0)`, let `F` and `F_new` be the corresponding diagonal
+/// Kurokawa normalization matrices.  The wave definitions give
+///
+/// ```text
+/// K = F_new F⁻¹ (2 Re(G))⁻¹
+/// D = K (conj(G) + H)       E = K (G - H)
+/// C = K (conj(G) - conj(H)) J = K (G + conj(H))
+/// S_new (D + E S) = C + J S.
+/// ```
+///
+/// The diagonal factors multiply from the left, so each row of the two
+/// systems is assembled directly.  The right solve is performed by plain
+/// transposition into the shared multiple-right-hand-side solver; values are
+/// never conjugated while transposing.  This is intentionally a direct wave
+/// change: no Z/Y intermediate, explicit inverse, regularization, cutoff,
+/// identity shortcut, or fallback is used.
+pub(crate) fn renormalize_s_power_direct(
+    s: &Array3<Complex64>,
+    source_z0: &Array2<Complex64>,
+    target_z0: &Array2<Complex64>,
+) -> Result<Array3<Complex64>, DirectRenormalizationError> {
+    let (nfreq, nport_rows, nport_columns) = s.dim();
+    if nport_rows == 0 || nport_rows != nport_columns {
+        return Err(DirectRenormalizationError::InvalidSShape {
+            shape: (nfreq, nport_rows, nport_columns),
+        });
+    }
+
+    let nport = nport_rows;
+    let expected_z0_shape = (nfreq, nport);
+    if source_z0.dim() != expected_z0_shape {
+        return Err(DirectRenormalizationError::InvalidZ0Shape {
+            reference: DirectRenormalizationReference::Source,
+            shape: source_z0.dim(),
+        });
+    }
+    if target_z0.dim() != expected_z0_shape {
+        return Err(DirectRenormalizationError::InvalidZ0Shape {
+            reference: DirectRenormalizationReference::Target,
+            shape: target_z0.dim(),
+        });
+    }
+
+    // Validate both reference arrays before evaluating any wave-change
+    // coefficients.  This keeps equal-reference and ideal-open inputs on the
+    // ordinary validation path and gives deterministic source/target context.
+    for frequency in 0..nfreq {
+        for port in 0..nport {
+            let reference = source_z0[[frequency, port]];
+            validate_direct_reference(
+                reference,
+                DirectRenormalizationReference::Source,
+                frequency,
+                port,
+            )?;
+        }
+    }
+    for frequency in 0..nfreq {
+        for port in 0..nport {
+            let reference = target_z0[[frequency, port]];
+            validate_direct_reference(
+                reference,
+                DirectRenormalizationReference::Target,
+                frequency,
+                port,
+            )?;
+        }
+    }
+
+    let mut renormalized = Array3::from_elem((nfreq, nport, nport), ZERO);
+    for frequency in 0..nfreq {
+        let mut normalization_ratio = vec![ZERO; nport];
+
+        for port in 0..nport {
+            let source_reference = source_z0[[frequency, port]];
+            let target_reference = target_z0[[frequency, port]];
+            let source_f = direct_normalization(
+                source_reference,
+                DirectRenormalizationReference::Source,
+                frequency,
+                port,
+            )?;
+            let target_f = direct_normalization(
+                target_reference,
+                DirectRenormalizationReference::Target,
+                frequency,
+                port,
+            )?;
+            // K = F_new F^-1 (2 Re(G))^-1.  Divide by the source
+            // normalization and by source Re(G) separately so constructing
+            // 2*Re(G) cannot overflow before the direct arithmetic check.
+            let ratio = linalg::divide_complex(target_f, source_f);
+            if !is_finite(ratio) {
+                return Err(DirectRenormalizationError::NonFiniteComputation {
+                    frequency,
+                    row: port,
+                    column: port,
+                });
+            }
+            normalization_ratio[port] = ratio;
+        }
+
+        // The direct equation is a right system.  Store plain transposes so
+        // the existing left solver evaluates (D+ES)^T S_new^T=(C+JS)^T.
+        let mut system_transpose = vec![ZERO; nport * nport];
+        let mut rhs_transpose = vec![ZERO; nport * nport];
+        for row in 0..nport {
+            let source_reference = source_z0[[frequency, row]];
+            let target_reference = target_z0[[frequency, row]];
+            let ratio = normalization_ratio[row];
+            // Evaluate K times each coefficient in factored form.  This is
+            // algebraically identical to K = F_new F^-1 (2 Re(G))^-1, while
+            // allowing equal finite references whose scalar 1/(2 Re(G)) is
+            // outside f64 even though the resulting diagonal coefficient is
+            // finite.  The checked scalar divide still reports genuinely
+            // non-finite arithmetic.
+            let d = direct_wave_coefficient(
+                ratio,
+                source_reference.conj() + target_reference,
+                source_reference.re,
+                frequency,
+                row,
+            )?;
+            let e = direct_wave_coefficient(
+                ratio,
+                source_reference - target_reference,
+                source_reference.re,
+                frequency,
+                row,
+            )?;
+            let c = direct_wave_coefficient(
+                ratio,
+                source_reference.conj() - target_reference.conj(),
+                source_reference.re,
+                frequency,
+                row,
+            )?;
+            let j = direct_wave_coefficient(
+                ratio,
+                source_reference + target_reference.conj(),
+                source_reference.re,
+                frequency,
+                row,
+            )?;
+            if !is_finite(d) || !is_finite(e) || !is_finite(c) || !is_finite(j) {
+                return Err(DirectRenormalizationError::NonFiniteComputation {
+                    frequency,
+                    row,
+                    column: row,
+                });
+            }
+
+            for column in 0..nport {
+                let s_value = s[[frequency, row, column]];
+                if !is_finite(s_value) {
+                    return Err(DirectRenormalizationError::NonFiniteS {
+                        frequency,
+                        row,
+                        column,
+                    });
+                }
+
+                let identity = if row == column {
+                    Complex64::new(1.0, 0.0)
+                } else {
+                    ZERO
+                };
+                let system_value = d * identity + e * s_value;
+                let rhs_value = c * identity + j * s_value;
+                if !is_finite(system_value) || !is_finite(rhs_value) {
+                    return Err(DirectRenormalizationError::NonFiniteComputation {
+                        frequency,
+                        row,
+                        column,
+                    });
+                }
+
+                // (D+ES)^T[column,row] = (D+ES)[row,column].
+                let index = column * nport + row;
+                system_transpose[index] = system_value;
+                rhs_transpose[index] = rhs_value;
+            }
+        }
+
+        solve_multiple_rhs_direct(&mut system_transpose, &mut rhs_transpose, nport, frequency)?;
+
+        for row in 0..nport {
+            for column in 0..nport {
+                let value = rhs_transpose[row * nport + column];
+                if !is_finite(value) {
+                    return Err(DirectRenormalizationError::NonFiniteComputation {
+                        frequency,
+                        row,
+                        column,
+                    });
+                }
+                // The solved value is S_new^T[row,column] =
+                // S_new[column,row].
+                renormalized[[frequency, column, row]] = value;
+            }
+        }
+    }
+
+    Ok(renormalized)
+}
+
+fn direct_wave_coefficient(
+    normalization_ratio: Complex64,
+    value: Complex64,
+    source_real_reference: f64,
+    frequency: usize,
+    row: usize,
+) -> Result<Complex64, DirectRenormalizationError> {
+    // `linalg::divide_complex` deliberately requires finite operands.  The
+    // source/target reference sums and differences are formed before this
+    // helper, so finite references can still overflow here (for example
+    // f64::MAX + f64::MAX/2).  Guard all D/E/C/J paths before entering the
+    // finite-only scalar divide rather than allowing a debug assertion panic.
+    if !is_finite(value) {
+        return Err(DirectRenormalizationError::NonFiniteComputation {
+            frequency,
+            row,
+            column: row,
+        });
+    }
+    let denominator = Complex64::new(source_real_reference, 0.0);
+    let value_over_real_reference = linalg::divide_complex(value, denominator);
+    let coefficient = normalization_ratio * value_over_real_reference * 0.5;
+    if !is_finite(coefficient) {
+        return Err(DirectRenormalizationError::NonFiniteComputation {
+            frequency,
+            row,
+            column: row,
+        });
+    }
+    Ok(coefficient)
+}
+
+fn validate_direct_reference(
+    reference: Complex64,
+    side: DirectRenormalizationReference,
+    frequency: usize,
+    port: usize,
+) -> Result<(), DirectRenormalizationError> {
+    if !is_finite(reference) {
+        return Err(DirectRenormalizationError::NonFiniteZ0 {
+            reference: side,
+            frequency,
+            port,
+        });
+    }
+    if reference.re == 0.0 {
+        return Err(DirectRenormalizationError::ZeroRealReferenceImpedance {
+            reference: side,
+            frequency,
+            port,
+        });
+    }
+    Ok(())
+}
+
+fn direct_normalization(
+    reference: Complex64,
+    side: DirectRenormalizationReference,
+    frequency: usize,
+    port: usize,
+) -> Result<Complex64, DirectRenormalizationError> {
+    let scale = 2.0 * reference.re.abs().sqrt();
+    let value = Complex64::new(1.0 / scale, 0.0);
+    if !is_finite(value) {
+        return Err(DirectRenormalizationError::NonFiniteComputation {
+            frequency,
+            row: port,
+            column: port,
+        });
+    }
+    // Keep the side parameter part of the helper's contract: validation is
+    // intentionally repeated at this computational boundary so the helper is
+    // safe if its call sites are changed independently later.
+    validate_direct_reference(reference, side, frequency, port)?;
+    Ok(value)
+}
+
+fn solve_multiple_rhs_direct(
+    a: &mut [Complex64],
+    b: &mut [Complex64],
+    n: usize,
+    frequency: usize,
+) -> Result<(), DirectRenormalizationError> {
+    linalg::solve_multiple_rhs(a, b, n).map_err(|error| match error {
+        linalg::SolveError::Singular { pivot } => {
+            DirectRenormalizationError::Singular { frequency, pivot }
+        }
+        linalg::SolveError::NonFinite { row, column } => {
+            DirectRenormalizationError::NonFiniteComputation {
+                frequency,
+                row,
+                column,
+            }
+        }
+        linalg::SolveError::InvalidStorage { .. } => {
+            unreachable!("direct power-wave solver storage is square by construction")
+        }
+    })
 }
 
 /// Solve one power-wave system through the shared operation-independent
@@ -2301,6 +2676,73 @@ mod tests {
         // a strict mixed tolerance that allows only accumulated binary64
         // round-off from the two composed conversions.
         assert_array3_close(&round_trip_s, &source_s, 1e-13, 1e-13);
+    }
+
+    #[test]
+    fn direct_renormalization_matches_composed_common_domain_and_round_trips() {
+        let (source_s, source_z0, target_z0) = renormalization_test_case();
+
+        let direct = renormalize_s_power_direct(&source_s, &source_z0, &target_z0)
+            .expect("direct source-to-target renormalization must succeed");
+        let composed = renormalize_s_power(&source_s, &source_z0, &target_z0)
+            .expect("composed source-to-target renormalization must succeed");
+        assert_array3_close(&direct, &composed, 2.0e-12, 2.0e-12);
+
+        let round_trip = renormalize_s_power_direct(&direct, &target_z0, &source_z0)
+            .expect("direct target-to-source renormalization must succeed");
+        assert_array3_close(&round_trip, &source_s, 2.0e-12, 2.0e-12);
+    }
+
+    #[test]
+    fn direct_renormalization_accepts_open_and_complex_reference_short() {
+        let source_z0 = Array2::from_shape_vec(
+            (1, 2),
+            vec![Complex64::new(50.0, 2.0), Complex64::new(-60.0, 3.0)],
+        )
+        .expect("source z0 shape must be valid");
+        let target_z0 = Array2::from_shape_vec(
+            (1, 2),
+            vec![Complex64::new(75.0, -4.0), Complex64::new(90.0, 6.0)],
+        )
+        .expect("target z0 shape must be valid");
+        let open = Array3::from_shape_fn((1, 2, 2), |(_, row, column)| {
+            if row == column {
+                Complex64::new(1.0, 0.0)
+            } else {
+                ZERO
+            }
+        });
+        let transformed = renormalize_s_power_direct(&open, &source_z0, &target_z0)
+            .expect("ideal open direct renormalization must succeed");
+        assert_array3_close(&transformed, &open, 1.0e-13, 1.0e-13);
+
+        let source = Complex64::new(50.0, 10.0);
+        let target = Complex64::new(-75.0, 12.0);
+        let short = Array3::from_elem((1, 1, 1), -source.conj() / source);
+        let short_target = Array2::from_elem((1, 1), target);
+        let short_source = Array2::from_elem((1, 1), source);
+        let transformed = renormalize_s_power_direct(&short, &short_source, &short_target)
+            .expect("complex-reference ideal short direct renormalization must succeed");
+        assert!((transformed[[0, 0, 0]] + target.conj() / target).norm() < 1.0e-13);
+    }
+
+    #[test]
+    fn direct_renormalization_rejects_exact_system_singularity_without_a_cutoff() {
+        let source_z0 = Array2::from_elem((1, 1), Complex64::new(50.0, 0.0));
+        let target_z0 = Array2::from_elem((1, 1), Complex64::new(25.0, 0.0));
+        let exact = Array3::from_elem((1, 1, 1), Complex64::new(-3.0, 0.0));
+        assert_eq!(
+            renormalize_s_power_direct(&exact, &source_z0, &target_z0).unwrap_err(),
+            DirectRenormalizationError::Singular {
+                frequency: 0,
+                pivot: 0,
+            }
+        );
+
+        let near = Array3::from_elem((1, 1, 1), Complex64::new(-3.0 + 2.0_f64.powi(-20), 0.0));
+        let transformed = renormalize_s_power_direct(&near, &source_z0, &target_z0)
+            .expect("finite near-singular direct system must remain in-domain");
+        assert!(transformed.iter().all(|value| is_finite(*value)));
     }
 
     #[test]

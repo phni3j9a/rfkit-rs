@@ -29,6 +29,13 @@
 //! where the existing kernels provide that context.  Inputs are borrowed
 //! during computation and are not mutated; the returned arrays are newly
 //! owned.
+//!
+//! [`Network::renormalize_direct_power`] is the additive direct Kurokawa
+//! wave-change path between explicit source and target references.  It solves
+//! the direct right system without an intermediate Z/Y matrix, so singular
+//! ideal-open and floating-network domains can be exported after changing to
+//! a writer-compatible common reference.  [`Network::renormalize_power`]
+//! remains the composed S→Z→S operation with its existing domain and errors.
 
 use ndarray::{Array2, Array3};
 use num_complex::Complex64;
@@ -150,6 +157,66 @@ pub enum Error {
     )]
     NonFiniteComputation {
         stage: ConversionStage,
+        frequency: usize,
+        row: usize,
+        column: usize,
+    },
+
+    #[error("direct power-wave renormalization frequency axis must not be empty")]
+    EmptyDirectRenormalizationFrequency,
+
+    #[error(
+        "direct power-wave renormalization frequency length does not match the S-parameter frequency dimension: expected {expected}, got {actual}"
+    )]
+    DirectRenormalizationFrequencyLengthMismatch { expected: usize, actual: usize },
+
+    #[error("direct power-wave renormalization received an invalid S-parameter shape {shape:?}")]
+    InvalidDirectRenormalizationSShape { shape: Vec<usize> },
+
+    #[error(
+        "direct power-wave renormalization received an invalid {reference} reference-impedance shape {shape:?}"
+    )]
+    InvalidDirectRenormalizationZ0Shape {
+        reference: DirectRenormalizationReference,
+        shape: Vec<usize>,
+    },
+
+    #[error(
+        "direct power-wave renormalization received a non-finite S-parameter at frequency {frequency}, row {row}, column {column}"
+    )]
+    NonFiniteDirectRenormalizationS {
+        frequency: usize,
+        row: usize,
+        column: usize,
+    },
+
+    #[error(
+        "direct power-wave renormalization received a non-finite {reference} reference impedance at frequency {frequency}, port {port}"
+    )]
+    NonFiniteDirectRenormalizationZ0 {
+        reference: DirectRenormalizationReference,
+        frequency: usize,
+        port: usize,
+    },
+
+    #[error(
+        "direct power-wave renormalization received a zero-real {reference} reference impedance at frequency {frequency}, port {port}"
+    )]
+    ZeroRealDirectRenormalizationReferenceImpedance {
+        reference: DirectRenormalizationReference,
+        frequency: usize,
+        port: usize,
+    },
+
+    #[error(
+        "direct power-wave renormalization system is exactly singular at frequency {frequency}, pivot {pivot}"
+    )]
+    SingularDirectRenormalization { frequency: usize, pivot: usize },
+
+    #[error(
+        "direct power-wave renormalization produced a non-finite computation at frequency {frequency}, row {row}, column {column}"
+    )]
+    NonFiniteDirectRenormalizationComputation {
         frequency: usize,
         row: usize,
         column: usize,
@@ -559,6 +626,26 @@ impl fmt::Display for ParameterKind {
             Self::Z => "Z-parameter",
             Self::Y => "Y-parameter",
             Self::Z0 => "reference-impedance",
+        })
+    }
+}
+
+/// Identifies which reference-impedance array supplied a value to direct
+/// power-wave renormalization.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DirectRenormalizationReference {
+    /// The network's stored source reference array.
+    Source,
+    /// The caller-supplied target reference array.
+    Target,
+}
+
+impl fmt::Display for DirectRenormalizationReference {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Source => "source",
+            Self::Target => "target",
         })
     }
 }
@@ -1066,6 +1153,66 @@ impl Network {
         // The target shape has already been checked by z_to_s_power.  Given
         // the source Network invariants, constructing the owned result cannot
         // fail; retain the public constructor as the single invariant gate.
+        Network::new(self.frequency.clone(), s, new_z0)
+    }
+
+    /// Re-express this network at explicit reference impedances by changing
+    /// Kurokawa power waves directly.
+    ///
+    /// Unlike [`Network::renormalize_power`], this operation does not form an
+    /// intermediate Z or Y matrix.  With source references `G`, target
+    /// references `H`, and their Kurokawa normalization matrices `F` and
+    /// `F_new`, it forms the diagonal wave-change factors
+    /// `K = F_new F⁻¹ (2 Re(G))⁻¹` and solves
+    ///
+    /// ```text
+    /// S_new (D + E S) = C + J S
+    /// D = K (conj(G) + H)       E = K (G - H)
+    /// C = K (conj(G) - conj(H)) J = K (G + conj(H)).
+    /// ```
+    ///
+    /// The right system is solved with the existing exact-pivot
+    /// multiple-right-hand-side solver after a plain transpose.  Complex,
+    /// per-port, frequency-dependent, and negative-real source/target
+    /// references are supported whenever both real parts are finite and
+    /// nonzero.  A singular `I-S` or `I+S` by itself is not a failure; only an
+    /// exactly singular direct wave-change system or non-finite arithmetic is
+    /// rejected.  No Z/Y intermediate, explicit inverse, pseudoinverse,
+    /// cutoff, regularization, identity shortcut, or fallback is used.
+    ///
+    /// The returned network is newly owned.  It preserves the source
+    /// frequency and port order exactly and stores an exact owned copy of
+    /// `new_z0`; the source network is not modified.  Frequency samples are
+    /// pointwise labels and only need to have a nonempty axis matching the S
+    /// first dimension.  They need not be finite, sorted, unique, or ordered.
+    ///
+    /// This is an additive, provisional 0.x API.  It intentionally coexists
+    /// with [`Network::renormalize_power`], whose composed S→Z→S validation
+    /// and singular-stage errors remain unchanged.
+    ///
+    /// # Errors
+    ///
+    /// Returns a direct-renormalization-specific [`enum@Error`] for malformed
+    /// serde-created shapes, empty or mismatched axes, non-finite S or
+    /// references, zero-real references, exact direct-system singularities,
+    /// and non-finite arithmetic.  Errors identify source versus target
+    /// references where applicable and never report a fictitious S→Z or Z→S
+    /// stage.
+    pub fn renormalize_direct_power(&self, new_z0: Array2<Complex64>) -> Result<Network> {
+        if self.frequency.is_empty() {
+            return Err(Error::EmptyDirectRenormalizationFrequency);
+        }
+        let parameter_frequency_length = self.s.dim().0;
+        if parameter_frequency_length != self.frequency.len() {
+            return Err(Error::DirectRenormalizationFrequencyLengthMismatch {
+                expected: self.frequency.len(),
+                actual: parameter_frequency_length,
+            });
+        }
+
+        let s = power_waves::renormalize_s_power_direct(&self.s, &self.z0, &new_z0)
+            .map_err(map_direct_renormalization_error)?;
+
         Network::new(self.frequency.clone(), s, new_z0)
     }
 
@@ -1860,6 +2007,74 @@ fn map_power_wave_error(stage: ConversionStage, error: power_waves::PowerWaveErr
             row,
             column,
         },
+    }
+}
+
+fn map_direct_renormalization_error(error: power_waves::DirectRenormalizationError) -> Error {
+    match error {
+        power_waves::DirectRenormalizationError::InvalidSShape { shape } => {
+            Error::InvalidDirectRenormalizationSShape {
+                shape: vec![shape.0, shape.1, shape.2],
+            }
+        }
+        power_waves::DirectRenormalizationError::InvalidZ0Shape { reference, shape } => {
+            Error::InvalidDirectRenormalizationZ0Shape {
+                reference: map_direct_renormalization_reference(reference),
+                shape: vec![shape.0, shape.1],
+            }
+        }
+        power_waves::DirectRenormalizationError::NonFiniteS {
+            frequency,
+            row,
+            column,
+        } => Error::NonFiniteDirectRenormalizationS {
+            frequency,
+            row,
+            column,
+        },
+        power_waves::DirectRenormalizationError::NonFiniteZ0 {
+            reference,
+            frequency,
+            port,
+        } => Error::NonFiniteDirectRenormalizationZ0 {
+            reference: map_direct_renormalization_reference(reference),
+            frequency,
+            port,
+        },
+        power_waves::DirectRenormalizationError::ZeroRealReferenceImpedance {
+            reference,
+            frequency,
+            port,
+        } => Error::ZeroRealDirectRenormalizationReferenceImpedance {
+            reference: map_direct_renormalization_reference(reference),
+            frequency,
+            port,
+        },
+        power_waves::DirectRenormalizationError::Singular { frequency, pivot } => {
+            Error::SingularDirectRenormalization { frequency, pivot }
+        }
+        power_waves::DirectRenormalizationError::NonFiniteComputation {
+            frequency,
+            row,
+            column,
+        } => Error::NonFiniteDirectRenormalizationComputation {
+            frequency,
+            row,
+            column,
+        },
+    }
+}
+
+fn map_direct_renormalization_reference(
+    reference: power_waves::DirectRenormalizationReference,
+) -> DirectRenormalizationReference {
+    match reference {
+        power_waves::DirectRenormalizationReference::Source => {
+            DirectRenormalizationReference::Source
+        }
+        power_waves::DirectRenormalizationReference::Target => {
+            DirectRenormalizationReference::Target
+        }
     }
 }
 

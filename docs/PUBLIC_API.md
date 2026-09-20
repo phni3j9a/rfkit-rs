@@ -168,6 +168,70 @@ the additive method/kernel, its tests and documentation, with no storage or
 data migration. No wave-definition field, generic parameter hierarchy, or
 broader API redesign is implied.
 
+## Direct power-wave renormalization (Issue #80 Yellow decision)
+
+Issue #80 adds one additive, explicitly named method:
+
+```rust
+impl Network {
+    pub fn renormalize_direct_power(
+        &self,
+        new_z0: Array2<Complex64>,
+    ) -> Result<Network>;
+}
+```
+
+The method directly changes the Kurokawa power-wave reference from the
+network's stored source `G=diag(z_old)` to the caller-supplied target
+`H=diag(z_new)`. It returns an owned frequency-major `Network`, preserving
+the source frequency and port order exactly and retaining an exact owned copy
+of `new_z0`. Neither the source network nor the target array is mutated.
+References may be finite complex, per-port, frequency-dependent, or have
+negative real parts under the existing `abs(Re(z0))` normalization. Zero-real
+and non-finite references are rejected.
+
+With `F` and `F_new` the source and target diagonal normalization matrices,
+the direct equations are:
+
+```text
+K = F_new F^-1 (2 Re(G))^-1
+D = K (conj(G) + H)       E = K (G - H)
+C = K (conj(G) - conj(H)) J = K (G + conj(H))
+S_new (D + E S) = C + J S
+```
+
+The implementation solves the right system by plain-transposing it into the
+existing multiple-right-hand-side solver. `2 Re(G)` retains its signed real
+value for mixed-sign references; only the wave normalization uses
+`abs(Re(z0))`. Exact singular pivots and non-finite arithmetic are reported,
+while finite near-singular systems remain in-domain. A singular `I-S` or
+`I+S` alone is not a failure. There is no Z/Y intermediate, dense explicit
+inverse, pseudoinverse, regularization, rank cutoff, identity shortcut,
+fallback, grid selection, broadcasting, or implicit target reference.
+
+Malformed serde-created Networks are validated without panicking: the
+frequency axis must be nonempty and match the S first axis, S must be square
+with a positive port count, and both source and target references must have
+shape `(nfreq,nport)`. Frequency values remain pointwise labels and need not
+be finite, sorted, unique, or ordered. Direct failures use
+operation-specific structured errors, with source/target attribution for
+reference failures and frequency/port/row/column/pivot context where
+available; they never report a fictitious S→Z or Z→S stage.
+
+This method intentionally coexists with `renormalize_power`. The latter
+remains the existing composed S→Z→S operation, including equal-reference
+validation and its source/target conversion-stage errors. The direct method
+is the selected additive behavior because it removes the singular Z/Y barrier
+for explicit workflows such as direct singular-Y ingress, direct wave-change
+to one common positive-real reference, Touchstone writer/read, and direct Y
+extraction. Replacing the existing method, silently falling back after a
+composed failure, routing through direct Y and Y→S, or requiring callers to
+reconstruct the wave change were rejected. The compatibility impact is
+additive/provisional during 0.x; rollback removes the method/kernel,
+diagnostics, tests, and documentation with no storage or data migration.
+No broader wave convention, dependency, crate, default-reference, or API
+architecture change is implied.
+
 ## Implemented public baseline
 
 The implemented shape is:
@@ -179,6 +243,11 @@ impl Network {
     pub fn to_y_direct_power(&self) -> Result<Array3<Complex64>>;
 
     pub fn renormalize_power(
+        &self,
+        new_z0: Array2<Complex64>,
+    ) -> Result<Network>;
+
+    pub fn renormalize_direct_power(
         &self,
         new_z0: Array2<Complex64>,
     ) -> Result<Network>;
@@ -215,6 +284,7 @@ The exact internal delegation remains an implementation detail. The semantic dis
 
 - `to_z_power`, `to_y_power`, and `to_y_direct_power` explicitly select the verified power-wave conversion convention; the latter names the direct S→Y equation while `to_y_power` retains composed S→Z→Y semantics;
 - `renormalize_power` explicitly selects power-wave renormalization;
+- `renormalize_direct_power` explicitly selects the direct Kurokawa wave-change equation, while `renormalize_power` retains its composed S→Z→S domain and diagnostics;
 - `interpolate_cartesian_linear` does not establish a vague interpolation default that would later need reinterpretation;
 - `connect_matched_power` requires the existing exactly matched real-positive junction contract and exact compatible frequency grids;
 - `connect_matched_power_on_grid` requires an explicit caller-provided grid and performs interpolation-before-connection under the existing verified composition semantics;

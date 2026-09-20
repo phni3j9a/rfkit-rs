@@ -68,6 +68,29 @@ the reread, while the same network must still return a structured
 well-conditioned common domain; this does not broaden renormalization or any
 other conversion domain.
 
+Issue #80 adds the additive `Network::renormalize_direct_power` path. Its
+deterministic tests cover ideal open and complex-reference ideal short cases,
+floating series Y at unequal complex source references, asymmetric
+multi-frequency N-port data, non-50-ohm and negative-real references, exact
+and finite near-singular direct systems, A→B→A and A→B→C versus A→C
+round-trips, input immutability, frequency/port/reference preservation, and
+an independent V/I wave-relation check. Existing pinned renormalization
+fixtures are reused on their shared non-singular domain, including the
+larger N-port and complex per-port/frequency-dependent cases; the direct and
+composed paths are compared without changing fixture tolerances. Boundary
+tests cover malformed serde axes/shapes, zero ports, invalid old/new
+references, non-finite S, finite-input overflow, equal-reference ideal-open
+validation, and exact direct-system singularity. The public direct error
+vocabulary identifies the operation and source versus target reference where
+applicable, without pretending that a direct failure occurred in S→Z or Z→S.
+
+The executable and external-crate Touchstone workflow now constructs the
+floating singular-Y model with unequal complex references, directly
+renormalizes it to a common positive-real reference, writes and rereads
+Touchstone, and extracts the analytical physical Y through the direct path.
+The existing composed renormalization and conversion paths remain separately
+regression-tested with their documented singular-stage behavior.
+
 The pinned direct S→Y differential case is independently specified as a
 non-reciprocal three-port with singular `I-S` and nonsingular direct `A`, plus
 complex per-port/frequency-dependent references. Its expected Y is generated

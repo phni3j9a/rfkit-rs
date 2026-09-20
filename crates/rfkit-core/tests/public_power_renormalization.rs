@@ -175,6 +175,19 @@ fn public_path_matches_all_existing_renormalization_fixtures() {
             fixture.metadata.tolerance_policy.atol,
         );
 
+        let direct = source
+            .renormalize_direct_power(target_z0.clone())
+            .unwrap_or_else(|error| panic!("{case_id} direct path failed: {error}"));
+        assert_eq!(direct.frequency(), &source_frequency, "{case_id}");
+        assert_eq!(direct.z0(), &target_z0, "{case_id}");
+        assert_array3_close(
+            direct.s(),
+            &expected_s,
+            fixture.metadata.tolerance_policy.rtol,
+            fixture.metadata.tolerance_policy.atol,
+        );
+        assert_array3_close(direct.s(), target.s(), 2.0e-11, 2.0e-11);
+
         // The public result must retain the same physical Z network.  The
         // conversion stages introduce only binary64 round-off, so use a
         // tighter mixed bound than the fixture output comparison.
