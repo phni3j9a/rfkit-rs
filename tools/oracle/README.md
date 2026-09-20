@@ -25,6 +25,17 @@ frequency-dependent reference profile. Its output is generated through the
 public `skrf.network.y2s(..., s_def="power")` call and compared with strict
 `rtol=1e-12`, `atol=1e-12`; the composed Y→Z→S path is intentionally not used
 to generate this fixture.
+The direct S→Y constructor also has one exact-singular-domain case:
+`I-S` is an independently constructed upper-triangular rank-two system with
+determinant exactly zero at all three frequencies, while the direct
+`A=(S G+conj(G))F` system is finite and nonsingular. The input is a
+non-reciprocal three-port S stack with a complex, per-port,
+frequency-dependent reference profile. Expected Y comes only from the public
+`skrf.network.s2y(..., s_def="power")` call; scikit-rf's internal
+eigenvalue-nudge behavior is not a Rust acceptance policy. The fixture records
+the seed `20260946`, exact singular rank/diagonal/determinant evidence, pinned
+versions, units, and strict `rtol=1e-12`, `atol_s=1e-12`; only `data.y_s` is
+numeric-tolerance output.
 One matched-junction connection case is also registered: independent
 three-port A and four-port B inputs use explicit `s_def="power"`, a
 frequency-dependent real-positive junction impedance that is exactly equal on
@@ -95,7 +106,7 @@ checker.
 
 ## Generate and verify
 
-The harness has thirty-five registered canonical cases. The original three cases
+The harness has thirty-six registered canonical cases. The original three cases
 remain unchanged:
 
 - `three_port_complex_z0` — the representative four-frequency, three-port
@@ -315,11 +326,23 @@ The rank-deficient direct Y→S case is serialized as
 versions. Its `y_s`, frequency, and z0 fields are exact contract inputs; only
 the computed `s` field is numeric-tolerance output.
 
+The exact-singular direct S→Y case is serialized as
+`power_wave_s_to_y_three_port_singular_i_minus_s_complex_z0.json` with seed
+`20260946`. Its metadata records `operation="s_to_y_direct"`, the equation
+`A=(S G+conj(G))F, B=(I-S)F, solve A Y=B`, and an `exact_singularity` contract
+with `system_matrix="I-S"`, upper-triangular structure, rank `[2, 2, 2]`,
+diagonal factors `[0.0, 0.625, 0.75]`, and determinant `0.0`. The builder
+passes the independently reconstructed S and z0 arrays exactly once to public
+`skrf.network.s2y(..., s_def="power")`; no Y input or opposite-direction
+output is used. The direct A system is checked finite and nonsingular during
+generation, and only computed `y_s` is tolerance-compared.
+
 | Direction | Ports | Reference-impedance profile | Seed | Input/output units | Case id |
 | --- | ---: | --- | ---: | --- | --- |
 | S→Y | 3 | complex, per-port, frequency-dependent | `20260937` | dimensionless → S | `power_wave_s_to_y_three_port_complex_z0` |
 | Y→S | 3 | complex, per-port, frequency-dependent | `20260938` | S → dimensionless | `power_wave_y_to_s_three_port_complex_z0` |
 | direct Y→S | 3 | complex, per-port, frequency-dependent | `20260945` | S → dimensionless | `power_wave_y_to_s_three_port_rank_deficient_complex_z0` |
+| direct S→Y | 3 | complex, per-port, frequency-dependent | `20260946` | dimensionless → S | `power_wave_s_to_y_three_port_singular_i_minus_s_complex_z0` |
 
 The matched-junction case uses a three-port A network and a four-port B network
 at three exactly shared frequencies. A port 1 is connected to B port 2 through
@@ -551,8 +574,8 @@ The JSON representation is deliberately machine-readable and byte-stable:
   `determinant`, and `determinant_factors_nonzero`; the interpolation case
   additionally records its explicit `basis`, `coords`, `kind`, source/target
   frequency shapes, and the actually used `scipy_version`;
-- direct impedance/admittance, power-wave S/Y, and direct rank-deficient Y→S
-  cases record `input_unit` and
+- direct impedance/admittance, power-wave S/Y, direct rank-deficient Y→S, and
+  exact-singular direct S→Y cases record `input_unit` and
   `output_unit`,
   use `y_s` for Z→Y outputs and `z_ohm` for Y→Z outputs, and use exactly one
   of `tolerance_policy.atol_s`, `tolerance_policy.atol_ohm`, or

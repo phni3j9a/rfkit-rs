@@ -21,10 +21,14 @@
 //! singular or zero Y is rejected while forming the intermediate impedance.
 //! `from_y_direct_power` instead solves the explicit Y→S wave equations and
 //! accepts singular or zero Y whenever its conversion system is nonsingular.
-//! These constructors return structured crate-level errors that retain Z/Y
-//! input kind, conversion stage, and matrix location where the existing
-//! kernels provide that context.  Inputs are borrowed during computation and
-//! are not mutated; the returned arrays are newly owned.
+//! `to_y_power` likewise remains the composed S→Z→Y operation, while
+//! [`Network::to_y_direct_power`] exposes the direct S→Y equation for networks
+//! whose `I-S` system is singular but whose direct system is nonsingular.
+//! These constructors and conversion methods return structured crate-level
+//! errors that retain Z/Y input kind, conversion stage, and matrix location
+//! where the existing kernels provide that context.  Inputs are borrowed
+//! during computation and are not mutated; the returned arrays are newly
+//! owned.
 
 use ndarray::{Array2, Array3};
 use num_complex::Complex64;
@@ -46,6 +50,18 @@ mod power_waves;
 pub enum Error {
     #[error("frequency axis must not be empty")]
     EmptyFrequency,
+
+    #[error("{stage} conversion frequency axis must not be empty")]
+    EmptyConversionFrequency { stage: ConversionStage },
+
+    #[error(
+        "{stage} conversion frequency length does not match the S-parameter frequency dimension: expected {expected}, got {actual}"
+    )]
+    ConversionFrequencyLengthMismatch {
+        stage: ConversionStage,
+        expected: usize,
+        actual: usize,
+    },
 
     #[error("{parameter} constructor frequency axis must not be empty")]
     EmptyParameterFrequency { parameter: ParameterKind },
@@ -484,17 +500,21 @@ impl fmt::Display for InterpolationQuantity {
 
 /// High-level conversion stage associated with a public conversion error.
 ///
-/// `to_y_power` is intentionally a composed `S→Z→Y` operation, and
-/// [`Network::from_y_via_z_power`] is intentionally a composed `Y→Z→S`
+/// `to_y_power` is intentionally a composed `S→Z→Y` operation, while
+/// [`Network::to_y_direct_power`] uses the separate direct `S→Y` stage.  Both
+/// methods preserve their distinct conversion domains.  The parameter-ingress
+/// method [`Network::from_y_via_z_power`] is intentionally a composed `Y→Z→S`
 /// operation. [`Network::from_y_direct_power`] uses the separate direct
 /// `Y→S` stage. Preserving these stages lets callers distinguish a singular or
 /// invalid intermediate impedance conversion from a failure while inverting
-/// that impedance or converting it back to S.
+/// that impedance or evaluating a direct wave equation.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConversionStage {
     /// Conversion from scattering parameters to impedance parameters.
     SToZ,
+    /// Direct conversion from scattering parameters to admittance parameters.
+    SToY,
     /// Conversion from admittance parameters to impedance parameters.
     YToZ,
     /// Conversion from impedance parameters to admittance parameters.
@@ -509,6 +529,7 @@ impl fmt::Display for ConversionStage {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             Self::SToZ => "S→Z",
+            Self::SToY => "S→Y",
             Self::YToZ => "Y→Z",
             Self::ZToY => "Z→Y",
             Self::ZToS => "Z→S",
@@ -916,6 +937,62 @@ impl Network {
     pub fn to_y_power(&self) -> Result<Array3<Complex64>> {
         power_wave_admittance::s_to_y_power(&self.s, &self.z0)
             .map_err(map_power_wave_admittance_error)
+    }
+
+    /// Converts this network's S-parameters to admittance parameters by
+    /// solving the direct Kurokawa power-wave `S→Y` equation.
+    ///
+    /// The returned owned array is frequency-major with shape
+    /// `(nfreq, nport, nport)`: `[[frequency, port_out, port_in]]`.  Values are
+    /// expressed in siemens and retain the input frequency and port ordering.
+    /// The network and its input arrays are not modified.  The conversion uses
+    /// each stored reference impedance directly, including complex,
+    /// per-port, and frequency-dependent values, with the existing
+    /// `abs(Re(z0))` normalization.  It does not assume 50 ohms or
+    /// renormalize the network.
+    ///
+    /// For every frequency the direct path forms
+    /// `A = (S G + conj(G)) F` and `B = (I - S) F`, then solves `A Y = B`,
+    /// where `G = diag(z0)` and
+    /// `F = diag(1/(2*sqrt(abs(Re(z0)))))`.  Unlike
+    /// [`Network::to_y_power`], this method does not form the intermediate Z
+    /// matrix.  An exact singularity in `I-S` is therefore not by itself an
+    /// error: an ideal open produces zero Y when the direct A system is
+    /// nonsingular.  Conversely, an exact singularity in A is reported.
+    ///
+    /// The solve uses exact-zero pivot detection only.  No explicit inverse,
+    /// pseudoinverse, rank cutoff, regularization, nudge, clipping, or
+    /// fallback is used.  A finite near-singular direct system remains in the
+    /// domain unless its arithmetic becomes non-finite.  This method is
+    /// provisional while `rfkit-core` is in the `0.x` series; its name and
+    /// signature are not a `1.0` stability promise.
+    ///
+    /// # Errors
+    ///
+    /// Returns a structured [`enum@Error`] preserving the direct `S→Y` stage and
+    /// the frequency-axis, shape, reference, input, pivot, and computation
+    /// context available from validation and the numerical kernel.  A
+    /// serde-created empty or frequency-length-mismatched network is rejected
+    /// before kernel execution.  This method's direct domain does not broaden
+    /// the existing composed `to_y_power`, `to_z_power`, or renormalization
+    /// domains.
+    pub fn to_y_direct_power(&self) -> Result<Array3<Complex64>> {
+        const STAGE: ConversionStage = ConversionStage::SToY;
+
+        if self.frequency.is_empty() {
+            return Err(Error::EmptyConversionFrequency { stage: STAGE });
+        }
+        let parameter_frequency_length = self.s.dim().0;
+        if parameter_frequency_length != self.frequency.len() {
+            return Err(Error::ConversionFrequencyLengthMismatch {
+                stage: STAGE,
+                expected: self.frequency.len(),
+                actual: parameter_frequency_length,
+            });
+        }
+
+        power_waves::s_to_y_power_direct(&self.s, &self.z0)
+            .map_err(|error| map_power_wave_error(STAGE, error))
     }
 
     /// Re-expresses this network at explicit reference impedances using

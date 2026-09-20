@@ -338,6 +338,131 @@ pub(crate) fn z_to_s_power(
     Ok(s)
 }
 
+/// Convert frequency-major power-wave S-parameters directly to Y-parameters.
+///
+/// With currents directed into the network, the Kurokawa definitions give
+/// `a = F (V + G I)` and `b = F (V - conj(G) I)`, where `I = Y V`,
+/// `G = diag(z0)`, and `F = diag(1 / (2 * sqrt(abs(Re(z0)))))`.  Substituting
+/// `b = S a` and collecting the voltage terms produces the left system
+///
+/// ```text
+/// A Y = B
+/// A = (S G + conj(G)) F
+/// B = (I - S) F
+/// ```
+///
+/// The solve is intentionally direct.  In particular, it does not first form
+/// `Z`, so a singular `I - S` system can still produce a finite admittance.
+/// The existing exact-pivot multiple-right-hand-side solver is used without a
+/// pseudoinverse, rank cutoff, regularization, nudge, or fallback.
+pub(crate) fn s_to_y_power_direct(
+    s: &Array3<Complex64>,
+    z0: &Array2<Complex64>,
+) -> Result<Array3<Complex64>, PowerWaveError> {
+    let (nfreq, nport_rows, nport_columns) = s.dim();
+    if nport_rows == 0 || nport_rows != nport_columns {
+        return Err(PowerWaveError::InvalidSShape {
+            shape: (nfreq, nport_rows, nport_columns),
+        });
+    }
+    let (z0_nfreq, z0_nport) = z0.dim();
+    if (z0_nfreq, z0_nport) != (nfreq, nport_rows) {
+        return Err(PowerWaveError::InvalidZ0Shape {
+            shape: (z0_nfreq, z0_nport),
+        });
+    }
+
+    let nport = nport_rows;
+    let mut y = Array3::from_elem((nfreq, nport, nport), ZERO);
+
+    for frequency in 0..nfreq {
+        let mut normalization = vec![ZERO; nport];
+        for port in 0..nport {
+            let impedance = z0[[frequency, port]];
+            if !is_finite(impedance) {
+                return Err(PowerWaveError::NonFiniteZ0 { frequency, port });
+            }
+            if impedance.re == 0.0 {
+                return Err(PowerWaveError::ZeroRealReferenceImpedance { frequency, port });
+            }
+
+            let scale = 2.0 * impedance.re.abs().sqrt();
+            let f = Complex64::new(1.0 / scale, 0.0);
+            if !is_finite(f) {
+                return Err(PowerWaveError::NonFiniteComputation {
+                    frequency,
+                    row: port,
+                    column: port,
+                });
+            }
+            normalization[port] = f;
+        }
+
+        // A and B are row-major matrices.  Both expressions end in a right
+        // multiplication by the diagonal F, so each column is scaled by the
+        // corresponding reference-impedance normalization factor.  Unlike
+        // the Y-to-S path below, this is already A Y = B and needs no plain
+        // transpose before invoking the left solver.
+        let mut a = vec![ZERO; nport * nport];
+        let mut b = vec![ZERO; nport * nport];
+        for row in 0..nport {
+            for column in 0..nport {
+                let s_value = s[[frequency, row, column]];
+                if !is_finite(s_value) {
+                    return Err(PowerWaveError::NonFiniteS {
+                        frequency,
+                        row,
+                        column,
+                    });
+                }
+
+                let identity = if row == column {
+                    Complex64::new(1.0, 0.0)
+                } else {
+                    ZERO
+                };
+                let impedance_column = z0[[frequency, column]];
+                let mut a_value = s_value * impedance_column;
+                if row == column {
+                    a_value += z0[[frequency, row]].conj();
+                }
+                a_value *= normalization[column];
+                let b_value = (identity - s_value) * normalization[column];
+
+                if !is_finite(a_value) || !is_finite(b_value) {
+                    return Err(PowerWaveError::NonFiniteComputation {
+                        frequency,
+                        row,
+                        column,
+                    });
+                }
+
+                let index = row * nport + column;
+                a[index] = a_value;
+                b[index] = b_value;
+            }
+        }
+
+        solve_multiple_rhs(&mut a, &mut b, nport, frequency)?;
+
+        for row in 0..nport {
+            for column in 0..nport {
+                let value = b[row * nport + column];
+                if !is_finite(value) {
+                    return Err(PowerWaveError::NonFiniteComputation {
+                        frequency,
+                        row,
+                        column,
+                    });
+                }
+                y[[frequency, row, column]] = value;
+            }
+        }
+    }
+
+    Ok(y)
+}
+
 /// Convert frequency-major admittance matrices directly to S-parameters using
 /// Kurokawa power waves.
 ///

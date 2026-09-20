@@ -64,7 +64,11 @@ The direct constructor's ingress domain does not broaden existing downstream
 conversions. A network made from singular Y may not succeed through
 `to_z_power`, `to_y_power`, renormalization, or another operation that needs
 an invertible intermediate matrix; those restrictions remain explicit and
-unchanged on the composed constructor.
+unchanged on the composed constructor. When a network's S representation has
+singular `I-S` but the direct S→Y system is nonsingular, use the explicitly
+named `to_y_direct_power` extraction path. `to_y_power` remains the composed
+S→Z→Y path and retains its structured singular-stage error; it does not hide a
+direct-conversion fallback.
 
 ```rust
 use ndarray::{Array2, Array3};
@@ -149,6 +153,62 @@ fn main() -> rfkit_touchstone::Result<()> {
     assert_eq!(reread.z0()[[0, 0]], Complex64::new(100.0, 0.0));
     // z=75*(1+0.2)/(1-0.2)=112.5 ohm, so S at 100 ohm is 1/17.
     assert!((reread.s()[[0, 0, 0]].re - 1.0 / 17.0).abs() < 1.0e-12);
+    Ok(())
+}
+```
+
+The direct and composed S→Y methods intentionally coexist. This makes a
+singular-I-S but finite-Y case observable after a Touchstone round trip without
+changing the domain or error behavior of existing conversions:
+
+```rust
+use ndarray::{Array2, Array3};
+use num_complex::Complex64;
+use rfkit_core::{ConversionStage, Error, Frequency, Network};
+use rfkit_touchstone::{parse_touchstone_v1_0_s, write_touchstone_v1_0_s_ri_hz};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let frequency = Frequency::from_hz(vec![1.0e9, 2.0e9])?;
+    let y = Array3::from_shape_vec(
+        (2, 2, 2),
+        vec![
+            Complex64::new(0.01, 0.0),
+            Complex64::new(-0.01, 0.0),
+            Complex64::new(-0.01, 0.0),
+            Complex64::new(0.01, 0.0),
+            Complex64::new(0.01, 0.0),
+            Complex64::new(-0.01, 0.0),
+            Complex64::new(-0.01, 0.0),
+            Complex64::new(0.01, 0.0),
+        ],
+    )?;
+    let z0 = Array2::from_elem((2, 2), Complex64::new(50.0, 0.0));
+    let source = Network::from_y_direct_power(frequency, y, z0)?;
+    let text = write_touchstone_v1_0_s_ri_hz(&source)?;
+    let reread = parse_touchstone_v1_0_s(&text, 2)?;
+
+    let extracted_y = reread.to_y_direct_power()?;
+    for (actual, expected) in extracted_y.iter().zip([
+        Complex64::new(0.01, 0.0),
+        Complex64::new(-0.01, 0.0),
+        Complex64::new(-0.01, 0.0),
+        Complex64::new(0.01, 0.0),
+        Complex64::new(0.01, 0.0),
+        Complex64::new(-0.01, 0.0),
+        Complex64::new(-0.01, 0.0),
+        Complex64::new(0.01, 0.0),
+    ]) {
+        assert!((*actual - expected).norm() < 1.0e-14);
+    }
+
+    let composed_error = reread.to_y_power().expect_err("I-S is singular");
+    assert!(matches!(
+        composed_error,
+        Error::Singular {
+            stage: ConversionStage::SToZ,
+            ..
+        }
+    ));
     Ok(())
 }
 ```

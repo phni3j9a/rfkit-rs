@@ -109,6 +109,65 @@ Keep that fact explicit in **wave-sensitive public method names** rather than ad
 
 An additional convention with authoritative mathematics, explicit naming, and conformance evidence may proceed as Yellow. Selecting a broad implicit wave default, or resolving an authoritative disagreement that cannot be represented through explicit side-by-side APIs, is Red.
 
+## Direct S→Y extraction (Issue #78 Yellow decision)
+
+Issue #78 selects one additive, explicitly named method:
+
+```rust
+impl Network {
+    pub fn to_y_direct_power(&self) -> Result<Array3<Complex64>>;
+}
+```
+
+The method returns an owned, frequency-major Y array in siemens and borrows the
+network without mutation. It uses the stored `(frequency, port)` reference
+impedances in ohms, preserves frequency and port order, and does not sort,
+resample, broadcast, renormalize, or choose a default reference. It is a
+provisional 0.x API: this record makes no stability or general scikit-rf
+compatibility promise.
+
+The direct equation follows the repository's Kurokawa power-wave definitions
+with currents into the ports:
+
+```text
+a = F(V + G I),  b = F(V - conj(G) I),  b = S a,  I = Y V
+G = diag(z0),    F = diag(1 / (2 sqrt(abs(Re(z0)))))
+A = (S G + conj(G)) F,    B = (I_n - S) F,    A Y = B
+```
+
+The implementation solves this left system with the existing multiple-RHS
+solver. A singular `I_n-S` is therefore not itself an error. An exact singular
+`A`, non-finite input/reference, or non-finite arithmetic is an error with the
+direct `S→Y` stage and available frequency/port/row/column/pivot context. The
+operation requires a nonempty frequency axis, square positive-port S data, and
+matching `(nfreq, nport)` references; malformed serde-created shapes must be
+reported rather than panic. Frequency samples remain pointwise labels and need
+not be finite, non-negative, sorted, or unique. Finite complex references,
+including per-port/frequency-dependent and negative-real values, remain in the
+existing `abs(Re(z0))` domain; zero-real and non-finite references are rejected.
+There is no explicit inverse, pseudoinverse, rank or condition cutoff,
+regularization, eigenvalue nudge, clipping, identity shortcut, or fallback.
+Ideal-open `S=I` produces zero Y through the ordinary validation and solve;
+floating-series models are supported when `A` is nonsingular; a real-reference
+ideal short `S=-I` remains an exact singular direct system.
+
+This is explicit coexistence with the existing `to_y_power`, not a replacement
+or hidden fallback. `to_y_power` continues to mean the composed `S→Z→Y`
+operation, retaining its existing name, behavior, and structured `S→Z` or
+`Z→Y` stage errors. The direct method does not broaden `to_z_power`,
+`to_y_power`, renormalization, or any other downstream operation that requires
+an invertible intermediate matrix.
+
+Alternatives considered were replacing `to_y_power` internally, renaming or
+removing it, silently falling back to direct conversion on singularity, asking
+callers to reconstruct Y, or extending renormalization and other conversions in
+the same change. The selected additive method makes the conversion domain
+visible at the call site and keeps existing callers and failure semantics
+unchanged. During the provisional 0.x phase, rollback is reversible: remove
+the additive method/kernel, its tests and documentation, with no storage or
+data migration. No wave-definition field, generic parameter hierarchy, or
+broader API redesign is implied.
+
 ## Implemented public baseline
 
 The implemented shape is:
@@ -117,6 +176,7 @@ The implemented shape is:
 impl Network {
     pub fn to_z_power(&self) -> Result<Array3<Complex64>>;
     pub fn to_y_power(&self) -> Result<Array3<Complex64>>;
+    pub fn to_y_direct_power(&self) -> Result<Array3<Complex64>>;
 
     pub fn renormalize_power(
         &self,
@@ -153,7 +213,7 @@ impl Network {
 
 The exact internal delegation remains an implementation detail. The semantic distinctions represented by these names remain policy and evidence for future API consistency:
 
-- `to_z_power` / `to_y_power` explicitly select the verified power-wave conversion convention;
+- `to_z_power`, `to_y_power`, and `to_y_direct_power` explicitly select the verified power-wave conversion convention; the latter names the direct S→Y equation while `to_y_power` retains composed S→Z→Y semantics;
 - `renormalize_power` explicitly selects power-wave renormalization;
 - `interpolate_cartesian_linear` does not establish a vague interpolation default that would later need reinterpretation;
 - `connect_matched_power` requires the existing exactly matched real-positive junction contract and exact compatible frequency grids;
@@ -176,7 +236,7 @@ A future convenience API may proceed as Green or Yellow when its frequency-selec
 
 `Network` remains S-parameter based. Z and Y are currently alternative parameter matrices produced from a network rather than separate public `ZNetwork` / `YNetwork` types.
 
-Therefore `to_z_power` and `to_y_power` return owned matrices. Do not create a parameter-type hierarchy solely to wrap those matrices before real usage requires it. A later typed representation may be Yellow when multiple concrete workflows demonstrate that it improves correctness or usability without replacing the canonical model implicitly.
+Therefore `to_z_power`, `to_y_power`, and `to_y_direct_power` return owned matrices. Do not create a parameter-type hierarchy solely to wrap those matrices before real usage requires it. A later typed representation may be Yellow when multiple concrete workflows demonstrate that it improves correctness or usability without replacing the canonical model implicitly.
 
 Transformations that still produce an S-parameter network, such as renormalization, interpolation, and connection, return a new `Network`.
 
