@@ -48,6 +48,13 @@ frequency-dependent real-positive junction impedance that is exactly equal at
 the selected ports. Its expected output comes from public
 `skrf.network.innerconnect(network, k, l)` behavior, and the three surviving
 ports are recorded in their original order.
+One port-permutation case is also registered: an independently generated,
+asymmetric three-port input has unequal complex per-port/frequency-dependent
+z0 and uses the non-involutive new-to-old order `[2, 0, 1]`. Its expected
+frequency, S, and z0 values come from the pinned public
+`Network.renumbered(order, list(range(nport)))` call. Because this operation
+only reindexes opaque values, the fixture uses an exact-copy policy for all
+three outputs and records the source mapping explicitly.
 One Cartesian linear interpolation case is also registered: an independent
 three-port S/z0 input uses irregular source and target grids, exact endpoints
 and a source knot, nonreciprocal complex S data, and non-50 Ω complex,
@@ -106,7 +113,7 @@ checker.
 
 ## Generate and verify
 
-The harness has thirty-six registered canonical cases. The original three cases
+The harness has thirty-seven registered canonical cases. The original three cases
 remain unchanged:
 
 - `three_port_complex_z0` — the representative four-frequency, three-port
@@ -387,6 +394,23 @@ Network; output z0 and order metadata are checked exactly.
 | --- | ---: | --- | --- | --- |
 | Inner connection | 5 | 1 ↔ 3 | 0, 2, 4 | `power_wave_inner_connect_matched_five_port_real_frequency_dependent_z0` |
 
+The port-permutation fixture is a pure coordinate relabeling case. Its
+frequency axis and direct S/z0 inputs use local seed `20260947`; all three
+frequencies and all three ports have distinct complex reference values, and
+the S matrix is deliberately asymmetric. The metadata records
+`order[new_port] = old_port`, the equivalent pinned scikit-rf call's
+`from_ports=[2, 0, 1]` and `to_ports=[0, 1, 2]`, and one source mapping entry
+per output port. The checked-in output is expected to satisfy exactly
+`s[f, i, j] = s_input[f, order[i], order[j]]`,
+`z0[f, i] = z0_input[f, order[i]]`, and unchanged frequency samples. The
+generator verifies that relation after calling public `Network.renumbered`,
+and the exact checker rejects even sub-binary64 output drift or metadata/input
+changes.
+
+| Direction | Ports | Order (new → old) | z0 profile | Case id |
+| --- | ---: | --- | --- | --- |
+| Network → permuted Network | 3 | `[2, 0, 1]` | complex, per-port, frequency-dependent | `port_permutation_three_port_complex_z0` |
+
 All registered cases are checked by default against a fresh scikit-rf run; the
 default command checks every case:
 
@@ -582,6 +606,9 @@ The JSON representation is deliberately machine-readable and byte-stable:
   `tolerance_policy.atol` as appropriate;
 - The `three_port_complex_z0` network case retains an exact canonical UTF-8
   byte comparison.
+- The `port_permutation_three_port_complex_z0` case also retains an exact
+  canonical UTF-8 byte comparison: its expected frequency/S/z0 values are
+  pure reindexing copies, so no numeric tolerance is appropriate.
 - Every operation case requires strict JSON parsing (including finite
   numbers), canonical encoding of the actual document, and exact canonical
   equality for metadata, schema, dependency versions, shapes, frequency,

@@ -547,6 +547,170 @@ TOUCHSTONE_CASE_SPECS = {
 }
 
 
+PORT_PERMUTATION_CASE_SPECS = {
+    "port_permutation_three_port_complex_z0": {
+        "operation": "network_port_permutation",
+        "ports": 3,
+        "frequencies": 3,
+        "seed": 20_260_947,
+        "order": [2, 0, 1],
+    },
+}
+
+
+class PortPermutationRegistrationAndCheckerTests(unittest.TestCase):
+    """Protect the exact public port-renumbering oracle contract."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.np, cls.skrf = oracle._load_dependencies()
+        cls.fixture_path = oracle.PORT_PERMUTATION_FIXTURE
+        cls.fixture = oracle._read_canonical_json(cls.fixture_path)
+
+    def test_case_is_registered_with_exact_reindexing_contract(self) -> None:
+        case_id = next(iter(PORT_PERMUTATION_CASE_SPECS))
+        spec = PORT_PERMUTATION_CASE_SPECS[case_id]
+        registered = {case.case_id: case for case in oracle._CASES}
+        self.assertIn(case_id, registered)
+        case = registered[case_id]
+        self.assertEqual(case.path, oracle.PORT_PERMUTATION_FIXTURE)
+        self.assertEqual(case.path.stem, case_id)
+        self.assertEqual(case.comparison, "exact")
+        self.assertIsNone(case.numeric_output_key)
+
+        metadata = self.fixture["metadata"]
+        self.assertEqual(metadata["case_id"], case_id)
+        self.assertEqual(metadata["operation"], spec["operation"])
+        self.assertEqual(
+            metadata["input_recipe"], oracle.PORT_PERMUTATION_INPUT_RECIPE
+        )
+        self.assertEqual(metadata["numpy_version"], oracle.EXPECTED_NUMPY_VERSION)
+        self.assertEqual(metadata["scikit_rf_version"], oracle.EXPECTED_SCIKIT_RF_VERSION)
+        self.assertEqual(
+            metadata["scikit_rf_commit"], oracle.EXPECTED_SCIKIT_RF_COMMIT
+        )
+        self.assertEqual(metadata["random_seed"], spec["seed"])
+        self.assertEqual(metadata["wave_definition"], "power")
+        self.assertEqual(metadata["port_order"]["order_new_to_old"], spec["order"])
+        self.assertEqual(
+            metadata["port_order"]["renumbered_from_ports"], spec["order"]
+        )
+        self.assertEqual(metadata["port_order"]["renumbered_to_ports"], [0, 1, 2])
+        self.assertEqual(
+            metadata["port_order"]["source_mapping"],
+            [
+                {"new_port": 0, "old_port": 2},
+                {"new_port": 1, "old_port": 0},
+                {"new_port": 2, "old_port": 1},
+            ],
+        )
+        self.assertEqual(
+            metadata["reference_impedance"],
+            {
+                "complex": True,
+                "frequency_dependent": True,
+                "per_port": True,
+                "unit": "ohm",
+            },
+        )
+        self.assertEqual(
+            metadata["shape"],
+            {
+                "frequency": [spec["frequencies"]],
+                "input_s": [spec["frequencies"], spec["ports"], spec["ports"]],
+                "input_z0": [spec["frequencies"], spec["ports"]],
+                "output_s": [spec["frequencies"], spec["ports"], spec["ports"]],
+                "output_z0": [spec["frequencies"], spec["ports"]],
+            },
+        )
+        self.assertEqual(
+            metadata["tolerance_policy"]["comparison"],
+            oracle.PORT_PERMUTATION_TOLERANCE_COMPARISON,
+        )
+
+    def test_builder_calls_public_renumbered_with_new_to_old_order(self) -> None:
+        case = next(
+            case
+            for case in oracle._CASES
+            if case.case_id == oracle.PORT_PERMUTATION_CASE_ID
+        )
+        with mock.patch.object(
+            self.skrf.Network,
+            "renumbered",
+            autospec=True,
+            side_effect=self.skrf.Network.renumbered,
+        ) as renumbered:
+            generated = case.builder(self.np, self.skrf)
+
+        self.assertEqual(renumbered.call_count, 1)
+        self.assertEqual(renumbered.call_args.args[1], [2, 0, 1])
+        self.assertEqual(renumbered.call_args.args[2], [0, 1, 2])
+        self.assertEqual(
+            generated["metadata"]["scikit_rf_commit"],
+            oracle.EXPECTED_SCIKIT_RF_COMMIT,
+        )
+
+        source_s = generated["data"]["s_input"]
+        output_s = generated["data"]["s"]
+        source_z0 = generated["data"]["z0_input_ohm"]
+        output_z0 = generated["data"]["z0_ohm"]
+        order = [2, 0, 1]
+        for frequency in range(3):
+            for new_row, old_row in enumerate(order):
+                for new_column, old_column in enumerate(order):
+                    self.assertEqual(
+                        output_s[frequency][new_row][new_column],
+                        source_s[frequency][old_row][old_column],
+                    )
+                self.assertEqual(
+                    output_z0[frequency][new_row],
+                    source_z0[frequency][old_row],
+                )
+
+        self.assertTrue(
+            any(
+                source_s[frequency][row][column]
+                != source_s[frequency][column][row]
+                for frequency in range(3)
+                for row in range(3)
+                for column in range(row + 1, 3)
+            )
+        )
+        self.assertTrue(
+            any(
+                source_z0[frequency][port]["imag"] != 0.0
+                for frequency in range(3)
+                for port in range(3)
+            )
+        )
+        self.assertNotEqual(source_z0[0], source_z0[1])
+        self.assertNotEqual(
+            [source_z0[frequency][0] for frequency in range(3)],
+            [source_z0[frequency][1] for frequency in range(3)],
+        )
+
+    def test_exact_checker_rejects_output_or_contract_drift(self) -> None:
+        expected = oracle._canonical_bytes(self.fixture)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / self.fixture_path.name
+            path.write_bytes(expected)
+            self.assertEqual(oracle._check_fixture(path, expected), 0)
+
+            changed_output = copy.deepcopy(self.fixture)
+            changed_output["data"]["s"][0][0][0]["real"] += 1e-13
+            path.write_bytes(oracle._canonical_bytes(changed_output))
+            self.assertEqual(oracle._check_fixture(path, expected), 1)
+
+            changed_contract = copy.deepcopy(self.fixture)
+            changed_contract["metadata"]["port_order"]["order_new_to_old"] = [
+                1,
+                2,
+                0,
+            ]
+            path.write_bytes(oracle._canonical_bytes(changed_contract))
+            self.assertEqual(oracle._check_fixture(path, expected), 1)
+
+
 class TouchstoneRegistrationAndCheckerTests(unittest.TestCase):
     """Protect the pinned Touchstone v1.0 parser fixture contract."""
 
@@ -1012,6 +1176,7 @@ class MatrixRegistrationAndCheckerTests(unittest.TestCase):
         self.assertEqual(
             len(registered),
             3
+            + len(PORT_PERMUTATION_CASE_SPECS)
             + len(INTERPOLATION_CASE_SPECS)
             + len(MATRIX_CASE_SPECS)
             + len(RENORMALIZATION_CASE_SPECS)

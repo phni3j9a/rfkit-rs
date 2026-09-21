@@ -31,6 +31,9 @@ The interpolation fixture uses the public
 ``Network.interpolate(..., basis="s", coords="cart", kind="linear")`` operation
 for both S and z0 outputs.  SciPy is pinned explicitly because scikit-rf
 delegates the interpolation numerics to it.
+The port-permutation fixture uses the public ``Network.renumbered`` operation
+with a non-involutive three-port order and compares frequency, S, and z0 by
+exact copy because the operation only reindexes values.
 """
 
 from __future__ import annotations
@@ -47,6 +50,7 @@ from typing import Any, Callable, NamedTuple
 
 EXPECTED_NUMPY_VERSION = "2.5.1"
 EXPECTED_SCIKIT_RF_VERSION = "2.0.1"
+EXPECTED_SCIKIT_RF_COMMIT = "bd651e923cac6020de49a096e1d7e9b5f949f884"
 EXPECTED_SCIPY_VERSION = "1.18.1"
 RANDOM_SEED = 20_250_308
 SCHEMA_VERSION = 1
@@ -540,6 +544,30 @@ COMPOSITION_TOLERANCE_JUSTIFICATION = (
     "is interpolated independently by pinned SciPy-backed scikit-rf before "
     "the public matched connection, allowing normal cross-language rounding "
     "while catching material disagreement."
+)
+
+# Port permutation is a data-reindexing operation.  Keep this case small but
+# asymmetric so an inverse permutation or one-axis-only implementation cannot
+# pass accidentally.  The input stream is independent of all earlier oracle
+# cases and the output is checked byte-for-byte after public scikit-rf
+# ``Network.renumbered`` read-back.
+PORT_PERMUTATION_FIXTURE = (
+    Path(__file__).resolve().parent
+    / "fixtures"
+    / "port_permutation_three_port_complex_z0.json"
+)
+PORT_PERMUTATION_CASE_ID = "port_permutation_three_port_complex_z0"
+PORT_PERMUTATION_RANDOM_SEED = 20_260_947
+PORT_PERMUTATION_NFREQ = 3
+PORT_PERMUTATION_NPORTS = 3
+PORT_PERMUTATION_ORDER = (2, 0, 1)
+PORT_PERMUTATION_INPUT_RECIPE = (
+    "independent local NumPy default_rng input with a non-symmetric complex "
+    "three-port S stack and unequal complex per-port/frequency-dependent z0"
+)
+PORT_PERMUTATION_TOLERANCE_COMPARISON = (
+    "exact canonical UTF-8 JSON bytes; frequency, S, and z0 are pure reindexing "
+    "outputs and are copied exactly"
 )
 
 
@@ -1886,6 +1914,147 @@ def _network_fixture(np: Any, skrf: Any) -> dict[str, Any]:
             "frequency_hz": [float(value) for value in frequency],
             "s": _complex_array(network_s),
             "z0_ohm": _complex_array(network_z0),
+        },
+    }
+
+
+def _port_permutation_inputs(np: Any) -> tuple[Any, Any, Any]:
+    """Build the independently authored port-permutation input family."""
+
+    frequency_hz = np.array(
+        [0.83e9, 1.47e9, 2.61e9],
+        dtype=np.float64,
+    )
+    rng = np.random.default_rng(PORT_PERMUTATION_RANDOM_SEED)
+    s = (
+        rng.normal(
+            loc=0.0,
+            scale=0.071,
+            size=(PORT_PERMUTATION_NFREQ, PORT_PERMUTATION_NPORTS, PORT_PERMUTATION_NPORTS),
+        )
+        + 1j
+        * rng.normal(
+            loc=0.0,
+            scale=0.053,
+            size=(PORT_PERMUTATION_NFREQ, PORT_PERMUTATION_NPORTS, PORT_PERMUTATION_NPORTS),
+        )
+    ).astype(np.complex128)
+
+    # Add deterministic, port- and frequency-specific diagonal terms without
+    # imposing reciprocal symmetry.  The random stream and this recipe are
+    # local to this case and are not derived from any earlier fixture.
+    for frequency in range(PORT_PERMUTATION_NFREQ):
+        for port in range(PORT_PERMUTATION_NPORTS):
+            s[frequency, port, port] += complex(
+                0.16 + 0.027 * frequency + 0.019 * port,
+                -0.041 + 0.013 * frequency - 0.007 * port,
+            )
+
+    frequency_index = np.arange(PORT_PERMUTATION_NFREQ, dtype=np.float64)[:, None]
+    port_index = np.arange(PORT_PERMUTATION_NPORTS, dtype=np.float64)[None, :]
+    z0 = (
+        38.25
+        + 6.75 * port_index
+        + 1.85 * frequency_index
+        + 1j
+        * (
+            2.15
+            - 1.35 * port_index
+            + 0.42 * frequency_index
+            + 0.08 * port_index * frequency_index
+        )
+    ).astype(np.complex128)
+
+    if not np.isfinite(frequency_hz).all() or not np.isfinite(s).all() or not np.isfinite(z0).all():
+        raise ValueError("port-permutation inputs must be finite")
+    _assert_non_symmetric(np, s, name="port-permutation S input")
+    if np.array_equal(z0[0], z0[1]) or np.array_equal(z0[:, 0], z0[:, 1]):
+        raise ValueError("port-permutation z0 must vary by frequency and port")
+    if not np.any(z0.imag != 0.0):
+        raise ValueError("port-permutation z0 must include complex values")
+
+    return frequency_hz, s, z0
+
+
+def _port_permutation_fixture(np: Any, skrf: Any) -> dict[str, Any]:
+    """Build the port-permutation fixture through public scikit-rf behavior."""
+
+    frequency_hz, source_s, source_z0 = _port_permutation_inputs(np)
+    case_id = PORT_PERMUTATION_CASE_ID
+    network = skrf.Network(
+        f=frequency_hz,
+        s=source_s,
+        z0=source_z0,
+        s_def="power",
+        name=case_id,
+    )
+
+    order = list(PORT_PERMUTATION_ORDER)
+    target_ports = list(range(PORT_PERMUTATION_NPORTS))
+    permuted = network.renumbered(order, target_ports)
+    frequency = np.asarray(permuted.f, dtype=np.float64)
+    network_s = np.asarray(network.s, dtype=np.complex128)
+    network_z0 = np.asarray(network.z0, dtype=np.complex128)
+    permuted_s = np.asarray(permuted.s, dtype=np.complex128)
+    permuted_z0 = np.asarray(permuted.z0, dtype=np.complex128)
+
+    expected_s = network_s[:, order, :][:, :, order]
+    expected_z0 = network_z0[:, order]
+    if not np.array_equal(frequency, frequency_hz):
+        raise ValueError("port-permutation output frequency changed")
+    if not np.array_equal(permuted_s, expected_s):
+        raise ValueError("scikit-rf port-permutation S output is not an exact reindex")
+    if not np.array_equal(permuted_z0, expected_z0):
+        raise ValueError("scikit-rf port-permutation z0 output is not an exact reindex")
+
+    source_shape = {
+        "frequency": list(frequency.shape),
+        "input_s": list(network_s.shape),
+        "input_z0": list(network_z0.shape),
+        "output_s": list(permuted_s.shape),
+        "output_z0": list(permuted_z0.shape),
+    }
+    source_mapping = [
+        {"new_port": new_port, "old_port": old_port}
+        for new_port, old_port in enumerate(order)
+    ]
+    return {
+        "metadata": {
+            "case_id": case_id,
+            "input_recipe": PORT_PERMUTATION_INPUT_RECIPE,
+            "numpy_version": np.__version__,
+            "operation": "network_port_permutation",
+            "port_order": {
+                "description": "order[new_port] = old_port",
+                "order_new_to_old": order,
+                "renumbered_from_ports": order,
+                "renumbered_to_ports": target_ports,
+                "source_mapping": source_mapping,
+            },
+            "random_seed": PORT_PERMUTATION_RANDOM_SEED,
+            "reference_impedance": {
+                "complex": True,
+                "frequency_dependent": True,
+                "per_port": True,
+                "unit": "ohm",
+            },
+            "schema": "rfkit-rs.oracle.fixture",
+            "schema_version": SCHEMA_VERSION,
+            "scikit_rf_commit": EXPECTED_SCIKIT_RF_COMMIT,
+            "scikit_rf_version": skrf.__version__,
+            "shape": source_shape,
+            "tolerance_policy": {
+                "comparison": PORT_PERMUTATION_TOLERANCE_COMPARISON,
+                "regeneration": "exact canonical UTF-8 JSON bytes",
+            },
+            "wave_definition": network.s_def,
+        },
+        "data": {
+            "frequency_hz": [float(value) for value in frequency],
+            "s": _complex_array(permuted_s),
+            "s_input": _complex_array(network_s),
+            "z0_input_ohm": _complex_array(network_z0),
+            "z0_ohm": _complex_array(permuted_z0),
         },
     }
 
@@ -4588,6 +4757,12 @@ _CASES = (
         "three_port_complex_z0",
         DEFAULT_FIXTURE,
         _network_fixture,
+        "exact",
+    ),
+    _OracleCase(
+        PORT_PERMUTATION_CASE_ID,
+        PORT_PERMUTATION_FIXTURE,
+        _port_permutation_fixture,
         "exact",
     ),
     _OracleCase(
