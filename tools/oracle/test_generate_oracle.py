@@ -493,6 +493,23 @@ MATCHED_CONNECTION_CASE_SPECS = {
     },
 }
 
+DIRECT_CONNECTION_CASE_SPECS = {
+    "power_wave_connect_direct_three_to_four_port_complex_z0": {
+        "operation": "connect_direct_power",
+        "ports_a": 3,
+        "ports_b": 4,
+        "frequencies": 3,
+        "input_a": "s_a",
+        "input_b": "s_b",
+        "output": "s_connected",
+        "junction_port_a": 1,
+        "junction_port_b": 2,
+        "seed": 20_260_951,
+        "survivors_a": [0, 2],
+        "survivors_b": [0, 1, 3],
+    },
+}
+
 INNER_CONNECT_CASE_SPECS = {
     "power_wave_inner_connect_matched_five_port_real_frequency_dependent_z0": {
         "operation": "inner_connect_matched",
@@ -1382,6 +1399,7 @@ class MatrixRegistrationAndCheckerTests(unittest.TestCase):
             + len(DIRECT_S_TO_Y_SINGULAR_CASE_SPECS)
             + len(COMPOSITION_CASE_SPECS)
             + len(MATCHED_CONNECTION_CASE_SPECS)
+            + len(DIRECT_CONNECTION_CASE_SPECS)
             + len(INNER_CONNECT_CASE_SPECS)
             + len(TOUCHSTONE_CASE_SPECS)
             + len(TERMINATION_CASE_SPECS)
@@ -1394,6 +1412,7 @@ class MatrixRegistrationAndCheckerTests(unittest.TestCase):
             set(DIRECT_S_TO_Y_SINGULAR_CASE_SPECS).issubset(registered)
         )
         self.assertTrue(set(TERMINATION_CASE_SPECS).issubset(registered))
+        self.assertTrue(set(DIRECT_CONNECTION_CASE_SPECS).issubset(registered))
         self.assertTrue(set(INNER_CONNECT_CASE_SPECS).issubset(registered))
         for case_id, spec in MATRIX_CASE_SPECS.items():
             case = registered[case_id]
@@ -3761,6 +3780,199 @@ class TerminationRegistrationAndCheckerTests(unittest.TestCase):
                         oracle._check_numeric_fixture(path, self.fixture, "s_terminated"),
                         1,
                     )
+
+
+class DirectConnectionRegistrationAndCheckerTests(unittest.TestCase):
+    """Protect the direct physical-junction oracle contract."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.np, cls.skrf = oracle._load_dependencies()
+        cls.case_id = oracle.DIRECT_CONNECT_CASE_ID
+        cls.case = {case.case_id: case for case in oracle._CASES}[cls.case_id]
+        cls.fixture = oracle._read_canonical_json(cls.case.path)
+
+    @staticmethod
+    def _complex(value: dict[str, float]) -> complex:
+        return complex(value["real"], value["imag"])
+
+    def _complex_array(self, values: object) -> object:
+        if isinstance(values, list):
+            return [self._complex_array(item) for item in values]
+        if not isinstance(values, dict):
+            raise AssertionError("serialized complex leaf has an unexpected shape")
+        return self._complex(values)
+
+    def test_case_is_registered_with_strict_direct_contract(self) -> None:
+        self.assertEqual(self.case.path, oracle.DIRECT_CONNECT_FIXTURE)
+        self.assertEqual(self.case.path.stem, self.case_id)
+        self.assertEqual(self.case.comparison, "numeric_output")
+        self.assertEqual(self.case.numeric_output_key, "s_connected")
+
+        metadata = self.fixture["metadata"]
+        data = self.fixture["data"]
+        self.assertEqual(metadata["case_id"], self.case_id)
+        self.assertEqual(metadata["operation"], "connect_direct_power")
+        self.assertEqual(metadata["numpy_version"], oracle.EXPECTED_NUMPY_VERSION)
+        self.assertEqual(metadata["scikit_rf_version"], oracle.EXPECTED_SCIKIT_RF_VERSION)
+        self.assertEqual(metadata["scikit_rf_commit"], oracle.EXPECTED_SCIKIT_RF_COMMIT)
+        self.assertEqual(metadata["random_seed"], 20_260_951)
+        self.assertEqual(metadata["wave_definition"], "power")
+        self.assertEqual(metadata["junction_ports"], {"a": 1, "b": 2})
+        self.assertEqual(metadata["port_order"]["a_survivors"], [0, 2])
+        self.assertEqual(metadata["port_order"]["b_survivors"], [0, 1, 3])
+        self.assertEqual(
+            metadata["port_order"]["output"],
+            [
+                {"network": "A", "port": 0},
+                {"network": "A", "port": 2},
+                {"network": "B", "port": 0},
+                {"network": "B", "port": 1},
+                {"network": "B", "port": 3},
+            ],
+        )
+        self.assertEqual(
+            metadata["reference_impedance"],
+            {
+                "complex": True,
+                "frequency_dependent": True,
+                "per_port": True,
+                "positive_real": True,
+                "selected_references_unequal": True,
+                "unit": "ohm",
+            },
+        )
+        self.assertEqual(
+            metadata["shape"],
+            {
+                "frequency": [3],
+                "input_s_a": [3, 3, 3],
+                "input_s_b": [3, 4, 4],
+                "input_z0_a": [3, 3],
+                "input_z0_b": [3, 4],
+                "output_s": [3, 5, 5],
+                "output_z0": [3, 5],
+            },
+        )
+        self.assertEqual(metadata["tolerance_policy"]["rtol"], 1e-12)
+        self.assertEqual(metadata["tolerance_policy"]["atol"], 1e-12)
+        self.assertIn("only data.s_connected", metadata["tolerance_policy"]["comparison"])
+        self.assertIn("public scikit-rf network.connect", metadata["tolerance_policy"]["justification"])
+        self.assertEqual(len(data["frequency_hz"]), 3)
+
+    def test_public_builder_uses_one_public_connect_call(self) -> None:
+        with mock.patch.object(
+            self.skrf.network,
+            "connect",
+            wraps=self.skrf.network.connect,
+        ) as connect:
+            document = self.case.builder(self.np, self.skrf)
+
+        self.assertEqual(connect.call_count, 1)
+        args, kwargs = connect.call_args
+        self.assertEqual(kwargs, {})
+        self.assertEqual(args[1], 1)
+        self.assertIsInstance(args[2], self.skrf.Network)
+        self.assertEqual(args[3], 2)
+        self.assertEqual(document["metadata"]["operation"], "connect_direct_power")
+
+        data = self.fixture["data"]
+        source_z0_a = self.np.asarray(
+            self._complex_array(data["z0_a_ohm"]), dtype=self.np.complex128
+        )
+        source_z0_b = self.np.asarray(
+            self._complex_array(data["z0_b_ohm"]), dtype=self.np.complex128
+        )
+        expected_z0 = self.np.hstack((source_z0_a[:, [0, 2]], source_z0_b[:, [0, 1, 3]]))
+        actual_z0 = self.np.asarray(
+            self._complex_array(data["z0_connected_ohm"]), dtype=self.np.complex128
+        )
+        self.np.testing.assert_array_equal(actual_z0, expected_z0)
+        self.np.testing.assert_allclose(
+            self.np.asarray(self._complex_array(data["s_connected"])),
+            self.skrf.network.connect(
+                self.skrf.Network(
+                    f=self.np.asarray(data["frequency_hz"]),
+                    s=self.np.asarray(self._complex_array(data["s_a"])),
+                    z0=source_z0_a,
+                    s_def="power",
+                ),
+                1,
+                self.skrf.Network(
+                    f=self.np.asarray(data["frequency_hz"]),
+                    s=self.np.asarray(self._complex_array(data["s_b"])),
+                    z0=source_z0_b,
+                    s_def="power",
+                ),
+                2,
+            ).s,
+            rtol=1e-12,
+            atol=1e-12,
+        )
+
+    def test_checker_tolerates_only_connected_s_output(self) -> None:
+        adjusted = copy.deepcopy(self.fixture)
+        adjusted["data"]["s_connected"][0][0][0]["real"] += 1e-13
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / self.case.path.name
+            path.write_bytes(oracle._canonical_bytes(adjusted))
+            self.assertEqual(
+                oracle._check_numeric_fixture(path, self.fixture, "s_connected"),
+                0,
+            )
+
+        for field in (
+            "s_a",
+            "s_b",
+            "z0_a_ohm",
+            "z0_b_ohm",
+            "z0_connected_ohm",
+            "frequency_hz",
+            "metadata",
+        ):
+            with self.subTest(field=field):
+                drifted = copy.deepcopy(self.fixture)
+                if field == "metadata":
+                    drifted["metadata"]["junction_ports"]["a"] = 0
+                elif field == "frequency_hz":
+                    drifted["data"][field][0] += 1.0
+                elif field in ("s_a", "s_b"):
+                    drifted["data"][field][0][0][0]["real"] += 1e-3
+                else:
+                    drifted["data"][field][0][0]["real"] += 1.0
+                with tempfile.TemporaryDirectory() as directory:
+                    path = Path(directory) / self.case.path.name
+                    path.write_bytes(oracle._canonical_bytes(drifted))
+                    self.assertEqual(
+                        oracle._check_numeric_fixture(path, self.fixture, "s_connected"),
+                        1,
+                    )
+
+    def test_local_real_unequal_reference_evidence_is_finite(self) -> None:
+        """Keep a focused real-unequal reference check without another fixture."""
+
+        frequency, source_s_a, source_z0_a, source_s_b, source_z0_b = (
+            oracle._connect_direct_inputs(self.np, seed=oracle.DIRECT_CONNECT_RANDOM_SEED)
+        )
+        real_z0_a = source_z0_a.real.astype(self.np.complex128)
+        real_z0_b = source_z0_b.real.astype(self.np.complex128)
+        self.assertTrue(self.np.all(real_z0_a.real > 0.0))
+        self.assertTrue(self.np.all(real_z0_b.real > 0.0))
+        self.assertTrue(
+            self.np.all(real_z0_a[:, 1] != real_z0_b[:, 2]),
+            "selected real references must remain unequal",
+        )
+        connected = self.skrf.network.connect(
+            self.skrf.Network(f=frequency, s=source_s_a, z0=real_z0_a, s_def="power"),
+            1,
+            self.skrf.Network(f=frequency, s=source_s_b, z0=real_z0_b, s_def="power"),
+            2,
+        )
+        self.assertTrue(self.np.isfinite(connected.s).all())
+        self.np.testing.assert_array_equal(
+            connected.z0,
+            self.np.hstack((real_z0_a[:, [0, 2]], real_z0_b[:, [0, 1, 3]])),
+        )
 
 
 if __name__ == "__main__":

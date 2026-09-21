@@ -200,6 +200,54 @@ write/read the four-port result with unchanged common 50-ohm survivor
 references. No writer-side renormalization, open sentinel, load excitation,
 or mixed-mode/file-format extension is involved.
 
+Issue #88 adds the direct physical-junction operation
+`Network::connect_direct_power`. Its canonical fixture
+`power_wave_connect_direct_three_to_four_port_complex_z0.json` is an
+independently generated asymmetric, non-reciprocal three-port A plus four-port
+B case at three frequencies, with A[1] connected to B[2]. The single RNG seed
+is `20260951`; every reference is complex, frequency-dependent, and has a
+strictly positive real part, and the selected A/B references are unequal. The
+expected S is produced only by one pinned public
+`skrf.network.connect` call from scikit-rf `2.0.1` at commit
+`bd651e923cac6020de49a096e1d7e9b5f949f884`; the public Rust method is an
+independent physical V/I junction rewrite. The 3+4 shape avoids scikit-rf's
+special two-port insertion convention. A survivors `[0,2]` precede B
+survivors `[0,1,3]`, and survivor references are derived in Rust by slicing
+the two input arrays rather than treating output z0 as a floating oracle.
+
+`crates/rfkit-core/tests/oracle_direct_connection.rs` checks the fixture
+schema, pinned versions/seed, exact grids, source S inputs, complex references,
+selected ports, shapes, survivor mapping, and output references before calling
+only the public `connect_direct_power` method. It compares every connected S
+component under exactly `rtol=1e-12`, `atol=1e-12`; no private kernel or matched
+connection is used. It also snapshots both inputs to verify borrowing and
+immutability. Python oracle tests defend one public connect call, strict
+output-only checker tolerance, metadata/input drift rejection, and a focused
+real unequal-positive-reference finite check without a second canonical
+fixture.
+
+The direct operation requires nonempty matching finite exact frequency grids,
+finite square S/z0 data, valid selected ports, nonzero real references, and at
+least one survivor. It preserves A-then-B order and exact surviving references;
+it does not sort, intersect, interpolate, broadcast, renormalize implicitly,
+or promise a broad scikit-rf domain. Exact evaluated singularity of the
+two-coordinate physical junction is a structured error; finite nonsingular
+near-singular cases remain in-domain without an arbitrary condition cutoff.
+Complex and negative-real reference behavior is covered by local physical and
+invariant tests, while the pinned differential claim is limited to the
+canonical positive-real-part fixture domain.
+
+The focused Touchstone test and executable in
+`crates/rfkit-touchstone/tests/public_direct_connection_workflow.rs` and
+`crates/rfkit-touchstone/examples/connect_direct_power_touchstone.rs` parse
+separate 3-port and 4-port v1.0 inputs at different common references, connect
+without pre-renormalizing either source, independently solve the physical
+V/I boundary, and assert both input snapshots are unchanged. They then call
+`renormalize_direct_power` explicitly to a caller-chosen common positive-real
+writer reference before writing and reading the five-port output. The writer
+is not asked to repair references, and the workflow makes no Touchstone v2,
+mixed-mode, or automatic-renormalization promise.
+
 ## Reporting
 
 Eventually CI should publish a machine-generated coverage report such as:

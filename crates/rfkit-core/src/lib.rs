@@ -45,6 +45,7 @@ use thiserror::Error;
 
 mod composition;
 mod connection;
+mod direct_connection;
 mod impedance_admittance;
 mod interpolation;
 mod linalg;
@@ -538,6 +539,106 @@ pub enum Error {
     )]
     NonFiniteConnectionComputation {
         frequency: usize,
+        row: usize,
+        column: usize,
+    },
+
+    #[error(
+        "{input} direct connection S-parameter shape must be (nfreq, nport, nport), got {shape:?}"
+    )]
+    InvalidDirectConnectionSShape {
+        input: ConnectionInput,
+        shape: Vec<usize>,
+    },
+
+    #[error(
+        "{input} direct connection reference-impedance shape must be (nfreq, nport), got {shape:?}"
+    )]
+    InvalidDirectConnectionZ0Shape {
+        input: ConnectionInput,
+        shape: Vec<usize>,
+    },
+
+    #[error("{input} direct connection frequency axis must not be empty")]
+    EmptyDirectConnectionFrequency { input: ConnectionInput },
+
+    #[error(
+        "{input} direct connection frequency axis length does not match the S-parameter frequency dimension: expected {expected}, got {actual}"
+    )]
+    DirectConnectionFrequencyShape {
+        input: ConnectionInput,
+        expected: usize,
+        actual: usize,
+    },
+
+    #[error("A and B direct connection frequency axes have different lengths: A={a}, B={b}")]
+    DirectConnectionFrequencyLengthMismatch { a: usize, b: usize },
+
+    #[error("direct connection frequency axes differ at index {index}: A={a:?}, B={b:?}")]
+    DirectConnectionFrequencyMismatch { index: usize, a: f64, b: f64 },
+
+    #[error("{input} direct connection frequency is non-finite at index {index}: {value:?}")]
+    NonFiniteDirectConnectionFrequency {
+        input: ConnectionInput,
+        index: usize,
+        value: f64,
+    },
+
+    #[error(
+        "{input} direct connection S-parameter is non-finite at frequency {frequency}, row {row}, column {column}"
+    )]
+    NonFiniteDirectConnectionS {
+        input: ConnectionInput,
+        frequency: usize,
+        row: usize,
+        column: usize,
+    },
+
+    #[error(
+        "{input} direct connection reference impedance is non-finite at frequency {frequency}, port {port}"
+    )]
+    NonFiniteDirectConnectionZ0 {
+        input: ConnectionInput,
+        frequency: usize,
+        port: usize,
+    },
+
+    #[error("{input} direct connection port {port} is out of range for {nports} ports")]
+    InvalidDirectConnectionPort {
+        input: ConnectionInput,
+        port: usize,
+        nports: usize,
+    },
+
+    #[error(
+        "{input} direct connection reference impedance has a zero real part at frequency {frequency}, port {port}"
+    )]
+    ZeroRealDirectConnectionReferenceImpedance {
+        input: ConnectionInput,
+        frequency: usize,
+        port: usize,
+    },
+
+    #[error("direct connection leaves no external ports")]
+    NoExternalDirectConnectionPorts,
+
+    #[error(
+        "direct power-wave connection is exactly singular at frequency {frequency}, selected ports A={port_a}, B={port_b}, pivot {pivot}"
+    )]
+    SingularDirectConnection {
+        frequency: usize,
+        port_a: usize,
+        port_b: usize,
+        pivot: usize,
+    },
+
+    #[error(
+        "non-finite value while evaluating direct power-wave connection at frequency {frequency}, selected ports A={port_a}, B={port_b}, row {row}, column {column}"
+    )]
+    NonFiniteDirectConnectionComputation {
+        frequency: usize,
+        port_a: usize,
+        port_b: usize,
         row: usize,
         column: usize,
     },
@@ -1878,6 +1979,70 @@ impl Network {
         Network::new(frequency, connected.s, connected.z0)
     }
 
+    /// Connects one port of this network directly to one port of `other` by
+    /// physical voltage continuity and current conservation.
+    ///
+    /// The selected ports use currents directed into their respective
+    /// networks, and the junction conditions are `V_A = V_B` and
+    /// `I_A + I_B = 0`.  The operation uses the repository's Kurokawa
+    /// power-wave equations with
+    /// `q = sqrt(abs(Re(z0))) / Re(z0)`, retaining the signed real part of
+    /// each reference.  This is a direct two-coordinate elimination; it does
+    /// not convert through Z/Y, insert a mismatch network, renormalize either
+    /// input, or choose a fixed reference impedance.
+    ///
+    /// `port_a` and `port_b` are zero-based selected coordinates.  The
+    /// result contains the survivors of `self` in their original order,
+    /// followed by the survivors of `other` in their original order.  Thus a
+    /// one-port input is valid when the other input contributes at least one
+    /// survivor, and no special two-port ordering or insertion rule is used.
+    /// Surviving references are copied exactly in that same order.  The result
+    /// owns a bit-for-bit copy of this network's frequency axis; both inputs
+    /// and all caller-owned data remain unchanged.
+    ///
+    /// Both frequency axes must be non-empty, finite, equal in length, and
+    /// equal at corresponding positions by ordinary `f64` equality.  Finite
+    /// negative, duplicate, descending, and signed-zero samples are valid.
+    /// Every S and reference value must be finite, and every reference in both
+    /// networks (not only selected ports) must have a nonzero real part.
+    /// Unequal, complex, per-port, frequency-dependent, and negative-real
+    /// references are all in-domain.  Only exact evaluated zero pivots in the
+    /// two-by-two direct junction system are singular; finite near-singular
+    /// systems remain valid.  Checked arithmetic reports non-finite
+    /// intermediate values rather than returning a non-finite network.
+    ///
+    /// This additive operation is provisional while `rfkit-core` is in the
+    /// `0.x` series; its name and signature are not a `1.0` stability promise.
+    ///
+    /// # Errors
+    ///
+    /// Returns direct-connection-specific structured errors for malformed
+    /// serde-created shapes, axis mismatches, invalid ports or survivor count,
+    /// non-finite inputs, zero-real references, exact junction singularity,
+    /// and non-finite arithmetic.  The selected-port and pivot coordinates
+    /// are retained for numerical failures.
+    pub fn connect_direct_power(
+        &self,
+        port_a: usize,
+        other: &Network,
+        port_b: usize,
+    ) -> Result<Network> {
+        let connected = direct_connection::connect_direct(
+            self.frequency.hz(),
+            &self.s,
+            &self.z0,
+            port_a,
+            other.frequency.hz(),
+            &other.s,
+            &other.z0,
+            port_b,
+        )
+        .map_err(map_direct_connection_error)?;
+
+        let frequency = Frequency::from_hz(connected.frequency_hz)?;
+        Network::new(frequency, connected.s, connected.z0)
+    }
+
     /// Connects one port of this network to one port of `other` through a
     /// matched Kurokawa power-wave junction after interpolating both networks
     /// onto an explicit target frequency grid.
@@ -2379,6 +2544,124 @@ fn map_connection_error(error: connection::ConnectionError) -> Error {
             column,
         } => Error::NonFiniteConnectionComputation {
             frequency,
+            row,
+            column,
+        },
+    }
+}
+
+fn map_direct_connection_input(input: direct_connection::NetworkSide) -> ConnectionInput {
+    match input {
+        direct_connection::NetworkSide::A => ConnectionInput::A,
+        direct_connection::NetworkSide::B => ConnectionInput::B,
+    }
+}
+
+fn map_direct_connection_error(error: direct_connection::DirectConnectionError) -> Error {
+    match error {
+        direct_connection::DirectConnectionError::InvalidSShape { network, shape } => {
+            Error::InvalidDirectConnectionSShape {
+                input: map_direct_connection_input(network),
+                shape: vec![shape.0, shape.1, shape.2],
+            }
+        }
+        direct_connection::DirectConnectionError::InvalidZ0Shape { network, shape } => {
+            Error::InvalidDirectConnectionZ0Shape {
+                input: map_direct_connection_input(network),
+                shape: vec![shape.0, shape.1],
+            }
+        }
+        direct_connection::DirectConnectionError::EmptyFrequency { network } => {
+            Error::EmptyDirectConnectionFrequency {
+                input: map_direct_connection_input(network),
+            }
+        }
+        direct_connection::DirectConnectionError::FrequencyShape {
+            network,
+            expected,
+            actual,
+        } => Error::DirectConnectionFrequencyShape {
+            input: map_direct_connection_input(network),
+            expected,
+            actual,
+        },
+        direct_connection::DirectConnectionError::FrequencyLengthMismatch { a, b } => {
+            Error::DirectConnectionFrequencyLengthMismatch { a, b }
+        }
+        direct_connection::DirectConnectionError::FrequencyMismatch { index, a, b } => {
+            Error::DirectConnectionFrequencyMismatch { index, a, b }
+        }
+        direct_connection::DirectConnectionError::NonFiniteFrequency {
+            network,
+            index,
+            value,
+        } => Error::NonFiniteDirectConnectionFrequency {
+            input: map_direct_connection_input(network),
+            index,
+            value,
+        },
+        direct_connection::DirectConnectionError::NonFiniteS {
+            network,
+            frequency,
+            row,
+            column,
+        } => Error::NonFiniteDirectConnectionS {
+            input: map_direct_connection_input(network),
+            frequency,
+            row,
+            column,
+        },
+        direct_connection::DirectConnectionError::NonFiniteZ0 {
+            network,
+            frequency,
+            port,
+        } => Error::NonFiniteDirectConnectionZ0 {
+            input: map_direct_connection_input(network),
+            frequency,
+            port,
+        },
+        direct_connection::DirectConnectionError::InvalidPort {
+            network,
+            port,
+            nports,
+        } => Error::InvalidDirectConnectionPort {
+            input: map_direct_connection_input(network),
+            port,
+            nports,
+        },
+        direct_connection::DirectConnectionError::ZeroRealReferenceImpedance {
+            network,
+            frequency,
+            port,
+        } => Error::ZeroRealDirectConnectionReferenceImpedance {
+            input: map_direct_connection_input(network),
+            frequency,
+            port,
+        },
+        direct_connection::DirectConnectionError::NoExternalPorts => {
+            Error::NoExternalDirectConnectionPorts
+        }
+        direct_connection::DirectConnectionError::Singular {
+            frequency,
+            port_a,
+            port_b,
+            pivot,
+        } => Error::SingularDirectConnection {
+            frequency,
+            port_a,
+            port_b,
+            pivot,
+        },
+        direct_connection::DirectConnectionError::NonFiniteComputation {
+            frequency,
+            port_a,
+            port_b,
+            row,
+            column,
+        } => Error::NonFiniteDirectConnectionComputation {
+            frequency,
+            port_a,
+            port_b,
             row,
             column,
         },

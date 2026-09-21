@@ -435,6 +435,105 @@ output uses the fixture's strict `rtol=1e-12`, `atol=1e-12` policy; metadata,
 inputs, frequency labels, loads, references, and ordering are exact contract
 fields. The Rust operation is a REWRITE from the physical boundary equations.
 
+## Direct physical power-wave connection (Issue #88 Yellow decision)
+
+The provisional public surface adds one borrowing, owned-result operation:
+
+```rust
+impl Network {
+    pub fn connect_direct_power(
+        &self,
+        port_a: usize,
+        other: &Network,
+        port_b: usize,
+    ) -> Result<Network>;
+}
+```
+
+The method connects exactly one coordinate from `self` (network A) to one
+coordinate from `other` (network B) using the physical junction conditions
+`V_A = V_B` and `I_A + I_B = 0`, with currents directed into each network. It
+returns A's unconnected ports in their original order followed by B's
+unconnected ports in their original order. One-port inputs are allowed when at
+least one external survivor remains; there is no special two-port insertion or
+reordering rule.
+
+At each frequency, use the repository's Kurokawa power-wave equations,
+
+```text
+a = (V + z I)/(2 sqrt(abs(Re(z))))
+b = (V - conj(z) I)/(2 sqrt(abs(Re(z))))
+q = sqrt(abs(Re(z)))/Re(z)
+I = q (a-b)
+V = q (conj(z) a + z b)
+```
+
+and let `i=[A.port_a,B.port_b]` and `e=[A survivors,B survivors]`. With the
+corresponding block partitions of the two independent S matrices, the direct
+physical elimination is:
+
+```text
+C = [[ qA,              qB             ],
+     [ qA*conj(zA),    -qB*conj(zB)    ]]
+D = [[-qA,             -qB            ],
+     [ qA*zA,          -qB*zB         ]]
+(C + D*S_ii) T = -D*S_ie
+S_out = S_ee + S_ei*T
+```
+
+This is an explicit two-coordinate junction solve, not a mandatory mismatch
+network, S/Z/Y conversion, whole-network inverse, pseudoinverse, regularizer,
+or hidden renormalization. The sign of `Re(z)` is retained in `q`; replacing
+it with `abs(Re(z))` changes the documented negative-real extension. Every
+reference must be finite with nonzero real part, so unequal complex,
+frequency-dependent, per-port, and negative-real references are in-domain.
+The direct method does not broaden any downstream conversion or writer domain.
+
+Both networks must have nonempty square positive-port S data, matching
+frequency/S axes and exact equal frequency labels; A's axis is copied exactly.
+Frequencies remain pointwise labels and must be finite for this connection
+operation, but need not be sorted, unique, or nonnegative. S and references
+must be finite, selected ports must be valid, and at least one survivor must
+remain. There is no intersection, sorting, interpolation, broadcasting, or
+automatic grid selection. Exact evaluated zero in the two-coordinate junction
+system is a structured singular-junction error even if external coupling is
+zero; finite nonsingular near-singular systems remain valid without an
+arbitrary tolerance or condition cutoff. Non-finite intermediate/output
+arithmetic is reported with operation/frequency/port context when available.
+Inputs remain unchanged and surviving references are copied exactly.
+
+This is one additive provisional `0.x` method. Alternatives considered were
+silently widening `connect_matched_power`, requiring explicit renormalization
+followed by matched connection, inserting a mismatch `Network`, introducing
+a broad wave/topology type, or exposing only a private direct kernel. The
+selected explicit name makes physical continuity and the reference/grid
+domain visible while retaining the owned `Network` model and existing matched
+operation unchanged. Rollback removes this method, diagnostics, tests, fixture,
+and documentation without persisted-data migration; no new dependency, data
+model, crate boundary, wave convention, or topology engine is implied. This
+decision makes no broad scikit-rf compatibility or `1.0` stability promise.
+
+Conformance uses the independently generated
+`power_wave_connect_direct_three_to_four_port_complex_z0.json` fixture: an
+asymmetric non-reciprocal 3-port A plus 4-port B at three frequencies, selected
+A[1] and B[2], seed `20260951`, unequal complex frequency-dependent references
+with positive real parts, and explicit A-then-B survivor mapping. Expected S
+comes only from pinned public scikit-rf `2.0.1` at commit
+`bd651e923cac6020de49a096e1d7e9b5f949f884` through one
+`skrf.network.connect` call. Metadata, source inputs, frequency grid,
+references, shapes, and order are exact; only S uses `rtol=1e-12`,
+`atol=1e-12`. A focused local check also exercises unequal real positive
+references without adding a second canonical fixture. The implementation is a
+REWRITE from the Kurokawa equations plus the physical junction conditions.
+
+The corresponding Touchstone workflow parses two separate v1.0 inputs with
+different common positive-real references, calls `connect_direct_power`
+without pre-renormalizing either source, checks the response through the
+physical V/I boundary independently, then explicitly calls
+`renormalize_direct_power` to a caller-selected common writer-compatible
+reference before writing and reading. The writer does not repair or
+renormalize a direct-connection result automatically.
+
 ## Implemented public baseline
 
 The implemented shape is:
@@ -473,6 +572,13 @@ impl Network {
         other_port: usize,
     ) -> Result<Network>;
 
+    pub fn connect_direct_power(
+        &self,
+        port_a: usize,
+        other: &Network,
+        port_b: usize,
+    ) -> Result<Network>;
+
     pub fn connect_matched_power_on_grid(
         &self,
         port: usize,
@@ -506,6 +612,10 @@ The exact internal delegation remains an implementation detail. The semantic dis
 - `connect_matched_power` requires the existing exactly matched real-positive junction contract and exact compatible frequency grids;
 - `connect_matched_power_on_grid` requires an explicit caller-provided grid and performs interpolation-before-connection under the existing verified composition semantics;
 - `inner_connect_matched_power` exposes the existing matched same-network elimination semantics.
+- `connect_direct_power` exposes one direct physical V/I junction solve for
+  unequal finite nonzero-real references and retains A-then-B survivor order;
+  it does not silently change the exact-grid or matched-junction contracts of
+  the other connection methods.
 - `terminate_port_impedance_power` applies a finite physical impedance boundary directly at one
   selected port, removes that port, and retains the original survivor order and references without
   selecting a new frequency grid or renormalizing the source.

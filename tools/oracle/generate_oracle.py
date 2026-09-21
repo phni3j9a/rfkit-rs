@@ -22,6 +22,11 @@ direction.  The matched-junction fixture uses independent three-port and
 four-port inputs and the public ``skrf.network.connect`` operation with
 explicit power-wave Network constructors; its output-only comparison leaves
 inputs, z0, and port-order metadata exact.
+The direct physical-junction fixture uses the same unambiguous 3+4-port shape
+with one independent seed, unequal complex positive-real references, and the
+public ``skrf.network.connect`` operation as its sole expected-S path. Its
+metadata, inputs, grids, references, and A-then-B survivor mapping are exact;
+only the connected S output is tolerance-compared.
 The finite physical-load termination fixture uses an independent asymmetric
 five-port source, a selected middle port, explicit finite loads including a
 short, and a one-port load built through public ``skrf.network.z2s`` and
@@ -479,6 +484,39 @@ CONNECT_TOLERANCE_JUSTIFICATION = (
     "three-to-four-port case; the output is checked with the recorded numeric "
     "bound while frequencies, inputs, z0, ordering metadata, and all other "
     "contract fields remain exact."
+)
+
+# Direct physical connection is kept as a separate oracle case from the
+# matched-junction operation.  The selected references deliberately differ and
+# all input references are complex, frequency-dependent, and positive-real so
+# a hidden matched-only or 50-ohm path cannot satisfy the fixture.  The public
+# scikit-rf connect call is the differential reference; its special two-port
+# output convention is avoided by this 3+4-port case.
+DIRECT_CONNECT_FIXTURE = (
+    Path(__file__).resolve().parent
+    / "fixtures"
+    / "power_wave_connect_direct_three_to_four_port_complex_z0.json"
+)
+DIRECT_CONNECT_CASE_ID = "power_wave_connect_direct_three_to_four_port_complex_z0"
+DIRECT_CONNECT_RANDOM_SEED = 20_260_951
+DIRECT_CONNECT_NFREQ = 3
+DIRECT_CONNECT_NPORTS_A = 3
+DIRECT_CONNECT_NPORTS_B = 4
+DIRECT_CONNECT_PORT_A = 1
+DIRECT_CONNECT_PORT_B = 2
+DIRECT_CONNECT_RTOL = 1e-12
+DIRECT_CONNECT_ATOL = 1e-12
+DIRECT_CONNECT_INPUT_RECIPE = (
+    "one independent NumPy default_rng stream with seed 20260951, an "
+    "asymmetric non-reciprocal three-port A and four-port B, three finite "
+    "frequency samples, and unequal complex frequency-dependent positive-real "
+    "references on every selected and surviving port"
+)
+DIRECT_CONNECT_TOLERANCE_JUSTIFICATION = (
+    "Strict binary64 tolerance for a deterministic, well-conditioned direct "
+    "physical-junction three-to-four-port case.  Expected S comes only from "
+    "one pinned public scikit-rf network.connect call; source S/z0, frequency, "
+    "survivor references, ordering, and metadata are exact contract fields."
 )
 
 # Same-network inner-connect is kept as a separate oracle case.  The direct
@@ -3188,6 +3226,219 @@ def _connect_matched_fixture(np: Any, skrf: Any) -> dict[str, Any]:
     }
 
 
+def _connect_direct_inputs(
+    np: Any,
+    *,
+    seed: int,
+) -> tuple[Any, Any, Any, Any, Any]:
+    """Build the independent direct-junction source networks."""
+
+    frequency_hz = np.array(
+        [0.83e9, 1.29e9, 2.11e9],
+        dtype=np.float64,
+    )
+    rng = np.random.default_rng(seed)
+
+    def random_s(rng: Any, nports: int, *, diagonal_base: float) -> Any:
+        scale = 0.019
+        matrix = (
+            rng.normal(
+                loc=0.0,
+                scale=scale,
+                size=(DIRECT_CONNECT_NFREQ, nports, nports),
+            )
+            + 1j
+            * rng.normal(
+                loc=0.0,
+                scale=scale,
+                size=(DIRECT_CONNECT_NFREQ, nports, nports),
+            )
+        ).astype(np.complex128)
+        for frequency in range(DIRECT_CONNECT_NFREQ):
+            for port in range(nports):
+                matrix[frequency, port, port] += complex(
+                    diagonal_base
+                    + 0.011 * frequency
+                    + 0.005 * port,
+                    0.008 + 0.0015 * frequency - 0.0007 * port,
+                )
+        return matrix
+
+    s_a = random_s(rng, DIRECT_CONNECT_NPORTS_A, diagonal_base=0.105)
+    s_b = random_s(rng, DIRECT_CONNECT_NPORTS_B, diagonal_base=0.135)
+    _assert_non_symmetric(np, s_a, name="direct-connection A S input")
+    _assert_non_symmetric(np, s_b, name="direct-connection B S input")
+    _assert_s_conditioning(s_a)
+    _assert_s_conditioning(s_b)
+
+    frequency_index = np.arange(DIRECT_CONNECT_NFREQ, dtype=np.float64)[:, None]
+    port_index_a = np.arange(DIRECT_CONNECT_NPORTS_A, dtype=np.float64)[None, :]
+    port_index_b = np.arange(DIRECT_CONNECT_NPORTS_B, dtype=np.float64)[None, :]
+    z0_a = (
+        37.0
+        + 2.65 * port_index_a
+        + 1.45 * frequency_index
+        + 1j * (1.8 + 0.27 * port_index_a - 0.11 * frequency_index)
+    ).astype(np.complex128)
+    z0_b = (
+        82.0
+        + 3.35 * port_index_b
+        + 2.15 * frequency_index
+        + 1j * (-2.4 + 0.21 * port_index_b + 0.16 * frequency_index)
+    ).astype(np.complex128)
+
+    if not np.isfinite(frequency_hz).all():
+        raise ValueError("direct-connection frequencies must be finite")
+    if not np.isfinite(s_a).all() or not np.isfinite(s_b).all():
+        raise ValueError("direct-connection S inputs must be finite")
+    if not np.isfinite(z0_a).all() or not np.isfinite(z0_b).all():
+        raise ValueError("direct-connection z0 inputs must be finite")
+    if not (z0_a.real > 0.0).all() or not (z0_b.real > 0.0).all():
+        raise ValueError("direct-connection references must be positive-real")
+    if np.array_equal(z0_a[0], z0_a[1]) or np.array_equal(z0_b[0], z0_b[1]):
+        raise ValueError("direct-connection references must vary by frequency")
+    if np.array_equal(z0_a[:, 0], z0_a[:, 2]) or np.array_equal(
+        z0_b[:, 0], z0_b[:, 3]
+    ):
+        raise ValueError("direct-connection references must vary by port")
+    if np.array_equal(
+        z0_a[:, DIRECT_CONNECT_PORT_A], z0_b[:, DIRECT_CONNECT_PORT_B]
+    ):
+        raise ValueError("direct-connection selected references must be unequal")
+    if not (z0_a[:, DIRECT_CONNECT_PORT_A].imag != 0.0).all() or not (
+        z0_b[:, DIRECT_CONNECT_PORT_B].imag != 0.0
+    ).all():
+        raise ValueError("direct-connection selected references must be complex")
+
+    return frequency_hz, s_a, z0_a, s_b, z0_b
+
+
+def _connect_direct_fixture(np: Any, skrf: Any) -> dict[str, Any]:
+    """Build the direct physical-junction fixture through public connect."""
+
+    (
+        frequency_hz,
+        source_s_a,
+        source_z0_a,
+        source_s_b,
+        source_z0_b,
+    ) = _connect_direct_inputs(np, seed=DIRECT_CONNECT_RANDOM_SEED)
+    case_id = DIRECT_CONNECT_CASE_ID
+    network_a = skrf.Network(
+        f=frequency_hz,
+        s=source_s_a,
+        z0=source_z0_a,
+        s_def="power",
+        name=f"{case_id}_a",
+    )
+    network_b = skrf.Network(
+        f=frequency_hz,
+        s=source_s_b,
+        z0=source_z0_b,
+        s_def="power",
+        name=f"{case_id}_b",
+    )
+
+    # This is intentionally the only expected-value path.  The Rust method is
+    # an independent physical V/I junction solve, not a port-renormalization
+    # or matched-connection wrapper.
+    connected = skrf.network.connect(
+        network_a,
+        DIRECT_CONNECT_PORT_A,
+        network_b,
+        DIRECT_CONNECT_PORT_B,
+    )
+    frequency = np.asarray(connected.f, dtype=np.float64)
+    connected_s = np.asarray(connected.s, dtype=np.complex128)
+    connected_z0 = np.asarray(connected.z0, dtype=np.complex128)
+    if not np.array_equal(frequency, frequency_hz):
+        raise ValueError("direct-connection output frequency changed")
+    if not np.isfinite(connected_s).all() or not np.isfinite(connected_z0).all():
+        raise ValueError("direct-connection output must be finite")
+
+    a_survivors = [
+        port for port in range(DIRECT_CONNECT_NPORTS_A) if port != DIRECT_CONNECT_PORT_A
+    ]
+    b_survivors = [
+        port for port in range(DIRECT_CONNECT_NPORTS_B) if port != DIRECT_CONNECT_PORT_B
+    ]
+    expected_z0 = np.hstack((source_z0_a[:, a_survivors], source_z0_b[:, b_survivors]))
+    if not np.array_equal(connected_z0, expected_z0):
+        raise ValueError("direct-connection survivor references changed")
+    output_order = [
+        *({"network": "A", "port": port} for port in a_survivors),
+        *({"network": "B", "port": port} for port in b_survivors),
+    ]
+    shape = {
+        "frequency": list(frequency.shape),
+        "input_s_a": list(source_s_a.shape),
+        "input_s_b": list(source_s_b.shape),
+        "input_z0_a": list(source_z0_a.shape),
+        "input_z0_b": list(source_z0_b.shape),
+        "output_s": list(connected_s.shape),
+        "output_z0": list(connected_z0.shape),
+    }
+    return {
+        "metadata": {
+            "case_id": case_id,
+            "input_recipe": DIRECT_CONNECT_INPUT_RECIPE,
+            "junction_ports": {
+                "a": DIRECT_CONNECT_PORT_A,
+                "b": DIRECT_CONNECT_PORT_B,
+            },
+            "numpy_version": np.__version__,
+            "operation": "connect_direct_power",
+            "port_order": {
+                "a_survivors": a_survivors,
+                "b_survivors": b_survivors,
+                "description": (
+                    "A unconnected ports in original order, followed by B "
+                    "unconnected ports in original order"
+                ),
+                "output": output_order,
+            },
+            "random_seed": DIRECT_CONNECT_RANDOM_SEED,
+            "reference_impedance": {
+                "complex": True,
+                "frequency_dependent": True,
+                "per_port": True,
+                "positive_real": True,
+                "selected_references_unequal": True,
+                "unit": "ohm",
+            },
+            "schema": "rfkit-rs.oracle.fixture",
+            "schema_version": SCHEMA_VERSION,
+            "scikit_rf_commit": EXPECTED_SCIKIT_RF_COMMIT,
+            "scikit_rf_version": skrf.__version__,
+            "shape": shape,
+            "tolerance_policy": {
+                "atol": DIRECT_CONNECT_ATOL,
+                "comparison": (
+                    "only data.s_connected is numeric output; "
+                    "abs(actual-expected) <= atol + rtol*abs(expected)"
+                ),
+                "justification": DIRECT_CONNECT_TOLERANCE_JUSTIFICATION,
+                "regeneration": (
+                    "canonical UTF-8 JSON serialization; s_connected is checked "
+                    "with the recorded numeric tolerance; source S/z0, frequency, "
+                    "survivor z0, ordering, and metadata are checked exactly"
+                ),
+                "rtol": DIRECT_CONNECT_RTOL,
+            },
+            "wave_definition": "power",
+        },
+        "data": {
+            "frequency_hz": [float(value) for value in frequency],
+            "s_a": _complex_array(source_s_a),
+            "s_b": _complex_array(source_s_b),
+            "s_connected": _complex_array(connected_s),
+            "z0_a_ohm": _complex_array(source_z0_a),
+            "z0_b_ohm": _complex_array(source_z0_b),
+            "z0_connected_ohm": _complex_array(connected_z0),
+        },
+    }
+
+
 def _terminate_impedance_fixture(np: Any, skrf: Any) -> dict[str, Any]:
     """Build the finite physical-load case through public scikit-rf APIs."""
 
@@ -5396,6 +5647,13 @@ _CASES = (
         CONNECT_CASE_ID,
         CONNECT_FIXTURE,
         _connect_matched_fixture,
+        "numeric_output",
+        "s_connected",
+    ),
+    _OracleCase(
+        DIRECT_CONNECT_CASE_ID,
+        DIRECT_CONNECT_FIXTURE,
+        _connect_direct_fixture,
         "numeric_output",
         "s_connected",
     ),
