@@ -122,6 +122,47 @@ seed `20260946` and fixture name
 metadata records operation, units, versions, and strict tolerances. The
 input is not derived from an opposite-direction fixture or a round trip.
 
+Issue #84 adds the equal-pair mixed-mode power-wave slice. The canonical
+oracle registers two small, direction-specific fixtures:
+
+- `mixed_mode_forward_five_port_complex_z0.json` is an independently authored
+  asymmetric five-port, three-frequency single-ended input with `p=2`,
+  adjacent `(0+,1-)` and `(2+,3-)` pairs, two distinct complex equal pair
+  references at each frequency, and one unpaired complex reference. Its
+  expected output is generated through pinned public `Network.se2gmm(p=2,
+  s_def="power")`.
+- `mixed_mode_inverse_five_port_complex_z0.json` has an independently seeded
+  modal S input and authored natural modal references. It is not the forward
+  fixture's output; generation calls pinned public `Network.gmm2se` with an
+  explicit adjacent `(frequency,4)` target `z0_se` array. This prevents a
+  forward-only or default-reference shortcut from certifying the inverse.
+
+Both fixtures record direction, coordinate order/polarity, pair count,
+unpaired port, source/target references, input recipes, seeds, shapes, and
+the pinned scikit-rf `2.0.1` commit
+`bd651e923cac6020de49a096e1d7e9b5f949f884` with NumPy `2.5.1`. The canonical
+checker removes only `data.s` from its exact contract projection. Thus
+metadata, frequencies, S inputs, references, target shapes, and all other
+fields must match exact canonical JSON; only floating S output uses the
+recorded `rtol=1e-12`, `atol=1e-12` bound. Python tests defend registration,
+independence, public direction-specific calls, reference relationships, and
+output/contract drift. `crates/rfkit-core/tests/oracle_mixed_mode.rs` repeats
+the strict metadata/input/reference checks and compares each public Rust
+method against its corresponding fixture S output.
+
+The end-to-end Touchstone test and executable parse an asymmetric five-port
+v1.0 S/RI/Hz input, apply explicit physical permutation `[2,0,3,1,4]`, check
+differential/common and mode-conversion responses against an independently
+written `U S U^T` sum, apply the inverse and `[1,3,0,2,4]` permutation, then
+write/read with the existing single-ended writer. The source uses common
+positive-real 50-ohm references for the format boundary. No mixed-mode
+Touchstone extension or implicit writer renormalization is involved.
+
+The Rust methods are a REWRITE of the repository's explicit coordinate and
+Kurokawa equations. Negative-real and complex references remain covered by
+core mixed-mode boundary/invariant tests, but the scikit-rf differential claim
+is limited to the pinned positive-real-compatible fixture domain.
+
 ## Reporting
 
 Eventually CI should publish a machine-generated coverage report such as:

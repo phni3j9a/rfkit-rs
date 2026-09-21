@@ -48,6 +48,7 @@ mod connection;
 mod impedance_admittance;
 mod interpolation;
 mod linalg;
+mod mixed_mode;
 mod power_wave_admittance;
 mod power_waves;
 
@@ -254,6 +255,115 @@ pub enum Error {
         "direct power-wave renormalization produced a non-finite computation at frequency {frequency}, row {row}, column {column}"
     )]
     NonFiniteDirectRenormalizationComputation {
+        frequency: usize,
+        row: usize,
+        column: usize,
+    },
+
+    #[error("{direction} mixed-mode conversion frequency axis must not be empty")]
+    EmptyMixedModeFrequency { direction: MixedModeDirection },
+
+    #[error(
+        "{direction} mixed-mode conversion frequency length does not match the S-parameter frequency dimension: expected {expected}, got {actual}"
+    )]
+    MixedModeFrequencyLengthMismatch {
+        direction: MixedModeDirection,
+        expected: usize,
+        actual: usize,
+    },
+
+    #[error("{direction} mixed-mode conversion received an invalid S-parameter shape {shape:?}")]
+    InvalidMixedModeSShape {
+        direction: MixedModeDirection,
+        shape: Vec<usize>,
+    },
+
+    #[error(
+        "{direction} mixed-mode conversion received an invalid reference-impedance shape {shape:?}"
+    )]
+    InvalidMixedModeZ0Shape {
+        direction: MixedModeDirection,
+        shape: Vec<usize>,
+    },
+
+    #[error(
+        "{direction} mixed-mode conversion pair_count must be at least one and no greater than floor(nports/2): pair_count={pair_count}, nports={nports}"
+    )]
+    MixedModePairCountOutOfRange {
+        direction: MixedModeDirection,
+        pair_count: usize,
+        nports: usize,
+    },
+
+    #[error(
+        "{direction} mixed-mode conversion received a non-finite S-parameter at frequency {frequency}, row {row}, column {column}"
+    )]
+    NonFiniteMixedModeS {
+        direction: MixedModeDirection,
+        frequency: usize,
+        row: usize,
+        column: usize,
+    },
+
+    #[error(
+        "{direction} mixed-mode conversion received a non-finite reference impedance at frequency {frequency}, port {port}"
+    )]
+    NonFiniteMixedModeZ0 {
+        direction: MixedModeDirection,
+        frequency: usize,
+        port: usize,
+    },
+
+    #[error(
+        "{direction} mixed-mode conversion has a zero-real reference impedance at frequency {frequency}, port {port}"
+    )]
+    ZeroRealMixedModeReferenceImpedance {
+        direction: MixedModeDirection,
+        frequency: usize,
+        port: usize,
+    },
+
+    #[error(
+        "{direction} mixed-mode pair {pair} has unequal single-ended references at frequency {frequency}: positive={positive:?}, negative={negative:?}"
+    )]
+    UnequalMixedModePairReferences {
+        direction: MixedModeDirection,
+        frequency: usize,
+        pair: usize,
+        positive: Complex64,
+        negative: Complex64,
+    },
+
+    #[error(
+        "{direction} mixed-mode {mode:?} reference scaling at frequency {frequency}, pair {pair} with {scaling:?} of {value:?} loses finite information or is not finite"
+    )]
+    MixedModeReferenceScalingLoss {
+        direction: MixedModeDirection,
+        frequency: usize,
+        pair: usize,
+        mode: MixedModeMode,
+        scaling: MixedModeScaling,
+        value: Complex64,
+    },
+
+    #[error(
+        "{direction} mixed-mode references at frequency {frequency}, pair {pair} are not exactly natural: differential={differential:?}, common={common:?}, zd/2={from_differential:?}, 2*zc={from_common:?}"
+    )]
+    MixedModeInverseReferenceMismatch {
+        direction: MixedModeDirection,
+        frequency: usize,
+        pair: usize,
+        differential: Complex64,
+        common: Complex64,
+        from_differential: Complex64,
+        from_common: Complex64,
+    },
+
+    #[error(
+        "{direction} mixed-mode conversion produced a non-finite computation at frequency {frequency}, row {row}, column {column}"
+    )]
+    NonFiniteMixedModeComputation {
+        direction: MixedModeDirection,
         frequency: usize,
         row: usize,
         column: usize,
@@ -687,6 +797,45 @@ impl fmt::Display for DirectRenormalizationReference {
     }
 }
 
+/// Direction of an equal-pair mixed-mode coordinate conversion.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MixedModeDirection {
+    /// Convert adjacent single-ended pairs to differential/common coordinates.
+    ToMixedMode,
+    /// Convert `[d..., c..., unpaired]` coordinates back to adjacent pairs.
+    ToSingleEnded,
+}
+
+impl fmt::Display for MixedModeDirection {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::ToMixedMode => "single-ended to mixed-mode",
+            Self::ToSingleEnded => "mixed-mode to single-ended",
+        })
+    }
+}
+
+/// Modal reference kind used in mixed-mode reference-scaling diagnostics.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MixedModeMode {
+    /// Differential mode, with natural reference `2*z`.
+    Differential,
+    /// Common mode, with natural reference `z/2`.
+    Common,
+}
+
+/// Exact scalar operation used to derive a natural modal reference.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MixedModeScaling {
+    /// Multiply a reference component by two.
+    Double,
+    /// Divide a reference component by two.
+    Half,
+}
+
 /// The crate-wide public error boundary.
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -888,6 +1037,117 @@ impl Network {
             s: output_s,
             z0: output_z0,
         })
+    }
+
+    /// Converts adjacent equal-reference single-ended pairs to differential
+    /// and common-mode coordinates using Kurokawa power waves.
+    ///
+    /// `pair_count` selects the adjacent positive/negative pairs
+    /// `(0,1), (2,3), ...`, with the first port positive.  The returned
+    /// coordinate order is `[d0, ..., d(p-1), c0, ..., c(p-1), unpaired]`,
+    /// where `p == pair_count`; ports from `2*p` onward are copied in their
+    /// original order.  Other physical pairings or polarity choices are not
+    /// inferred.  Call [`Network::permute_ports`] explicitly before this
+    /// method when a different pairing or positive-port polarity is wanted.
+    ///
+    /// For each selected pair whose equal single-ended reference is `z`, the
+    /// natural modal references are `zd = 2*z` and `zc = z/2`.  This follows
+    /// directly from the repository's Kurokawa definitions with currents into
+    /// the network: both incident and reflected modal waves are respectively
+    /// `(u-v)/sqrt(2)` and `(u+v)/sqrt(2)`.  References can vary by pair and
+    /// frequency, can be complex, and can have negative real parts.  Equality
+    /// within a pair is exact complex equality; no reference averaging,
+    /// tolerance, or hidden renormalization is applied.
+    ///
+    /// At every frequency the S-parameter transform is `Smm = U*Sse*U^T`,
+    /// where the rows of real orthogonal `U` are the difference/sum rows just
+    /// described followed by identity rows for unpaired ports.  The operation
+    /// is a coordinate transformation, not a Z/Y conversion, so singular S
+    /// matrices, ideal opens, shorts, and thru networks remain in-domain when
+    /// their finite floating-point transform remains finite.
+    ///
+    /// The method returns the existing owned [`Network`] representation.  It
+    /// does not add mode metadata: after conversion, `Network::s` and
+    /// `Network::z0` describe the declared modal coordinate order, and callers
+    /// must retain `pair_count` and the pairing/polarity convention when using
+    /// the inverse or exporting the result.  Frequencies are opaque pointwise
+    /// labels and are copied exactly; no sorting, interpolation, or frequency
+    /// restriction is introduced.  The input network and all caller-owned
+    /// arrays remain unchanged.
+    ///
+    /// Natural-reference scaling is deliberately a representability boundary.
+    /// The method rejects non-finite doubled/halved components, a nonzero
+    /// component collapsing to zero, or a scale followed by its inverse not
+    /// reproducing the original component exactly.  This prevents a later
+    /// inverse from silently inventing or losing a reference value.
+    ///
+    /// This additive operation is provisional while `rfkit-core` is in the
+    /// `0.x` series; its name and signature are not a `1.0` stability promise.
+    ///
+    /// # Errors
+    ///
+    /// Returns a structured [`enum@Error`] for empty or frequency-mismatched
+    /// serde-created data, non-square/zero-port S arrays, mismatched z0
+    /// arrays, invalid pair counts (including a huge `usize`), non-finite S or
+    /// references, zero-real references, unequal pair references, scaling
+    /// overflow/underflow/information loss, or non-finite transform arithmetic.
+    pub fn to_mixed_mode_equal_pair_power(&self, pair_count: usize) -> Result<Network> {
+        let (s, z0) = mixed_mode::to_mixed_mode_equal_pair_power(
+            self.frequency.len(),
+            &self.s,
+            &self.z0,
+            pair_count,
+        )
+        .map_err(map_mixed_mode_error)?;
+
+        Network::new(self.frequency.clone(), s, z0)
+    }
+
+    /// Converts `[d..., c..., unpaired]` equal-pair mixed-mode coordinates
+    /// back to adjacent positive/negative single-ended pairs.
+    ///
+    /// The input is interpreted explicitly as differential modes first,
+    /// followed by common modes, followed by unpaired coordinates.  For
+    /// `pair_count == p`, output ports are adjacent pairs `(0,1), (2,3), ...`
+    /// with the first member positive, followed by the unchanged unpaired
+    /// ports.  This is the exact inverse coordinate convention of
+    /// [`Network::to_mixed_mode_equal_pair_power`]; use
+    /// [`Network::permute_ports`] when the physical source ordering or
+    /// polarity differs.
+    ///
+    /// For each mode pair the input references must satisfy the natural
+    /// relationship exactly: `zd/2 == 2*zc`, with both values finite, nonzero
+    /// real, and representable without component loss.  The resulting value is
+    /// assigned to both single-ended ports.  No tolerance, reference averaging,
+    /// hidden renormalization, or 50-ohm assumption is used.  Complex and
+    /// negative-real references are supported under the same Kurokawa
+    /// `abs(Re(z0))` normalization domain.
+    ///
+    /// At every frequency the S-parameter transform is
+    /// `Sse = U^T*Smm*U`; singular S and ideal networks are valid when the
+    /// finite floating-point transform remains finite.  Frequencies are opaque
+    /// labels copied exactly.  The returned `Network` owns independent arrays,
+    /// and this method does not attach mode metadata: callers must retain the
+    /// declared coordinate order and `pair_count` themselves.
+    ///
+    /// This additive operation is provisional while `rfkit-core` is in the
+    /// `0.x` series; its name and signature are not a `1.0` stability promise.
+    ///
+    /// # Errors
+    ///
+    /// Returns a structured [`enum@Error`] for the same shape, finite-value,
+    /// zero-real, pair-count, and arithmetic domains as the forward method,
+    /// plus an exact differential/common natural-reference mismatch.
+    pub fn to_single_ended_equal_pair_power(&self, pair_count: usize) -> Result<Network> {
+        let (s, z0) = mixed_mode::to_single_ended_equal_pair_power(
+            self.frequency.len(),
+            &self.s,
+            &self.z0,
+            pair_count,
+        )
+        .map_err(map_mixed_mode_error)?;
+
+        Network::new(self.frequency.clone(), s, z0)
     }
 
     /// Constructs a scattering [`Network`] from frequency-major impedance
@@ -2236,6 +2496,129 @@ fn map_direct_renormalization_reference(
         power_waves::DirectRenormalizationReference::Target => {
             DirectRenormalizationReference::Target
         }
+    }
+}
+
+fn map_mixed_mode_error(error: mixed_mode::MixedModeError) -> Error {
+    match error {
+        mixed_mode::MixedModeError::EmptyFrequency { direction } => {
+            Error::EmptyMixedModeFrequency { direction }
+        }
+        mixed_mode::MixedModeError::FrequencyLengthMismatch {
+            direction,
+            expected,
+            actual,
+        } => Error::MixedModeFrequencyLengthMismatch {
+            direction,
+            expected,
+            actual,
+        },
+        mixed_mode::MixedModeError::InvalidSShape { direction, shape } => {
+            Error::InvalidMixedModeSShape {
+                direction,
+                shape: vec![shape.0, shape.1, shape.2],
+            }
+        }
+        mixed_mode::MixedModeError::InvalidZ0Shape { direction, shape } => {
+            Error::InvalidMixedModeZ0Shape {
+                direction,
+                shape: vec![shape.0, shape.1],
+            }
+        }
+        mixed_mode::MixedModeError::PairCountOutOfRange {
+            direction,
+            pair_count,
+            nports,
+        } => Error::MixedModePairCountOutOfRange {
+            direction,
+            pair_count,
+            nports,
+        },
+        mixed_mode::MixedModeError::NonFiniteS {
+            direction,
+            frequency,
+            row,
+            column,
+        } => Error::NonFiniteMixedModeS {
+            direction,
+            frequency,
+            row,
+            column,
+        },
+        mixed_mode::MixedModeError::NonFiniteZ0 {
+            direction,
+            frequency,
+            port,
+        } => Error::NonFiniteMixedModeZ0 {
+            direction,
+            frequency,
+            port,
+        },
+        mixed_mode::MixedModeError::ZeroRealReferenceImpedance {
+            direction,
+            frequency,
+            port,
+        } => Error::ZeroRealMixedModeReferenceImpedance {
+            direction,
+            frequency,
+            port,
+        },
+        mixed_mode::MixedModeError::UnequalPairReferences {
+            direction,
+            frequency,
+            pair,
+            positive,
+            negative,
+        } => Error::UnequalMixedModePairReferences {
+            direction,
+            frequency,
+            pair,
+            positive,
+            negative,
+        },
+        mixed_mode::MixedModeError::ReferenceScalingLoss {
+            direction,
+            frequency,
+            pair,
+            mode,
+            scaling,
+            value,
+        } => Error::MixedModeReferenceScalingLoss {
+            direction,
+            frequency,
+            pair,
+            mode,
+            scaling,
+            value,
+        },
+        mixed_mode::MixedModeError::InverseReferenceMismatch {
+            direction,
+            frequency,
+            pair,
+            differential,
+            common,
+            from_differential,
+            from_common,
+        } => Error::MixedModeInverseReferenceMismatch {
+            direction,
+            frequency,
+            pair,
+            differential,
+            common,
+            from_differential,
+            from_common,
+        },
+        mixed_mode::MixedModeError::NonFiniteComputation {
+            direction,
+            frequency,
+            row,
+            column,
+        } => Error::NonFiniteMixedModeComputation {
+            direction,
+            frequency,
+            row,
+            column,
+        },
     }
 }
 

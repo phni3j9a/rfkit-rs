@@ -71,6 +71,19 @@ exactly matched after interpolation, while surviving-port z0 values are
 complex and frequency-dependent. The fixture records the target grid,
 source inputs, survivor order, and SciPy version exactly; only connected S and
 z0 outputs use numeric tolerances.
+Two equal-pair mixed-mode cases are also registered. The forward fixture is an
+independently authored asymmetric five-port, three-frequency input with
+`p=2`, adjacent `(0+,1-)` and `(2+,3-)` pairs, two distinct complex equal
+pair references at every frequency, and one unpaired complex reference. Its
+expected output is generated through public
+`Network.se2gmm(p=2, s_def="power")`. The inverse fixture is independently
+seeded and authored in modal coordinates; it is not forward output and calls
+public `Network.gmm2se(p=2, z0_se=..., s_def="power")` with an explicit
+adjacent target reference array. Both fixtures record coordinate order,
+polarity, pair count, source/target references, recipes, versions/commit,
+shapes, and strict output tolerance. Only floating S output is tolerant;
+metadata, inputs, frequencies, and references are exact canonical contract
+fields.
 
 ## Clean-checkout setup
 
@@ -113,7 +126,7 @@ checker.
 
 ## Generate and verify
 
-The harness has thirty-seven registered canonical cases. The original three cases
+The harness has thirty-nine registered canonical cases. The original three cases
 remain unchanged:
 
 - `three_port_complex_z0` — the representative four-frequency, three-port
@@ -135,6 +148,20 @@ The Touchstone v1.0 ingress case is:
   input recipe (no random seed). Expected frequency/S/z0 values are read
   through the pinned public `skrf.io.touchstone.Touchstone` parser; the text
   and explicit port count remain exact contract fields.
+
+The mixed-mode cases are:
+
+- `mixed_mode_forward_five_port_complex_z0` — independent single-ended input,
+  `se2gmm` output in `[d0,d1,c0,c1,se4]` order, and natural modal references
+  `2*z_pair` / `z_pair/2`.
+- `mixed_mode_inverse_five_port_complex_z0` — independent mixed-coordinate
+  input, explicit adjacent target `z0_se`, and `gmm2se` output in
+  `[se0,se1,se2,se3,se4]` order. Its input is not derived from the forward
+  fixture.
+
+The Rust checker validates metadata, coordinate/polarity, input arrays, exact
+references and shapes before comparing each public Rust method's S output under
+the fixture's `rtol=1e-12`, `atol=1e-12` policy.
 
 The additional interpolation case is:
 
