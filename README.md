@@ -300,6 +300,59 @@ Run the complete deterministic workflow example with:
 cargo run -p rfkit-touchstone --example permute_ports_touchstone
 ```
 
+## Convert pair-adjacent ports to mixed mode
+
+The provisional power-wave mixed-mode slice adds two borrowing, owned-result
+methods:
+
+```rust
+let mixed = pair_ordered.to_mixed_mode_equal_pair_power(2)?;
+let single_ended = mixed.to_single_ended_equal_pair_power(2)?;
+```
+
+`pair_count = p` selects adjacent positive/negative pairs `(0,1)`, `(2,3)`,
+and so on; the first member is positive. The forward output layout is
+`[d0..d(p-1), c0..c(p-1), unpaired...]`, and the inverse requires that same
+declared layout. The transform is the real orthogonal `U` with rows
+`(u-v)/sqrt(2)` and `(u+v)/sqrt(2)`, so `S_mm = U S_se U^T` and
+`S_se = U^T S_mm U`. Use `permute_ports` first when the physical measurement
+order is different or a pair polarity must be reversed; no pair map is inferred.
+
+For each pair the two single-ended references must be exactly equal finite
+complex values with a non-zero real part. The natural modal references are
+`zd = 2*z` and `zc = z/2`; references may differ between pairs and frequency
+samples. Unpaired references are copied unchanged, including complex or
+negative-real values under the existing `abs(Re(z0))` power-wave extension.
+The methods preserve opaque frequency labels and do not sort, interpolate,
+renormalize, or invert `S`; singular S is valid. Invalid shapes, pair counts,
+non-finite values, zero-real references, unequal pair references, and
+unrepresentable doubling/halving are reported through the structured core
+error boundary.
+
+`Network` carries no mode metadata. After conversion, its ordinary `s()` and
+`z0()` accessors describe the caller-declared modal coordinates; a later
+inverse call must supply the matching `pair_count`. Touchstone remains a
+single-ended v1.0 format boundary: restore single-ended coordinates and a
+common positive-real reference before using the existing writer. The complete
+ingress → physical permutation → mixed-mode analysis → inverse → writer/read
+workflow is executable with:
+
+```text
+cargo run -p rfkit-touchstone --example mixed_mode_touchstone
+```
+
+This additive API is a Yellow, reversible 0.x decision. Alternatives such as
+arbitrary pair-map types, a new mode-aware `Network`, generalized unequal-pair
+reference transforms, private-only math, or fixed 50-ohm formulas were
+considered. The selected bounded contract makes pair order, polarity,
+reference relationship, and coordinate interpretation visible at the call
+site while retaining the owned canonical model and a cheap inverse. Removing
+the two methods, tests, fixtures, and documentation during 0.x requires no
+stored-data migration; a future mode-aware type can adapt the documented
+layout. The oracle uses independently authored five-port forward and inverse
+fixtures generated through pinned public scikit-rf 2.0.1 APIs, not copied
+instrument material or a broad scikit-rf compatibility claim.
+
 ## Repository layout
 
 ```text

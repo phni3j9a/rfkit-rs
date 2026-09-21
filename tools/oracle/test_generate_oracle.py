@@ -711,6 +711,185 @@ class PortPermutationRegistrationAndCheckerTests(unittest.TestCase):
             self.assertEqual(oracle._check_fixture(path, expected), 1)
 
 
+MIXED_MODE_CASE_SPECS = {
+    oracle.MIXED_MODE_FORWARD_CASE_ID: {
+        "direction": "single_ended_to_mixed_mode",
+        "operation": "network_se2gmm_power",
+        "seed": oracle.MIXED_MODE_FORWARD_RANDOM_SEED,
+        "input_order": ["se0", "se1", "se2", "se3", "se4"],
+        "output_order": ["d0", "d1", "c0", "c1", "se4"],
+    },
+    oracle.MIXED_MODE_INVERSE_CASE_ID: {
+        "direction": "mixed_mode_to_single_ended",
+        "operation": "network_gmm2se_power",
+        "seed": oracle.MIXED_MODE_INVERSE_RANDOM_SEED,
+        "input_order": ["d0", "d1", "c0", "c1", "se4"],
+        "output_order": ["se0", "se1", "se2", "se3", "se4"],
+    },
+}
+
+
+class MixedModeRegistrationAndCheckerTests(unittest.TestCase):
+    """Protect the two-direction mixed-mode oracle contract."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.np, cls.skrf = oracle._load_dependencies()
+        cls.registered = {case.case_id: case for case in oracle._CASES}
+        cls.fixtures = {
+            case_id: oracle._read_canonical_json(case.path)
+            for case_id, case in cls.registered.items()
+            if case_id in MIXED_MODE_CASE_SPECS
+        }
+
+    def test_cases_are_registered_with_strict_metadata_and_only_s_tolerance(self) -> None:
+        self.assertEqual(set(MIXED_MODE_CASE_SPECS), {
+            oracle.MIXED_MODE_FORWARD_CASE_ID,
+            oracle.MIXED_MODE_INVERSE_CASE_ID,
+        })
+        for case_id, spec in MIXED_MODE_CASE_SPECS.items():
+            with self.subTest(case_id=case_id):
+                case = self.registered[case_id]
+                self.assertEqual(case.path, getattr(oracle, "MIXED_MODE_" + ("FORWARD" if "forward" in case_id else "INVERSE") + "_FIXTURE"))
+                self.assertEqual(case.comparison, "numeric_output")
+                self.assertEqual(case.numeric_output_key, "s")
+                fixture = self.fixtures[case_id]
+                metadata = fixture["metadata"]
+                self.assertEqual(metadata["case_id"], case_id)
+                self.assertEqual(metadata["direction"], spec["direction"])
+                self.assertEqual(metadata["operation"], spec["operation"])
+                self.assertEqual(metadata["random_seed"], spec["seed"])
+                self.assertEqual(metadata["numpy_version"], oracle.EXPECTED_NUMPY_VERSION)
+                self.assertEqual(metadata["scikit_rf_version"], oracle.EXPECTED_SCIKIT_RF_VERSION)
+                self.assertEqual(metadata["scikit_rf_commit"], oracle.EXPECTED_SCIKIT_RF_COMMIT)
+                self.assertEqual(metadata["pair_count"], oracle.MIXED_MODE_PAIR_COUNT)
+                self.assertEqual(metadata["coordinate_order"]["input"], spec["input_order"])
+                self.assertEqual(metadata["coordinate_order"]["output"], spec["output_order"])
+                self.assertEqual(metadata["pairing"]["pairs"], [
+                    {"negative": 1, "positive": 0},
+                    {"negative": 3, "positive": 2},
+                ])
+                self.assertEqual(metadata["pairing"]["unpaired_ports"], [4])
+                self.assertEqual(metadata["shape"]["frequency"], [3])
+                self.assertEqual(metadata["shape"]["input_s"], [3, 5, 5])
+                self.assertEqual(metadata["shape"]["output_s"], [3, 5, 5])
+                self.assertEqual(metadata["tolerance_policy"]["rtol"], oracle.MIXED_MODE_RTOL)
+                self.assertEqual(metadata["tolerance_policy"]["atol"], oracle.MIXED_MODE_ATOL)
+                self.assertIn("only data.s is numeric output", metadata["tolerance_policy"]["comparison"])
+
+    def test_forward_has_two_distinct_equal_complex_pairs_and_unpaired_reference(self) -> None:
+        fixture = self.fixtures[oracle.MIXED_MODE_FORWARD_CASE_ID]
+        data = fixture["data"]
+        source_z0 = data["z0_source_ohm"]
+        target_z0 = data["z0_target_ohm"]
+        self.assertTrue(all(source_z0[f][0] == source_z0[f][1] for f in range(3)))
+        self.assertTrue(all(source_z0[f][2] == source_z0[f][3] for f in range(3)))
+        self.assertTrue(any(source_z0[f][0] != source_z0[f][2] for f in range(3)))
+        self.assertTrue(any(value["imag"] != 0.0 for row in source_z0 for value in row))
+        for frequency in range(3):
+            self.assertEqual(target_z0[frequency][0], {
+                "real": 2.0 * source_z0[frequency][0]["real"],
+                "imag": 2.0 * source_z0[frequency][0]["imag"],
+            })
+            self.assertEqual(target_z0[frequency][1], {
+                "real": 2.0 * source_z0[frequency][2]["real"],
+                "imag": 2.0 * source_z0[frequency][2]["imag"],
+            })
+            self.assertEqual(target_z0[frequency][2], {
+                "real": 0.5 * source_z0[frequency][0]["real"],
+                "imag": 0.5 * source_z0[frequency][0]["imag"],
+            })
+            self.assertEqual(target_z0[frequency][3], {
+                "real": 0.5 * source_z0[frequency][2]["real"],
+                "imag": 0.5 * source_z0[frequency][2]["imag"],
+            })
+            self.assertEqual(target_z0[frequency][4], source_z0[frequency][4])
+        self.assertNotEqual(data["s_input"], data["s"])
+
+    def test_inverse_is_independent_and_records_explicit_adjacent_target(self) -> None:
+        forward = self.fixtures[oracle.MIXED_MODE_FORWARD_CASE_ID]
+        inverse = self.fixtures[oracle.MIXED_MODE_INVERSE_CASE_ID]
+        self.assertNotEqual(
+            forward["metadata"]["random_seed"], inverse["metadata"]["random_seed"]
+        )
+        self.assertNotEqual(forward["data"]["s_input"], inverse["data"]["s_input"])
+        target = inverse["data"]["z0_se_target_ohm"]
+        self.assertEqual(inverse["metadata"]["shape"]["target_z0_se"], [3, 4])
+        self.assertTrue(all(target[f][0] == target[f][1] for f in range(3)))
+        self.assertTrue(all(target[f][2] == target[f][3] for f in range(3)))
+        modal = inverse["data"]["z0_source_ohm"]
+        for frequency in range(3):
+            self.assertEqual(modal[frequency][0], {
+                "real": 2.0 * target[frequency][0]["real"],
+                "imag": 2.0 * target[frequency][0]["imag"],
+            })
+            self.assertEqual(modal[frequency][1], {
+                "real": 2.0 * target[frequency][2]["real"],
+                "imag": 2.0 * target[frequency][2]["imag"],
+            })
+        self.assertIn("explicit", inverse["metadata"]["input_recipe"])
+        self.assertIn("no forward output is reused", inverse["metadata"]["input_recipe"])
+
+    def test_builders_call_the_pinned_public_direction_specific_methods(self) -> None:
+        forward_case = self.registered[oracle.MIXED_MODE_FORWARD_CASE_ID]
+        with mock.patch.object(
+            self.skrf.Network,
+            "se2gmm",
+            autospec=True,
+            side_effect=self.skrf.Network.se2gmm,
+        ) as se2gmm:
+            forward_case.builder(self.np, self.skrf)
+        self.assertEqual(se2gmm.call_count, 1)
+        self.assertEqual(se2gmm.call_args.args[1], oracle.MIXED_MODE_PAIR_COUNT)
+        self.assertEqual(se2gmm.call_args.kwargs["s_def"], "power")
+
+        inverse_case = self.registered[oracle.MIXED_MODE_INVERSE_CASE_ID]
+        with mock.patch.object(
+            self.skrf.Network,
+            "gmm2se",
+            autospec=True,
+            side_effect=self.skrf.Network.gmm2se,
+        ) as gmm2se:
+            inverse_case.builder(self.np, self.skrf)
+        self.assertEqual(gmm2se.call_count, 1)
+        self.assertEqual(gmm2se.call_args.args[1], oracle.MIXED_MODE_PAIR_COUNT)
+        self.assertEqual(gmm2se.call_args.kwargs["s_def"], "power")
+        self.assertEqual(gmm2se.call_args.kwargs["z0_se"].shape, (3, 4))
+
+    def test_checker_tolerates_only_s_output_and_rejects_contract_drift(self) -> None:
+        case = self.registered[oracle.MIXED_MODE_FORWARD_CASE_ID]
+        fixture = self.fixtures[case.case_id]
+        adjusted = copy.deepcopy(fixture)
+        adjusted["data"]["s"][0][0][0]["real"] += 1e-13
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / case.path.name
+            path.write_bytes(oracle._canonical_bytes(adjusted))
+            self.assertEqual(
+                oracle._check_numeric_fixture(path, fixture, "s"),
+                0,
+            )
+
+        changed_reference = copy.deepcopy(fixture)
+        changed_reference["data"]["z0_target_ohm"][0][0]["real"] += 1e-13
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / case.path.name
+            path.write_bytes(oracle._canonical_bytes(changed_reference))
+            self.assertEqual(
+                oracle._check_numeric_fixture(path, fixture, "s"),
+                1,
+            )
+
+        changed_metadata = copy.deepcopy(fixture)
+        changed_metadata["metadata"]["pair_count"] = 1
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / case.path.name
+            path.write_bytes(oracle._canonical_bytes(changed_metadata))
+            self.assertEqual(
+                oracle._check_numeric_fixture(path, fixture, "s"),
+                1,
+            )
+
+
 class TouchstoneRegistrationAndCheckerTests(unittest.TestCase):
     """Protect the pinned Touchstone v1.0 parser fixture contract."""
 
@@ -1177,6 +1356,7 @@ class MatrixRegistrationAndCheckerTests(unittest.TestCase):
             len(registered),
             3
             + len(PORT_PERMUTATION_CASE_SPECS)
+            + len(MIXED_MODE_CASE_SPECS)
             + len(INTERPOLATION_CASE_SPECS)
             + len(MATRIX_CASE_SPECS)
             + len(RENORMALIZATION_CASE_SPECS)

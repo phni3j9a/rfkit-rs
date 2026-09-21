@@ -34,6 +34,11 @@ delegates the interpolation numerics to it.
 The port-permutation fixture uses the public ``Network.renumbered`` operation
 with a non-involutive three-port order and compares frequency, S, and z0 by
 exact copy because the operation only reindexes values.
+The mixed-mode fixtures use two independently authored asymmetric five-port
+inputs: the forward case calls public ``Network.se2gmm`` and the inverse case
+calls public ``Network.gmm2se`` with an explicit adjacent ``z0_se`` target.
+Only floating S outputs are numeric-tolerance fields; metadata, shapes,
+frequencies, inputs, and references remain exact canonical contract data.
 """
 
 from __future__ import annotations
@@ -569,6 +574,65 @@ PORT_PERMUTATION_TOLERANCE_COMPARISON = (
     "exact canonical UTF-8 JSON bytes; frequency, S, and z0 are pure reindexing "
     "outputs and are copied exactly"
 )
+
+# Mixed-mode conversion is kept as two small, direction-specific fixtures.  The
+# input arrays are authored independently for each direction: the inverse case
+# does not reuse the forward output.  This is important because a forward
+# fixture followed immediately by ``gmm2se`` would only certify a paired
+# implementation path rather than the public inverse operation.
+MIXED_MODE_FORWARD_FIXTURE = (
+    Path(__file__).resolve().parent
+    / "fixtures"
+    / "mixed_mode_forward_five_port_complex_z0.json"
+)
+MIXED_MODE_INVERSE_FIXTURE = (
+    Path(__file__).resolve().parent
+    / "fixtures"
+    / "mixed_mode_inverse_five_port_complex_z0.json"
+)
+MIXED_MODE_FORWARD_CASE_ID = "mixed_mode_forward_five_port_complex_z0"
+MIXED_MODE_INVERSE_CASE_ID = "mixed_mode_inverse_five_port_complex_z0"
+MIXED_MODE_FORWARD_RANDOM_SEED = 20_260_948
+MIXED_MODE_INVERSE_RANDOM_SEED = 20_260_949
+MIXED_MODE_NFREQ = 3
+MIXED_MODE_NPORTS = 5
+MIXED_MODE_PAIR_COUNT = 2
+MIXED_MODE_RTOL = 1e-12
+MIXED_MODE_ATOL = 1e-12
+MIXED_MODE_TOLERANCE_JUSTIFICATION = (
+    "Strict binary64 mixed tolerance for a deterministic asymmetric five-port, "
+    "three-frequency power-wave transform.  The transform is orthogonal and "
+    "well-conditioned; only the floating S output is tolerant.  Frequencies, "
+    "input/output references, recipes, coordinate metadata, and shapes are "
+    "checked as exact canonical contract fields."
+)
+MIXED_MODE_FORWARD_INPUT_RECIPE = (
+    "independent local NumPy default_rng input with a non-symmetric complex "
+    "five-port S stack; adjacent pairs (0+,1-) and (2+,3-) have two distinct "
+    "complex equal references at every frequency and port 4 is an unpaired "
+    "complex reference; no inverse fixture data is reused"
+)
+MIXED_MODE_INVERSE_INPUT_RECIPE = (
+    "independent local NumPy default_rng mixed-coordinate input with a "
+    "non-symmetric complex five-port S stack; modal references are authored as "
+    "(2z_pair,z_pair/2) for adjacent pairs and gmm2se receives an explicit "
+    "(frequency,4) target z0_se array; no forward output is reused"
+)
+MIXED_MODE_COORDINATE_ORDER_INPUT = (
+    "se0",
+    "se1",
+    "se2",
+    "se3",
+    "se4",
+)
+MIXED_MODE_COORDINATE_ORDER_OUTPUT = (
+    "d0",
+    "d1",
+    "c0",
+    "c1",
+    "se4",
+)
+MIXED_MODE_PAIR_POLARITY = "positive_then_negative; (0+,1-) and (2+,3-)"
 
 
 class _OracleCase(NamedTuple):
@@ -2055,6 +2119,320 @@ def _port_permutation_fixture(np: Any, skrf: Any) -> dict[str, Any]:
             "s_input": _complex_array(network_s),
             "z0_input_ohm": _complex_array(network_z0),
             "z0_ohm": _complex_array(permuted_z0),
+        },
+    }
+
+
+def _mixed_mode_forward_inputs(np: Any) -> tuple[Any, Any, Any]:
+    """Build an independently authored five-port single-ended input."""
+
+    frequency_hz = np.array(
+        [0.91e9, 1.73e9, 2.57e9],
+        dtype=np.float64,
+    )
+    rng = np.random.default_rng(MIXED_MODE_FORWARD_RANDOM_SEED)
+    source_s = (
+        rng.normal(
+            loc=0.0,
+            scale=0.041,
+            size=(MIXED_MODE_NFREQ, MIXED_MODE_NPORTS, MIXED_MODE_NPORTS),
+        )
+        + 1j
+        * rng.normal(
+            loc=0.0,
+            scale=0.037,
+            size=(MIXED_MODE_NFREQ, MIXED_MODE_NPORTS, MIXED_MODE_NPORTS),
+        )
+    ).astype(np.complex128)
+    for frequency in range(MIXED_MODE_NFREQ):
+        for port in range(MIXED_MODE_NPORTS):
+            source_s[frequency, port, port] += complex(
+                0.12 + 0.017 * frequency + 0.009 * port,
+                -0.031 + 0.011 * frequency - 0.006 * port,
+            )
+
+    pair_zero = np.asarray(
+        [41.5 + 1.75j, 44.0 + 2.0j, 46.5 + 2.25j],
+        dtype=np.complex128,
+    )
+    pair_one = np.asarray(
+        [67.25 - 2.5j, 70.0 - 2.75j, 72.75 - 3.0j],
+        dtype=np.complex128,
+    )
+    unpaired = np.asarray(
+        [89.0 + 4.0j, 91.5 + 4.5j, 94.0 + 5.0j],
+        dtype=np.complex128,
+    )
+    source_z0 = np.empty((MIXED_MODE_NFREQ, MIXED_MODE_NPORTS), dtype=np.complex128)
+    source_z0[:, 0] = pair_zero
+    source_z0[:, 1] = pair_zero
+    source_z0[:, 2] = pair_one
+    source_z0[:, 3] = pair_one
+    source_z0[:, 4] = unpaired
+
+    if not np.isfinite(source_s).all() or not np.isfinite(source_z0).all():
+        raise ValueError("mixed-mode forward inputs must be finite")
+    _assert_non_symmetric(np, source_s, name="mixed-mode forward S input")
+    if not np.array_equal(source_z0[:, 0], source_z0[:, 1]):
+        raise ValueError("mixed-mode forward pair 0 references must be exactly equal")
+    if not np.array_equal(source_z0[:, 2], source_z0[:, 3]):
+        raise ValueError("mixed-mode forward pair 1 references must be exactly equal")
+    if np.array_equal(source_z0[:, 0], source_z0[:, 2]):
+        raise ValueError("mixed-mode forward pair references must be distinct")
+    return frequency_hz, source_s, source_z0
+
+
+def _mixed_mode_inverse_inputs(np: Any) -> tuple[Any, Any, Any, Any]:
+    """Build an independently authored mixed-coordinate inverse input.
+
+    The modal S stack uses a separate seed and is never obtained by calling
+    ``se2gmm`` on the forward fixture.  The explicit target array is exactly
+    the adjacent single-ended part passed to scikit-rf ``gmm2se``.
+    """
+
+    frequency_hz = np.array(
+        [1.07e9, 1.89e9, 2.83e9],
+        dtype=np.float64,
+    )
+    rng = np.random.default_rng(MIXED_MODE_INVERSE_RANDOM_SEED)
+    modal_s = (
+        rng.normal(
+            loc=0.0,
+            scale=0.036,
+            size=(MIXED_MODE_NFREQ, MIXED_MODE_NPORTS, MIXED_MODE_NPORTS),
+        )
+        + 1j
+        * rng.normal(
+            loc=0.0,
+            scale=0.043,
+            size=(MIXED_MODE_NFREQ, MIXED_MODE_NPORTS, MIXED_MODE_NPORTS),
+        )
+    ).astype(np.complex128)
+    for frequency in range(MIXED_MODE_NFREQ):
+        for port in range(MIXED_MODE_NPORTS):
+            modal_s[frequency, port, port] += complex(
+                0.095 + 0.013 * frequency + 0.007 * port,
+                0.022 - 0.008 * frequency + 0.005 * port,
+            )
+
+    pair_zero = np.asarray(
+        [43.25 + 1.25j, 47.0 + 1.75j, 50.75 + 2.25j],
+        dtype=np.complex128,
+    )
+    pair_one = np.asarray(
+        [71.5 - 2.25j, 75.25 - 2.75j, 79.0 - 3.25j],
+        dtype=np.complex128,
+    )
+    unpaired = np.asarray(
+        [93.5 + 5.5j, 97.25 + 6.0j, 101.0 + 6.5j],
+        dtype=np.complex128,
+    )
+    target_z0_se = np.empty((MIXED_MODE_NFREQ, 2 * MIXED_MODE_PAIR_COUNT), dtype=np.complex128)
+    target_z0_se[:, 0] = pair_zero
+    target_z0_se[:, 1] = pair_zero
+    target_z0_se[:, 2] = pair_one
+    target_z0_se[:, 3] = pair_one
+
+    modal_z0 = np.empty((MIXED_MODE_NFREQ, MIXED_MODE_NPORTS), dtype=np.complex128)
+    modal_z0[:, 0] = 2.0 * pair_zero
+    modal_z0[:, 1] = 2.0 * pair_one
+    modal_z0[:, 2] = 0.5 * pair_zero
+    modal_z0[:, 3] = 0.5 * pair_one
+    modal_z0[:, 4] = unpaired
+
+    if (
+        not np.isfinite(modal_s).all()
+        or not np.isfinite(modal_z0).all()
+        or not np.isfinite(target_z0_se).all()
+    ):
+        raise ValueError("mixed-mode inverse inputs must be finite")
+    _assert_non_symmetric(np, modal_s, name="mixed-mode inverse S input")
+    return frequency_hz, modal_s, modal_z0, target_z0_se
+
+
+def _mixed_mode_metadata(
+    *,
+    case_id: str,
+    operation: str,
+    direction: str,
+    random_seed: int,
+    input_recipe: str,
+    input_z0_label: str,
+    output_z0_label: str,
+    input_shape: list[int],
+    output_shape: list[int],
+    target_z0_se_shape: list[int] | None = None,
+) -> dict[str, Any]:
+    """Return the shared strict mixed-mode fixture metadata contract."""
+
+    shape: dict[str, list[int]] = {
+        "frequency": [MIXED_MODE_NFREQ],
+        "input_s": input_shape,
+        "input_z0": [MIXED_MODE_NFREQ, MIXED_MODE_NPORTS],
+        "output_s": output_shape,
+        "output_z0": [MIXED_MODE_NFREQ, MIXED_MODE_NPORTS],
+    }
+    if target_z0_se_shape is not None:
+        shape["target_z0_se"] = target_z0_se_shape
+
+    return {
+        "case_id": case_id,
+        "coordinate_order": {
+            "input": list(MIXED_MODE_COORDINATE_ORDER_INPUT)
+            if direction == "single_ended_to_mixed_mode"
+            else list(MIXED_MODE_COORDINATE_ORDER_OUTPUT),
+            "output": list(MIXED_MODE_COORDINATE_ORDER_OUTPUT)
+            if direction == "single_ended_to_mixed_mode"
+            else list(MIXED_MODE_COORDINATE_ORDER_INPUT),
+        },
+        "direction": direction,
+        "input_recipe": input_recipe,
+        "numpy_version": EXPECTED_NUMPY_VERSION,
+        "operation": operation,
+        "pair_count": MIXED_MODE_PAIR_COUNT,
+        "pairing": {
+            "pairs": [
+                {"negative": 1, "positive": 0},
+                {"negative": 3, "positive": 2},
+            ],
+            "polarity": MIXED_MODE_PAIR_POLARITY,
+            "unpaired_ports": [4],
+        },
+        "random_seed": random_seed,
+        "reference_impedance": {
+            "natural_modal_relationship": "d=2*z_pair; c=z_pair/2",
+            "output": {
+                "complex": True,
+                "frequency_dependent": True,
+                "per_port": True,
+                "unit": "ohm",
+            },
+            "source": {
+                "complex": True,
+                "frequency_dependent": True,
+                "per_port": True,
+                "unit": "ohm",
+            },
+            "source_field": input_z0_label,
+            "target_field": output_z0_label,
+        },
+        "schema": "rfkit-rs.oracle.fixture",
+        "schema_version": SCHEMA_VERSION,
+        "scikit_rf_commit": EXPECTED_SCIKIT_RF_COMMIT,
+        "scikit_rf_version": EXPECTED_SCIKIT_RF_VERSION,
+        "shape": shape,
+        "tolerance_policy": {
+            "atol": MIXED_MODE_ATOL,
+            "comparison": "abs(actual-expected) <= atol + rtol*abs(expected); only data.s is numeric output",
+            "justification": MIXED_MODE_TOLERANCE_JUSTIFICATION,
+            "regeneration": (
+                "canonical UTF-8 JSON serialization; metadata, shapes, frequencies, "
+                "inputs, and references are exact contract fields"
+            ),
+            "rtol": MIXED_MODE_RTOL,
+        },
+        "wave_definition": "power",
+    }
+
+
+def _mixed_mode_forward_fixture(np: Any, skrf: Any) -> dict[str, Any]:
+    """Build the forward fixture through public ``Network.se2gmm``."""
+
+    frequency_hz, source_s, source_z0 = _mixed_mode_forward_inputs(np)
+    network = skrf.Network(
+        f=frequency_hz,
+        s=source_s,
+        z0=source_z0,
+        s_def="power",
+        name=MIXED_MODE_FORWARD_CASE_ID,
+    )
+    transformed = network.copy()
+    transformed.se2gmm(MIXED_MODE_PAIR_COUNT, s_def="power")
+    output_s = np.asarray(transformed.s, dtype=np.complex128)
+    output_z0 = np.asarray(transformed.z0, dtype=np.complex128)
+    expected_z0 = np.empty_like(source_z0)
+    expected_z0[:, 0] = 2.0 * source_z0[:, 0]
+    expected_z0[:, 1] = 2.0 * source_z0[:, 2]
+    expected_z0[:, 2] = 0.5 * source_z0[:, 0]
+    expected_z0[:, 3] = 0.5 * source_z0[:, 2]
+    expected_z0[:, 4] = source_z0[:, 4]
+    if not np.array_equal(output_z0, expected_z0):
+        raise ValueError("scikit-rf mixed-mode forward references differ from natural references")
+    if output_s.shape != (MIXED_MODE_NFREQ, MIXED_MODE_NPORTS, MIXED_MODE_NPORTS):
+        raise ValueError(f"unexpected mixed-mode forward S shape: {output_s.shape}")
+
+    metadata = _mixed_mode_metadata(
+        case_id=MIXED_MODE_FORWARD_CASE_ID,
+        operation="network_se2gmm_power",
+        direction="single_ended_to_mixed_mode",
+        random_seed=MIXED_MODE_FORWARD_RANDOM_SEED,
+        input_recipe=MIXED_MODE_FORWARD_INPUT_RECIPE,
+        input_z0_label="z0_source_ohm",
+        output_z0_label="z0_target_ohm",
+        input_shape=list(source_s.shape),
+        output_shape=list(output_s.shape),
+    )
+    return {
+        "metadata": metadata,
+        "data": {
+            "frequency_hz": [float(value) for value in frequency_hz],
+            "s": _complex_array(output_s),
+            "s_input": _complex_array(source_s),
+            "z0_source_ohm": _complex_array(source_z0),
+            "z0_target_ohm": _complex_array(output_z0),
+        },
+    }
+
+
+def _mixed_mode_inverse_fixture(np: Any, skrf: Any) -> dict[str, Any]:
+    """Build the inverse fixture through public ``Network.gmm2se``."""
+
+    frequency_hz, modal_s, modal_z0, target_z0_se = _mixed_mode_inverse_inputs(np)
+    network = skrf.Network(
+        f=frequency_hz,
+        s=modal_s,
+        z0=modal_z0,
+        s_def="power",
+        name=MIXED_MODE_INVERSE_CASE_ID,
+    )
+    transformed = network.copy()
+    # The target is intentionally explicit and contains only the adjacent
+    # single-ended ports.  scikit-rf copies the unpaired port from the modal
+    # network; that value is authored to match target_z0_se's contract.
+    transformed.gmm2se(
+        MIXED_MODE_PAIR_COUNT,
+        z0_se=target_z0_se,
+        s_def="power",
+    )
+    output_s = np.asarray(transformed.s, dtype=np.complex128)
+    output_z0 = np.asarray(transformed.z0, dtype=np.complex128)
+    expected_z0 = np.column_stack((target_z0_se, modal_z0[:, 4]))
+    if not np.array_equal(output_z0, expected_z0):
+        raise ValueError("scikit-rf mixed-mode inverse references differ from explicit target")
+    if output_s.shape != (MIXED_MODE_NFREQ, MIXED_MODE_NPORTS, MIXED_MODE_NPORTS):
+        raise ValueError(f"unexpected mixed-mode inverse S shape: {output_s.shape}")
+
+    metadata = _mixed_mode_metadata(
+        case_id=MIXED_MODE_INVERSE_CASE_ID,
+        operation="network_gmm2se_power",
+        direction="mixed_mode_to_single_ended",
+        random_seed=MIXED_MODE_INVERSE_RANDOM_SEED,
+        input_recipe=MIXED_MODE_INVERSE_INPUT_RECIPE,
+        input_z0_label="z0_source_ohm",
+        output_z0_label="z0_target_ohm",
+        input_shape=list(modal_s.shape),
+        output_shape=list(output_s.shape),
+        target_z0_se_shape=list(target_z0_se.shape),
+    )
+    return {
+        "metadata": metadata,
+        "data": {
+            "frequency_hz": [float(value) for value in frequency_hz],
+            "s": _complex_array(output_s),
+            "s_input": _complex_array(modal_s),
+            "z0_se_target_ohm": _complex_array(target_z0_se),
+            "z0_source_ohm": _complex_array(modal_z0),
+            "z0_target_ohm": _complex_array(output_z0),
         },
     }
 
@@ -4764,6 +5142,20 @@ _CASES = (
         PORT_PERMUTATION_FIXTURE,
         _port_permutation_fixture,
         "exact",
+    ),
+    _OracleCase(
+        MIXED_MODE_FORWARD_CASE_ID,
+        MIXED_MODE_FORWARD_FIXTURE,
+        _mixed_mode_forward_fixture,
+        "numeric_output",
+        "s",
+    ),
+    _OracleCase(
+        MIXED_MODE_INVERSE_CASE_ID,
+        MIXED_MODE_INVERSE_FIXTURE,
+        _mixed_mode_inverse_fixture,
+        "numeric_output",
+        "s",
     ),
     _OracleCase(
         TOUCHSTONE_V1_CASE_ID,

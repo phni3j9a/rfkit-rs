@@ -121,6 +121,21 @@ fixture records the new-to-old source mapping, NumPy/scikit-rf versions, the
 scikit-rf commit pin, and an exact-copy policy for frequency, S, and z0 because
 the operation performs no RF arithmetic. No scikit-rf source code or fixture
 values were copied.
+Issue #84 mixed-mode fixtures are an independent two-direction REWRITE from
+the explicit V/I coordinate equations and the repository's Kurokawa power-wave
+definition. The forward five-port, three-frequency input uses local seed
+`20260948` and is evaluated only through public
+`Network.se2gmm(p=2, s_def="power")`; the inverse uses a separate local seed
+`20260949`, independently authored modal S/reference inputs, and public
+`Network.gmm2se(p=2, z0_se=..., s_def="power")` with an explicit adjacent
+target array. The fixtures record the `(0+,1-)`/`(2+,3-)` pairing, output
+`[d...,c...,unpaired]` layout, two distinct complex equal pair references per
+frequency, the unpaired reference, pinned NumPy/scikit-rf versions and commit,
+and exact contract-vs-floating-S tolerance policy. The Rust methods and
+Touchstone workflow are independently authored; no scikit-rf source, expected
+output, instrument illustration, or fixture value was copied. Complex and
+negative-real references remain local-domain coverage rather than a broad
+scikit-rf compatibility claim.
 
 | Local path | Source project | Source commit/tag | Source path | Use | License | Notes |
 |---|---|---|---|---|---|---|
@@ -143,6 +158,7 @@ values were copied.
 | `crates/rfkit-core/src/connection.rs` | Matched-junction power-wave equations; scikit-rf behavior reference | N/A for the equations; `bd651e923cac6020de49a096e1d7e9b5f949f884` (`v2.0.1`) for behavior | Independent same-network elimination of selected ports `k` and `l` using `S_EE + S_EI (I - P S_II)^-1 P S_IE`; public `skrf.network.innerconnect` is used only as the differential behavior oracle | REWRITE | Mathematical reference; scikit-rf BSD-3-Clause | Private frequency-major N-port kernel; selected junction z0 is finite, real, strictly positive, and exactly equal at each frequency, external z0 may be finite complex, output is the original survivor order, exact-zero solver pivots are the only singularity criterion, and no source code was copied |
 | `tools/oracle/generate_oracle.py`; `tools/oracle/fixtures/power_wave_inner_connect_matched_five_port_real_frequency_dependent_z0.json` | scikit-rf | `bd651e923cac6020de49a096e1d7e9b5f949f884` (`v2.0.1`) | Explicit `skrf.Network(..., s_def="power")` constructor and public `skrf.network.innerconnect(network, k, l)` | REWRITE | BSD-3-Clause | One independent five-port, three-frequency fixture with seed 20260941, non-adjacent ports 1 and 3, non-50 Ω frequency-dependent real-positive exactly matched junction z0, non-trivial surviving-port data, explicit survivor-order metadata, and output-only numeric tolerance; no source code or fixture values copied |
 | `tools/oracle/generate_oracle.py`; `tools/oracle/fixtures/port_permutation_three_port_complex_z0.json` | scikit-rf | `bd651e923cac6020de49a096e1d7e9b5f949f884` (`v2.0.1`) | Public `Network.renumbered(order, list(range(nport)))` behavior | REWRITE | BSD-3-Clause | One independently authored asymmetric three-port, three-frequency input with seed `20260947`, unequal complex per-port/frequency-dependent z0, and non-involutive `order=[2,0,1]`; frequency/S/z0 output is a pure exact reindexing copy and the metadata records the source mapping and exact canonical comparison policy; no source code or fixture values copied |
+| `tools/oracle/generate_oracle.py`; `tools/oracle/fixtures/mixed_mode_{forward,inverse}_five_port_complex_z0.json`; `crates/rfkit-core/tests/oracle_mixed_mode.rs` | Published V/I coordinate equations; scikit-rf | `bd651e923cac6020de49a096e1d7e9b5f949f884` (`v2.0.1`); NumPy `2.5.1` | Public `Network.se2gmm` / `Network.gmm2se` behavior for the two direction-specific expected S outputs | REWRITE | Mathematical reference; scikit-rf BSD-3-Clause | Independent asymmetric five-port/three-frequency fixtures with seeds `20260948` and `20260949`, `p=2`, adjacent positive/negative pairs, distinct complex equal pair references and one unpaired reference; inverse supplies explicit adjacent target `z0_se`. Metadata, shapes, inputs, frequencies, and references are exact; only S output uses strict `rtol=1e-12`/`atol=1e-12`. No source code, fixture values, or instrument material copied |
 | `crates/rfkit-core/src/impedance_admittance.rs`; `crates/rfkit-core/src/linalg.rs` | Published network-parameter definitions (`Y=Z^-1`, `Z=Y^-1`) and Gaussian elimination with partial pivoting | N/A (mathematical definition) | N-port inversion kernel and wave-definition-independent exact-pivot solver | REWRITE | Mathematical reference | Private Rust implementation; the shared solver was extracted from the existing power-wave kernel, uses exact complex-zero pivot detection only, and adds no rank cutoff, regularization, condition-number test, or public API |
 | `crates/rfkit-core/src/power_wave_admittance.rs` | K. Kurokawa, “Power Waves and the Scattering Matrix,” IEEE Transactions on Microwave Theory and Techniques 13(2), 194–202 (1965) | DOI `10.1109/TMTT.1965.1125964` | S↔Y behavior as the composition S↔Z power-wave conversion with Z↔Y inversion | REWRITE | IEEE publication (mathematical reference) | Private Rust composition of the existing verified kernels; no independent S/Y equation, source code, or public Network conversion API was copied |
 | `crates/rfkit-core/src/power_waves.rs` | K. Kurokawa, “Power Waves and the Scattering Matrix,” IEEE Transactions on Microwave Theory and Techniques 13(2), 194–202 (1965) | DOI `10.1109/TMTT.1965.1125964` | Eq. (1) power-wave definitions, Eq. (18) Z-to-S relation, and Eq. (19) S-to-Z conversion | REWRITE | IEEE publication (mathematical reference) | Independent Rust implementation of the published equations; no source code copied |

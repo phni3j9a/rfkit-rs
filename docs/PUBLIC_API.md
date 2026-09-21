@@ -279,6 +279,84 @@ than a port-name or in-place renumbering API. No new wave definition,
 parameter-container hierarchy, dependency, or storage representation is
 implied.
 
+## Equal-pair mixed-mode power waves (Issue #84 Yellow decision)
+
+The provisional public surface adds one reversible forward/inverse slice:
+
+```rust
+impl Network {
+    pub fn to_mixed_mode_equal_pair_power(&self, pair_count: usize) -> Result<Network>;
+    pub fn to_single_ended_equal_pair_power(&self, pair_count: usize) -> Result<Network>;
+}
+```
+
+These methods use the existing Kurokawa power-wave convention with currents
+into the network. For an ordered positive/negative pair `(u,v)`,
+`Vd=Vu-Vv`, `Id=(Iu-Iv)/2`, `Vc=(Vu+Vv)/2`, and `Ic=Iu+Iv`. If both
+single-ended references equal `z`, the natural modal references are `zd=2z`
+and `zc=z/2`. Substitution into the repository wave equations gives the same
+normalized wave transform for both incident and reflected waves:
+
+```text
+Ud = (u-v)/sqrt(2)       Uc = (u+v)/sqrt(2)
+S_mm = U S_se U^T        S_se = U^T S_mm U
+```
+
+`pair_count = p` requires `1 <= p <= nports/2` and selects adjacent pairs
+`(0,1), (2,3), ...`, where the first member is positive. The forward output
+coordinate order is `[d0..d(p-1), c0..c(p-1), unpaired...]`; the inverse
+requires that declared modal order and returns adjacent single-ended pairs.
+Use `permute_ports` explicitly for any other physical pairing or polarity; the
+methods infer no map. The transform is N-port and permits asymmetric,
+non-reciprocal, mode-converting, and singular S data.
+
+References are frequency-major `(nfreq,nport)` data. Each selected pair must
+have exactly equal finite complex references with non-zero real parts at every
+frequency; equality is not tolerance-based. References may differ between
+pairs and frequency samples. Unpaired references are copied unchanged,
+including complex and negative-real values under the repository's
+`abs(Re(z0))` normalization. The modal values are exactly `2*z` and `z/2`;
+if finite binary64 arithmetic would lose information (including an
+unrepresentable subnormal half), the operation rejects the reference rather
+than inventing a discrepancy or silently clipping it. All derived references
+must remain finite with non-zero real parts.
+
+Both methods validate nonempty frequency/S/z0 axes and finite S/references
+before indexing, including malformed serde-created `Network` values. Frequency
+samples are opaque pointwise labels and are copied exactly; no sorting,
+interpolation, hidden renormalization, inversion of S, pseudoinverse,
+conditioning cutoff, or fallback is performed. The source network is borrowed
+and remains unchanged. Rustdoc/examples should treat the returned `Network`
+as the declared coordinate system: it stores no mode metadata, so ordinary
+`s()` and `z0()` accessors describe differential/common/unpaired coordinates
+only by the caller's explicit contract. Touchstone v1.0 remains a single-ended
+format boundary; restore single-ended coordinates and a common finite
+positive-real reference before using the existing writer. No mixed-mode
+Touchstone extension or automatic writer renormalization is introduced.
+
+The Yellow alternatives considered were arbitrary pair-map/supporting types, a
+new mode-aware canonical `Network`, generalized unequal/complex pair
+transforms with caller-selected modal references, exposing only private math,
+and fixed 50-ohm/4-port formulas. The selected option makes the useful N-port
+capability available now, keeps pair order/polarity/reference assumptions
+inspectable, reuses explicit permutation, retains the owned core model, and
+keeps the transform/inverse cheap to review and verify. It is additive and
+provisional during 0.x: rollback removes only these methods, diagnostics,
+tests, fixtures, and documentation, with no stored-data migration. A future
+mode-aware type can adapt the documented layout, but this issue makes no such
+architecture commitment and no broad scikit-rf compatibility promise.
+
+Conformance uses independently authored asymmetric five-port, three-frequency
+forward and inverse fixtures with `p=2`, two distinct complex equal pair
+references per frequency, and one unpaired complex reference. The forward
+fixture calls pinned public `Network.se2gmm`; the inverse input is generated
+independently and calls pinned public `Network.gmm2se` with an explicit
+adjacent target `z0_se`. Pinned lineage is scikit-rf `2.0.1`, commit
+`bd651e923cac6020de49a096e1d7e9b5f949f884`, NumPy `2.5.1`; only floating S
+outputs use the recorded strict binary64 tolerance, while metadata, shapes,
+frequencies, inputs, and references are exact contract fields. The Rust
+implementation is a REWRITE from the coordinate equations.
+
 ## Implemented public baseline
 
 The implemented shape is:
@@ -300,6 +378,10 @@ impl Network {
     ) -> Result<Network>;
 
     pub fn permute_ports(&self, order: &[usize]) -> Result<Network>;
+
+    pub fn to_mixed_mode_equal_pair_power(&self, pair_count: usize) -> Result<Network>;
+
+    pub fn to_single_ended_equal_pair_power(&self, pair_count: usize) -> Result<Network>;
 
     pub fn interpolate_cartesian_linear(
         &self,
@@ -335,6 +417,7 @@ The exact internal delegation remains an implementation detail. The semantic dis
 - `renormalize_power` explicitly selects power-wave renormalization;
 - `renormalize_direct_power` explicitly selects the direct Kurokawa wave-change equation, while `renormalize_power` retains its composed S→Z→S domain and diagnostics;
 - `permute_ports` explicitly selects a complete new-to-old physical-port reindexing and carries S rows, S columns, and z0 together without wave arithmetic;
+- `to_mixed_mode_equal_pair_power` and `to_single_ended_equal_pair_power` explicitly select the equal single-ended-reference adjacent-pair power-wave transform and its inverse, with modal layout `[d...,c...,unpaired...]`; they do not infer physical pairing or store mode metadata;
 - `interpolate_cartesian_linear` does not establish a vague interpolation default that would later need reinterpretation;
 - `connect_matched_power` requires the existing exactly matched real-positive junction contract and exact compatible frequency grids;
 - `connect_matched_power_on_grid` requires an explicit caller-provided grid and performs interpolation-before-connection under the existing verified composition semantics;
