@@ -85,6 +85,17 @@ shapes, and strict output tolerance. Only floating S output is tolerant;
 metadata, inputs, frequencies, and references are exact canonical contract
 fields.
 
+One finite physical-load termination case is also registered: an independently
+authored asymmetric five-port, three-frequency source has the middle port `2`
+terminated by explicit finite loads `[0, 38+12j, 73-9j]` ohm, including an
+ideal short. The source references are unequal, complex, frequency-dependent,
+and positive-real. The expected reduced S is generated only through one public
+`skrf.network.connect(source, 2, one_port_load, 0)` call after constructing
+the one-port physical load with public `skrf.network.z2s(..., s_def="power")`
+and `Network` APIs. Its survivor order `[0,1,3,4]`, frequency/reference/load
+inputs, seed, pinned dependency lineage, and finite-only/no-excitation load
+contract are exact fields; only `s_terminated` uses strict numeric tolerance.
+
 ## Clean-checkout setup
 
 From a clean checkout, create an isolated environment and install the exact
@@ -126,7 +137,7 @@ checker.
 
 ## Generate and verify
 
-The harness has thirty-nine registered canonical cases. The original three cases
+The harness has forty registered canonical cases. The original three cases
 remain unchanged:
 
 - `three_port_complex_z0` — the representative four-frequency, three-port
@@ -178,6 +189,18 @@ The additional explicit-grid composition case is:
   per-port/frequency-dependent external z0. Expected output is obtained by
   interpolating A and B once each with public Cartesian-linear
   `Network.interpolate`, then calling public `skrf.network.connect` once.
+
+The finite physical-load termination case is:
+
+- `power_wave_terminate_port_impedance_five_port_complex_z0` — independent
+  asymmetric five-port source S, unequal complex frequency-dependent
+  positive-real z0, selected middle port `2`, and finite loads
+  `[0, 38+12j, 73-9j]` ohm. The one-port load is built through public
+  `skrf.network.z2s(..., s_def="power")` and `Network` APIs, and expected S
+  comes from one public `skrf.network.connect` call. The output has four
+  survivors in original order `[0,1,3,4]`; source inputs, load values,
+  survivor z0, frequency labels, and metadata are exact, while only
+  `s_terminated` is numeric-tolerance checked.
 
 The eight existing S↔Z matrix cases are registered individually as follows.
 Each row has multiple frequency samples, and every multiport input matrix is
@@ -641,8 +664,9 @@ The JSON representation is deliberately machine-readable and byte-stable:
   equality for metadata, schema, dependency versions, shapes, frequency,
   inputs, z0, and every other field except the computed output (`z_ohm` for
   S→Z, `s` for Z→S or Y→S, `y_s` for Z→Y or S→Y, `z_ohm` for Y→Z, or
-  `s_renormalized` for S renormalization, or `s_inner_connected` for inner
-  connection; interpolation removes both `s` and `z0_ohm`. The output's
+  `s_renormalized` for S renormalization, `s_inner_connected` for inner
+  connection, or `s_terminated` for finite physical-load termination;
+  interpolation removes both `s` and `z0_ohm`. The output's
   recursively validated complex array is
   compared with the recorded
   `abs(actual-expected) <= atol + rtol*abs(expected)` policy. S→Z uses
@@ -651,7 +675,8 @@ The JSON representation is deliberately machine-readable and byte-stable:
   Y→Z uses `rtol=1e-12` and `atol_ohm=1e-12`; S→Y uses `rtol=1e-12` and
   `atol_s=1e-12`, Y→S uses `rtol=1e-12` and `atol=1e-12`, and inner-connect
   uses `rtol=1e-12` and `atol=1e-12`; interpolation uses `rtol=1e-12` and
-  `atol=1e-12` for both outputs. These are strict binary64 tolerances for
+  `atol=1e-12` for both outputs; finite physical-load termination uses
+  `rtol=1e-12` and `atol=1e-12`. These are strict binary64 tolerances for
   the well-conditioned, modest-magnitude deterministic cases: they allow
   normal cross-language linear-algebra rounding while catching material
   disagreement.
@@ -660,7 +685,8 @@ The JSON representation is deliberately machine-readable and byte-stable:
   and expanded `z0_ohm` are numeric-tolerance outputs.
 - The checker removes exactly the registered computed output field(s) for the
   contract projection. Existing cases register one output; interpolation
-  registers both `s` and `z0_ohm`. It never tolerates drift in inputs, z0,
+  registers both `s` and `z0_ohm`; termination removes only `s_terminated`.
+  It never tolerates drift in inputs, z0,
   dimensions, metadata, or any unknown/missing complex field, and it never
   widens a recorded tolerance.
 

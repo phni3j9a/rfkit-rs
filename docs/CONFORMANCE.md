@@ -163,6 +163,43 @@ Kurokawa equations. Negative-real and complex references remain covered by
 core mixed-mode boundary/invariant tests, but the scikit-rf differential claim
 is limited to the pinned positive-real-compatible fixture domain.
 
+Issue #86 adds the direct finite physical-load operation
+`Network::terminate_port_impedance_power`. The canonical fixture
+`power_wave_terminate_port_impedance_five_port_complex_z0.json` is an
+independently generated asymmetric five-port, three-frequency case with the
+middle source port `2` removed. It uses unequal, frequency-dependent complex
+source references whose real parts are strictly positive and explicit finite
+loads `[0, 38+12j, 73-9j]` ohm, including an ideal short. The expected reduced
+S is produced only through pinned public scikit-rf `skrf.network.connect` with
+a one-port load constructed through public `skrf.network.z2s(...,
+s_def="power")` and `Network` APIs. The fixture records operation, selected
+port, ohm units, source/output order, seed `20260950`, scikit-rf `2.0.1`
+commit `bd651e923cac6020de49a096e1d7e9b5f949f884`, NumPy `2.5.1`, and the
+strict `rtol=1e-12`, `atol=1e-12` policy. The canonical Python checker removes
+only `data.s_terminated` from the exact contract projection; source S,
+frequency, references, loads, survivor references, shapes, and metadata must
+match exactly. Python tests defend registration, public z2s/connect call
+reconstruction, finite-load/short metadata, and input/output drift.
+
+The external Rust oracle test
+`crates/rfkit-core/tests/oracle_termination.rs` repeats those strict metadata,
+input, reference, load, frequency, and survivor-order checks, then compares
+only the public method's reduced S against the fixture tolerance. It derives
+the expected survivor references by slicing the source reference array rather
+than treating output z0 as a floating oracle. Core edge coverage separately
+handles negative/zero load resistance, complex and negative-real source
+references, d=0 with nonzero denominator, exact singularity, finite
+near-singularity, malformed shapes, non-finite inputs, and arithmetic failure.
+
+The focused Touchstone workflow in
+`crates/rfkit-touchstone/tests/public_termination_workflow.rs` and executable
+`crates/rfkit-touchstone/examples/terminate_port_touchstone.rs` parse an
+asymmetric five-port v1.0 S/RI/Hz input, apply the three finite loads, check
+the reduced response independently from the direct boundary equation, and
+write/read the four-port result with unchanged common 50-ohm survivor
+references. No writer-side renormalization, open sentinel, load excitation,
+or mixed-mode/file-format extension is involved.
+
 ## Reporting
 
 Eventually CI should publish a machine-generated coverage report such as:
