@@ -687,6 +687,119 @@ fn rejects_nonfinite_zero_real_unequal_and_scaling_loss_references() {
 }
 
 #[test]
+fn forward_rejects_half_scaling_rounding_loss_without_underflow() {
+    let u = f64::from_bits(1);
+    let rounded_half = (3.0 * u) / 2.0;
+    assert!(rounded_half.is_finite());
+    assert_ne!(rounded_half, 0.0);
+    assert_eq!(rounded_half, 2.0 * u);
+    let round_trip = rounded_half * 2.0;
+    assert_eq!(round_trip, 4.0 * u);
+    assert_ne!(round_trip, 3.0 * u);
+
+    let source_reference = c(50.0, 3.0 * u);
+    let network = Network::new(
+        Frequency::from_hz(vec![0.0]).unwrap(),
+        Array3::from_shape_vec(
+            (1, 2, 2),
+            vec![
+                c(0.10, 0.02),
+                c(-0.03, 0.04),
+                c(0.07, -0.05),
+                c(-0.11, 0.06),
+            ],
+        )
+        .unwrap(),
+        Array2::from_shape_vec((1, 2), vec![source_reference, source_reference]).unwrap(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        network.to_mixed_mode_equal_pair_power(1).unwrap_err(),
+        Error::MixedModeReferenceScalingLoss {
+            direction: MixedModeDirection::ToMixedMode,
+            frequency: 0,
+            pair: 0,
+            mode: MixedModeMode::Common,
+            scaling: MixedModeScaling::Half,
+            value: source_reference,
+        }
+    );
+}
+
+#[test]
+fn inverse_rejects_half_scaling_rounding_loss_before_reference_mismatch() {
+    let u = f64::from_bits(1);
+    let differential = c(100.0, 3.0 * u);
+    let common = c(25.0, u);
+    let from_differential = c(differential.re / 2.0, differential.im / 2.0);
+    let from_common = c(common.re * 2.0, common.im * 2.0);
+    assert_eq!(from_differential, from_common);
+    assert_ne!(differential, c(common.re * 4.0, common.im * 4.0));
+
+    let modal = Network::new(
+        Frequency::from_hz(vec![0.0]).unwrap(),
+        Array3::from_shape_vec(
+            (1, 2, 2),
+            vec![
+                c(0.10, 0.02),
+                c(-0.03, 0.04),
+                c(0.07, -0.05),
+                c(-0.11, 0.06),
+            ],
+        )
+        .unwrap(),
+        Array2::from_shape_vec((1, 2), vec![differential, common]).unwrap(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        modal.to_single_ended_equal_pair_power(1).unwrap_err(),
+        Error::MixedModeReferenceScalingLoss {
+            direction: MixedModeDirection::ToSingleEnded,
+            frequency: 0,
+            pair: 0,
+            mode: MixedModeMode::Differential,
+            scaling: MixedModeScaling::Half,
+            value: differential,
+        }
+    );
+}
+
+#[test]
+fn nearby_subnormal_imaginary_reference_round_trips_exactly() {
+    let u = f64::from_bits(1);
+    let source_reference = c(50.0, 2.0 * u);
+    let source = Network::new(
+        Frequency::from_hz(vec![0.0]).unwrap(),
+        Array3::from_shape_vec(
+            (1, 2, 2),
+            vec![
+                c(0.10, 0.02),
+                c(-0.03, 0.04),
+                c(0.07, -0.05),
+                c(-0.11, 0.06),
+            ],
+        )
+        .unwrap(),
+        Array2::from_shape_vec((1, 2), vec![source_reference, source_reference]).unwrap(),
+    )
+    .unwrap();
+    let source_before = source.clone();
+
+    let modal = source.to_mixed_mode_equal_pair_power(1).unwrap();
+    assert_eq!(modal.z0()[[0, 0]], c(100.0, 4.0 * u));
+    assert_eq!(modal.z0()[[0, 1]], c(25.0, u));
+
+    let restored = modal.to_single_ended_equal_pair_power(1).unwrap();
+    assert_eq!(restored.z0(), source.z0());
+    assert_array3_close(restored.s(), source.s());
+    assert_eq!(source.s(), source_before.s());
+    assert_eq!(source.z0(), source_before.z0());
+    assert_eq!(source.frequency(), source_before.frequency());
+}
+
+#[test]
 fn inverse_rejects_incompatible_modal_references_and_preserves_input() {
     let frequency = Frequency::from_hz(vec![1.0e9]).unwrap();
     let s = Array3::from_shape_fn((1, 3, 3), |(_, row, column)| c((row + column) as f64, 0.0));
