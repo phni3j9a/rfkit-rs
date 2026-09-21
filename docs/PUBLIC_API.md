@@ -357,6 +357,84 @@ outputs use the recorded strict binary64 tolerance, while metadata, shapes,
 frequencies, inputs, and references are exact contract fields. The Rust
 implementation is a REWRITE from the coordinate equations.
 
+## Finite physical-load port termination (Issue #86 Yellow decision)
+
+The provisional public surface adds one borrowing, owned-result operation:
+
+```rust
+impl Network {
+    pub fn terminate_port_impedance_power(
+        &self,
+        port: usize,
+        load_ohm: &[Complex64],
+    ) -> Result<Network>;
+}
+```
+
+The method applies one finite complex physical load impedance in ohms at each
+source-frequency sample, removes the selected zero-based port, and returns the
+surviving ports in their original order. It uses currents into the source
+network, `b = S a`, and the existing Kurokawa power-wave convention. No load
+excitation is modeled. The source network and the borrowed load slice are
+unchanged; frequency labels and the surviving `(frequency, port)` references
+are copied exactly.
+
+For selected port `k`, source reference `z_k`, physical load `Z_L`, and source
+survivors `E`, the boundary is `V_k = -Z_L I_k`. Define
+`c = Z_L - z_k` and `d = Z_L + conj(z_k)` only as algebraic names. The direct
+elimination is evaluated as:
+
+```text
+den = d - c*S[k,k]
+S_out = S[E,E] + S[E,k] * (c/den) * S[k,E]
+```
+
+The implementation must not require `d != 0` or form `c/d` as an obligatory
+intermediate: a finite load with `d == 0` is valid whenever the evaluated
+`den` is nonzero. An exact complex-zero `den` is a structured singular
+termination error. A finite nonzero near-singular denominator remains in the
+domain; there is no arbitrary cutoff, pseudoinverse, regularization, hidden
+renormalization, S/Z/Y intermediate, or fallback. Scale-safe complex division
+and finite-arithmetic checks are used so reported errors are explicit rather
+than silent non-finite output.
+
+The source must have at least two ports and a nonempty, matching frequency/S
+axis. `port` must be valid and the load slice length must equal the number of
+source-frequency samples exactly; no scalar broadcasting, sorting,
+interpolation, extrapolation, or inferred grid is performed. S and source
+references must be finite. References are finite complex values with nonzero
+real parts under the existing `abs(Re(z0))` power-wave domain, including the
+repository's negative-real extension. Loads may have positive, zero, or
+negative real parts; an ideal short (`Z_L = 0`) is supported. Infinity/NaN
+open sentinels are rejected, and an open-termination enum or generic
+multiport-load contract is intentionally outside this finite-only slice.
+
+This method is additive and provisional during `0.x`; it makes no general
+scikit-rf compatibility or `1.0` stability promise. The Yellow alternatives
+were a feedback-coefficient argument, a one-port `Network` argument, an
+impedance/admittance/open/short union, generic multiport termination, or
+composition only through renormalization and matched connection. The selected
+physical finite-impedance boundary keeps units, wave direction, frequency
+cardinality, and survivor order visible at the call site while closing the
+loaded-response workflow. During `0.x`, rollback removes the method, local
+diagnostics, tests, fixture, and documentation without persisted-data
+migration; a future explicit load type could adapt finite values later. No
+new wave field, generic parameter hierarchy, dependency, crate boundary, or
+implicit writer renormalization is implied.
+
+Conformance uses one canonical asymmetric five-port, three-frequency fixture
+with selected middle port `2`, frequency-dependent unequal complex
+positive-real source references, and finite loads `[0, 38+12j, 73-9j]` ohm
+(including the ideal short). Expected S comes from pinned public scikit-rf
+`skrf.network.connect(source, 2, one_port_load, 0)`, where the one-port load is
+constructed through public `skrf.network.z2s(..., s_def="power")` and
+`Network` APIs. The pinned lineage is scikit-rf `2.0.1`, commit
+`bd651e923cac6020de49a096e1d7e9b5f949f884`, NumPy `2.5.1`, seed `20260950`;
+loads and references are in ohms and survivors are `[0,1,3,4]`. Only S
+output uses the fixture's strict `rtol=1e-12`, `atol=1e-12` policy; metadata,
+inputs, frequency labels, loads, references, and ordering are exact contract
+fields. The Rust operation is a REWRITE from the physical boundary equations.
+
 ## Implemented public baseline
 
 The implemented shape is:
@@ -408,6 +486,12 @@ impl Network {
         port_a: usize,
         port_b: usize,
     ) -> Result<Network>;
+
+    pub fn terminate_port_impedance_power(
+        &self,
+        port: usize,
+        load_ohm: &[Complex64],
+    ) -> Result<Network>;
 }
 ```
 
@@ -422,6 +506,9 @@ The exact internal delegation remains an implementation detail. The semantic dis
 - `connect_matched_power` requires the existing exactly matched real-positive junction contract and exact compatible frequency grids;
 - `connect_matched_power_on_grid` requires an explicit caller-provided grid and performs interpolation-before-connection under the existing verified composition semantics;
 - `inner_connect_matched_power` exposes the existing matched same-network elimination semantics.
+- `terminate_port_impedance_power` applies a finite physical impedance boundary directly at one
+  selected port, removes that port, and retains the original survivor order and references without
+  selecting a new frequency grid or renormalizing the source.
 
 Do not shorten these to broad names such as `connect`, `interpolate`, or `renormalize` until the library has enough supported semantics and evidence to justify what those names mean. Introducing such a default is at least Yellow and becomes Red when reasonable conventions conflict or the choice would freeze hidden policy.
 

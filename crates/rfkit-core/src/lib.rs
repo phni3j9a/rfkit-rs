@@ -51,6 +51,7 @@ mod linalg;
 mod mixed_mode;
 mod power_wave_admittance;
 mod power_waves;
+mod termination;
 
 /// Errors produced while constructing or manipulating RF network data.
 #[non_exhaustive]
@@ -616,6 +617,66 @@ pub enum Error {
     )]
     NonFiniteInnerConnectionComputation {
         frequency: usize,
+        row: usize,
+        column: usize,
+    },
+
+    #[error("termination source frequency axis must not be empty")]
+    EmptyTerminationFrequency,
+
+    #[error(
+        "termination source frequency length does not match the S-parameter frequency dimension: expected {expected}, got {actual}"
+    )]
+    TerminationFrequencyLengthMismatch { expected: usize, actual: usize },
+
+    #[error("termination received an invalid S-parameter shape {shape:?}")]
+    InvalidTerminationSShape { shape: Vec<usize> },
+
+    #[error("termination received an invalid reference-impedance shape {shape:?}")]
+    InvalidTerminationZ0Shape { shape: Vec<usize> },
+
+    #[error(
+        "termination load length does not match the source frequency dimension: expected {expected}, got {actual}"
+    )]
+    TerminationLoadLengthMismatch { expected: usize, actual: usize },
+
+    #[error("termination requires at least two source ports, got {nports}")]
+    NoTerminationSurvivors { nports: usize },
+
+    #[error("termination port {port} is out of range for {nports} source ports")]
+    InvalidTerminationPort { port: usize, nports: usize },
+
+    #[error(
+        "termination received a non-finite S-parameter at frequency {frequency}, row {row}, column {column}"
+    )]
+    NonFiniteTerminationS {
+        frequency: usize,
+        row: usize,
+        column: usize,
+    },
+
+    #[error(
+        "termination received a non-finite reference impedance at frequency {frequency}, port {port}"
+    )]
+    NonFiniteTerminationZ0 { frequency: usize, port: usize },
+
+    #[error(
+        "termination received a zero-real reference impedance at frequency {frequency}, port {port}"
+    )]
+    ZeroRealTerminationReferenceImpedance { frequency: usize, port: usize },
+
+    #[error("termination load is non-finite at frequency {frequency}")]
+    NonFiniteTerminationLoad { frequency: usize },
+
+    #[error("termination denominator is exactly singular at frequency {frequency}, port {port}")]
+    SingularTermination { frequency: usize, port: usize },
+
+    #[error(
+        "termination produced a non-finite computation at frequency {frequency}, selected port {port}, row {row}, column {column}"
+    )]
+    NonFiniteTerminationComputation {
+        frequency: usize,
+        port: usize,
         row: usize,
         column: usize,
     },
@@ -1994,6 +2055,63 @@ impl Network {
         let frequency = Frequency::from_hz(connected.frequency_hz)?;
         Network::new(frequency, connected.s, connected.z0)
     }
+
+    /// Applies one finite physical impedance to a selected source port and
+    /// returns the reduced network with that port removed.
+    ///
+    /// The operation uses currents directed into this network and Kurokawa
+    /// power waves.  For selected port `k`, source reference `z_k`, and load
+    /// `ZL`, the physical boundary is eliminated directly with
+    /// `c = ZL - z_k`, `d = ZL + conj(z_k)`, and
+    /// `den = d - c*S[k,k]`:
+    ///
+    /// ```text
+    /// S_out = S[E,E] + S[E,k] * (c/den) * S[k,E]
+    /// ```
+    ///
+    /// `load_ohm` supplies exactly one finite complex impedance in ohms per
+    /// source frequency.  Zero, purely reactive, and negative-resistance
+    /// loads are valid; an open-circuit sentinel is not part of this finite
+    /// impedance operation.  Source references may be complex or have
+    /// negative real parts, but every source reference must be finite with a
+    /// nonzero real part for the Kurokawa normalization domain.
+    ///
+    /// The source frequency samples are opaque pointwise labels and are
+    /// copied exactly.  Survivors retain their original order and exact
+    /// source references.  The source network and `load_ohm` are borrowed and
+    /// unchanged.  No S/Z/Y conversion, renormalization, tolerance cutoff,
+    /// pseudoinverse, or fallback is used.  Only an exactly zero evaluated
+    /// `den` is singular; a finite nonzero near-singular denominator remains
+    /// valid.  In particular, `d == 0` is valid when `den != 0` because the
+    /// implementation never forms `c/d`.
+    ///
+    /// This additive operation is provisional while `rfkit-core` is in the
+    /// `0.x` series; its name and signature are not a `1.0` stability
+    /// promise.
+    ///
+    /// # Errors
+    ///
+    /// Returns a structured [`Error`] for malformed serde-created source
+    /// axes/shapes, a one-port source or invalid selected port, a mismatched
+    /// load length, non-finite S/references/load values, zero-real source
+    /// references, exact denominator singularity, or non-finite arithmetic.
+    pub fn terminate_port_impedance_power(
+        &self,
+        port: usize,
+        load_ohm: &[Complex64],
+    ) -> Result<Network> {
+        let terminated = termination::terminate_port_impedance_power(
+            self.frequency.hz(),
+            &self.s,
+            &self.z0,
+            port,
+            load_ohm,
+        )
+        .map_err(map_termination_error)?;
+
+        let frequency = Frequency::from_hz(terminated.frequency_hz)?;
+        Network::new(frequency, terminated.s, terminated.z0)
+    }
 }
 
 fn validate_parameter_frequency(
@@ -2343,6 +2461,64 @@ fn map_inner_connection_error(
             column,
         } => Error::NonFiniteInnerConnectionComputation {
             frequency,
+            row,
+            column,
+        },
+    }
+}
+
+fn map_termination_error(error: termination::TerminationError) -> Error {
+    match error {
+        termination::TerminationError::InvalidSShape { shape } => Error::InvalidTerminationSShape {
+            shape: vec![shape.0, shape.1, shape.2],
+        },
+        termination::TerminationError::EmptyFrequency => Error::EmptyTerminationFrequency,
+        termination::TerminationError::FrequencyShape { expected, actual } => {
+            Error::TerminationFrequencyLengthMismatch { expected, actual }
+        }
+        termination::TerminationError::InvalidZ0Shape { shape } => {
+            Error::InvalidTerminationZ0Shape {
+                shape: vec![shape.0, shape.1],
+            }
+        }
+        termination::TerminationError::LoadLengthMismatch { expected, actual } => {
+            Error::TerminationLoadLengthMismatch { expected, actual }
+        }
+        termination::TerminationError::NoExternalPorts { nports } => {
+            Error::NoTerminationSurvivors { nports }
+        }
+        termination::TerminationError::InvalidPort { port, nports } => {
+            Error::InvalidTerminationPort { port, nports }
+        }
+        termination::TerminationError::NonFiniteS {
+            frequency,
+            row,
+            column,
+        } => Error::NonFiniteTerminationS {
+            frequency,
+            row,
+            column,
+        },
+        termination::TerminationError::NonFiniteZ0 { frequency, port } => {
+            Error::NonFiniteTerminationZ0 { frequency, port }
+        }
+        termination::TerminationError::ZeroRealReferenceImpedance { frequency, port } => {
+            Error::ZeroRealTerminationReferenceImpedance { frequency, port }
+        }
+        termination::TerminationError::NonFiniteLoad { frequency } => {
+            Error::NonFiniteTerminationLoad { frequency }
+        }
+        termination::TerminationError::Singular { frequency, port } => {
+            Error::SingularTermination { frequency, port }
+        }
+        termination::TerminationError::NonFiniteComputation {
+            frequency,
+            port,
+            row,
+            column,
+        } => Error::NonFiniteTerminationComputation {
+            frequency,
+            port,
             row,
             column,
         },

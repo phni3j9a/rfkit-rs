@@ -353,6 +353,62 @@ layout. The oracle uses independently authored five-port forward and inverse
 fixtures generated through pinned public scikit-rf 2.0.1 APIs, not copied
 instrument material or a broad scikit-rf compatibility claim.
 
+## Apply a finite physical load to one port
+
+`Network::terminate_port_impedance_power` applies one finite complex physical
+load impedance in ohms per source-frequency sample and removes the selected
+port:
+
+```rust
+use num_complex::Complex64;
+use rfkit_touchstone::parse_touchstone_v1_0_s;
+
+fn load_port() -> rfkit_touchstone::Result<rfkit_core::Network> {
+    let source = parse_touchstone_v1_0_s(
+        "# Hz S RI R 50\n\
+         1000000000 0.11 0.01 0.12 0.02 0.13 0.03\n\
+         0.21 0.01 0.22 0.02 0.23 0.03\n\
+         0.31 0.01 0.32 0.02 0.33 0.03\n",
+        3,
+    )?;
+    let load_ohm = [Complex64::new(0.0, 0.0)]; // ideal short at the sample
+    Ok(source.terminate_port_impedance_power(1, &load_ohm)?)
+}
+```
+
+The method uses the source network's Kurokawa power-wave boundary directly:
+`V_k=-Z_L I_k`, `den=(Z_L+conj(z_k))-(Z_L-z_k)*S_kk`, and
+`S_out=S_EE+S_Ek*((Z_L-z_k)/den)*S_kE`. It does not model an independent
+load excitation, invert S/Z/Y, renormalize, choose a frequency grid, or hide a
+matched-connection policy. The selected port must be valid in a source with at
+least two ports, and `load_ohm.len()` must equal the source frequency count.
+Finite complex source references with nonzero real parts are supported,
+including the repository's negative-real extension. Loads may be positive,
+zero, or negative resistance; an ideal short is valid, while non-finite open
+sentinels are outside this finite-only API. Exact zero `den` is rejected, but
+finite nonzero near-singular values are not rejected by an arbitrary cutoff;
+`d=Z_L+conj(z_k)==0` remains valid when `den` is nonzero.
+
+The returned frequency axis, survivor S coordinates, and survivor references
+retain source order exactly. The writer remains its own format boundary: a
+terminated network can be written directly only when the survivors still have
+the writer's common finite positive-real reference contract. The executable
+Touchstone ingress → termination → independently checked reduction →
+writer/read workflow is:
+
+```text
+cargo run -p rfkit-touchstone --example terminate_port_touchstone
+```
+
+This is a provisional additive Yellow decision for `0.x`, with no general
+scikit-rf compatibility promise. A canonical differential fixture uses pinned
+scikit-rf `2.0.1` (commit
+`bd651e923cac6020de49a096e1d7e9b5f949f884`), NumPy `2.5.1`, seed `20260950`,
+selected port `2`, loads `[0, 38+12j, 73-9j]` ohm, and survivor order
+`[0,1,3,4]`. Its expected S is obtained through public `z2s`/`Network` load
+construction followed by public `connect`; only floating S output uses the
+recorded strict tolerance.
+
 ## Repository layout
 
 ```text

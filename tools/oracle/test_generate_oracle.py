@@ -547,6 +547,20 @@ TOUCHSTONE_CASE_SPECS = {
 }
 
 
+TERMINATION_CASE_SPECS = {
+    "power_wave_terminate_port_impedance_five_port_complex_z0": {
+        "operation": "terminate_port_impedance_power",
+        "ports": 5,
+        "frequencies": 3,
+        "port": 2,
+        "survivors": [0, 1, 3, 4],
+        "loads": [0.0 + 0.0j, 38.0 + 12.0j, 73.0 - 9.0j],
+        "seed": 20_260_950,
+        "output": "s_terminated",
+    },
+}
+
+
 PORT_PERMUTATION_CASE_SPECS = {
     "port_permutation_three_port_complex_z0": {
         "operation": "network_port_permutation",
@@ -1370,6 +1384,7 @@ class MatrixRegistrationAndCheckerTests(unittest.TestCase):
             + len(MATCHED_CONNECTION_CASE_SPECS)
             + len(INNER_CONNECT_CASE_SPECS)
             + len(TOUCHSTONE_CASE_SPECS)
+            + len(TERMINATION_CASE_SPECS)
         )
         self.assertTrue(set(MATRIX_CASE_SPECS).issubset(registered))
         self.assertTrue(set(IMPEDANCE_ADMITTANCE_CASE_SPECS).issubset(registered))
@@ -1378,6 +1393,7 @@ class MatrixRegistrationAndCheckerTests(unittest.TestCase):
         self.assertTrue(
             set(DIRECT_S_TO_Y_SINGULAR_CASE_SPECS).issubset(registered)
         )
+        self.assertTrue(set(TERMINATION_CASE_SPECS).issubset(registered))
         self.assertTrue(set(INNER_CONNECT_CASE_SPECS).issubset(registered))
         for case_id, spec in MATRIX_CASE_SPECS.items():
             case = registered[case_id]
@@ -3574,6 +3590,175 @@ class DirectSToYSingularRegistrationAndCheckerTests(unittest.TestCase):
                     path.write_bytes(oracle._canonical_bytes(drifted))
                     self.assertEqual(
                         oracle._check_numeric_fixture(path, fixture, "y_s"),
+                        1,
+                    )
+
+
+class TerminationRegistrationAndCheckerTests(unittest.TestCase):
+    """Protect the finite physical-load termination oracle contract."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.np, cls.skrf = oracle._load_dependencies()
+        cls.case_id = oracle.TERMINATE_IMPEDANCE_CASE_ID
+        cls.case = {case.case_id: case for case in oracle._CASES}[cls.case_id]
+        cls.fixture = oracle._read_canonical_json(cls.case.path)
+
+    @staticmethod
+    def _complex(value: dict[str, float]) -> complex:
+        return complex(value["real"], value["imag"])
+
+    def _complex_array(self, values: object) -> object:
+        if isinstance(values, list):
+            return [self._complex_array(item) for item in values]
+        if not isinstance(values, dict):
+            raise AssertionError("serialized complex leaf has an unexpected shape")
+        return self._complex(values)
+
+    def test_case_is_registered_with_strict_termination_contract(self) -> None:
+        self.assertEqual(self.case.path, oracle.TERMINATE_IMPEDANCE_FIXTURE)
+        self.assertEqual(self.case.path.stem, self.case_id)
+        self.assertEqual(self.case.comparison, "numeric_output")
+        self.assertEqual(self.case.numeric_output_key, "s_terminated")
+
+        metadata = self.fixture["metadata"]
+        data = self.fixture["data"]
+        self.assertEqual(metadata["case_id"], self.case_id)
+        self.assertEqual(metadata["operation"], "terminate_port_impedance_power")
+        self.assertEqual(metadata["numpy_version"], oracle.EXPECTED_NUMPY_VERSION)
+        self.assertEqual(metadata["scikit_rf_version"], oracle.EXPECTED_SCIKIT_RF_VERSION)
+        self.assertEqual(metadata["scikit_rf_commit"], oracle.EXPECTED_SCIKIT_RF_COMMIT)
+        self.assertEqual(metadata["random_seed"], 20_260_950)
+        self.assertEqual(metadata["wave_definition"], "power")
+        self.assertEqual(metadata["port"], 2)
+        self.assertEqual(metadata["port_order"]["input"], [0, 1, 2, 3, 4])
+        self.assertEqual(metadata["port_order"]["output"], [0, 1, 3, 4])
+        self.assertEqual(
+            metadata["reference_impedance"],
+            {
+                "complex": True,
+                "frequency_dependent": True,
+                "per_port": True,
+                "positive_real": True,
+                "source_field": "z0_ohm",
+                "survivor_field": "z0_survivor_ohm",
+                "unit": "ohm",
+            },
+        )
+        self.assertEqual(
+            metadata["load_boundary"],
+            {
+                "finite_only": True,
+                "includes_ideal_short": True,
+                "load_excitation": "none",
+                "open_sentinel": "rejected",
+                "unit": "ohm",
+            },
+        )
+        self.assertEqual(
+            metadata["shape"],
+            {
+                "frequency": [3],
+                "input_s": [3, 5, 5],
+                "input_z0": [3, 5],
+                "load_ohm": [3],
+                "output_s": [3, 4, 4],
+                "output_z0": [3, 4],
+            },
+        )
+        self.assertEqual(
+            [self._complex(item) for item in data["load_ohm"]],
+            [0.0 + 0.0j, 38.0 + 12.0j, 73.0 - 9.0j],
+        )
+        self.assertTrue(
+            all(self._complex(item).real >= 0.0 for item in data["load_ohm"])
+        )
+        self.assertEqual(metadata["tolerance_policy"]["rtol"], 1e-12)
+        self.assertEqual(metadata["tolerance_policy"]["atol"], 1e-12)
+        self.assertIn("public scikit-rf connect", metadata["tolerance_policy"]["justification"])
+        self.assertIn("z2s", metadata["tolerance_policy"]["justification"])
+        self.assertIn("only data.s_terminated", metadata["tolerance_policy"]["comparison"])
+
+    def test_public_builder_reconstructs_load_and_calls_connect_once(self) -> None:
+        with mock.patch.object(
+            self.skrf.network,
+            "z2s",
+            wraps=self.skrf.network.z2s,
+        ) as conversion, mock.patch.object(
+            self.skrf.network,
+            "connect",
+            wraps=self.skrf.network.connect,
+        ) as connect:
+            document = self.case.builder(self.np, self.skrf)
+
+        self.assertEqual(conversion.call_count, 1)
+        conversion_args, conversion_kwargs = conversion.call_args
+        self.assertEqual(len(conversion_args), 1)
+        self.assertEqual(conversion_kwargs["s_def"], "power")
+        self.assertEqual(conversion_kwargs["z0"].shape, (3, 1))
+        self.assertEqual(connect.call_count, 1)
+        connect_args, connect_kwargs = connect.call_args
+        self.assertEqual(connect_kwargs, {})
+        self.assertEqual(connect_args[1], 2)
+        self.assertIsInstance(connect_args[2], self.skrf.Network)
+        self.assertEqual(connect_args[3], 0)
+        self.assertEqual(document["metadata"]["operation"], "terminate_port_impedance_power")
+
+        fixture_data = self.fixture["data"]
+        source_s = self.np.asarray(self._complex_array(fixture_data["s"]), dtype=self.np.complex128)
+        source_z0 = self.np.asarray(self._complex_array(fixture_data["z0_ohm"]), dtype=self.np.complex128)
+        load_ohm = self.np.asarray(self._complex_array(fixture_data["load_ohm"]), dtype=self.np.complex128)
+        frequency_hz = self.np.asarray(fixture_data["frequency_hz"], dtype=self.np.float64)
+        load_s = self.skrf.network.z2s(
+            load_ohm[:, None, None],
+            z0=source_z0[:, [2]],
+            s_def="power",
+        )
+        expected = self.skrf.network.connect(
+            self.skrf.Network(f=frequency_hz, s=source_s, z0=source_z0, s_def="power"),
+            2,
+            self.skrf.Network(f=frequency_hz, s=load_s, z0=source_z0[:, [2]], s_def="power"),
+            0,
+        )
+        actual = self.np.asarray(
+            self._complex_array(fixture_data["s_terminated"]),
+            dtype=self.np.complex128,
+        )
+        self.np.testing.assert_allclose(actual, expected.s, rtol=1e-12, atol=1e-12)
+        self.np.testing.assert_array_equal(
+            self.np.asarray(self._complex_array(fixture_data["z0_survivor_ohm"])),
+            expected.z0,
+        )
+
+    def test_checker_tolerates_only_terminated_s_output(self) -> None:
+        adjusted = copy.deepcopy(self.fixture)
+        adjusted["data"]["s_terminated"][0][0][0]["real"] += 1e-13
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / self.case.path.name
+            path.write_bytes(oracle._canonical_bytes(adjusted))
+            self.assertEqual(
+                oracle._check_numeric_fixture(path, self.fixture, "s_terminated"),
+                0,
+            )
+
+        for field in ("s", "z0_ohm", "load_ohm", "z0_survivor_ohm", "metadata"):
+            with self.subTest(field=field):
+                drifted = copy.deepcopy(self.fixture)
+                if field == "s":
+                    drifted["data"]["s"][0][0][0]["real"] += 1e-3
+                elif field == "z0_ohm":
+                    drifted["data"]["z0_ohm"][0][0]["real"] += 1.0
+                elif field == "load_ohm":
+                    drifted["data"]["load_ohm"][0]["real"] = 1.0
+                elif field == "z0_survivor_ohm":
+                    drifted["data"]["z0_survivor_ohm"][0][0]["real"] += 1.0
+                else:
+                    drifted["metadata"]["port"] = 1
+                with tempfile.TemporaryDirectory() as directory:
+                    path = Path(directory) / self.case.path.name
+                    path.write_bytes(oracle._canonical_bytes(drifted))
+                    self.assertEqual(
+                        oracle._check_numeric_fixture(path, self.fixture, "s_terminated"),
                         1,
                     )
 

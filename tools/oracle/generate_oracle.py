@@ -22,6 +22,11 @@ direction.  The matched-junction fixture uses independent three-port and
 four-port inputs and the public ``skrf.network.connect`` operation with
 explicit power-wave Network constructors; its output-only comparison leaves
 inputs, z0, and port-order metadata exact.
+The finite physical-load termination fixture uses an independent asymmetric
+five-port source, a selected middle port, explicit finite loads including a
+short, and a one-port load built through public ``skrf.network.z2s`` and
+``Network`` APIs before one public ``skrf.network.connect`` call; only its
+reduced S output is numeric-tolerance compared.
 The direct S-to-Y singular-domain fixture adds an independently constructed
 non-reciprocal three-port S input whose ``I-S`` system is exactly singular
 while the direct Kurokawa ``A`` system remains nonsingular.  Its expected Y is
@@ -500,6 +505,42 @@ INNER_CONNECT_TOLERANCE_JUSTIFICATION = (
     "five-port case; the output is checked with the recorded numeric bound while "
     "frequencies, inputs, z0, ordering metadata, and all other contract fields "
     "remain exact."
+)
+
+# Finite physical-load termination is kept as one small, direction-specific
+# oracle case.  The source is an independently generated asymmetric
+# five-port, three-frequency power-wave network.  The selected middle port is
+# terminated by one finite impedance per frequency (including an ideal short),
+# and the expected reduced S is produced only through the public
+# ``skrf.network.connect`` call with a one-port load whose S is produced by the
+# public ``skrf.network.z2s`` conversion.  This deliberately keeps the Rust
+# differential path independent from the direct boundary-elimination
+# implementation.
+TERMINATE_IMPEDANCE_FIXTURE = (
+    Path(__file__).resolve().parent
+    / "fixtures"
+    / "power_wave_terminate_port_impedance_five_port_complex_z0.json"
+)
+TERMINATE_IMPEDANCE_CASE_ID = "power_wave_terminate_port_impedance_five_port_complex_z0"
+TERMINATE_IMPEDANCE_RANDOM_SEED = 20_260_950
+TERMINATE_IMPEDANCE_NFREQ = 3
+TERMINATE_IMPEDANCE_NPORTS = 5
+TERMINATE_IMPEDANCE_PORT = 2
+TERMINATE_IMPEDANCE_RTOL = 1e-12
+TERMINATE_IMPEDANCE_ATOL = 1e-12
+TERMINATE_IMPEDANCE_INPUT_RECIPE = (
+    "independent local NumPy default_rng input with an asymmetric complex "
+    "five-port S stack, a frequency-dependent unequal complex positive-real "
+    "source-reference profile, and explicit finite loads [0, 38+12j, "
+    "73-9j] ohm; selected source port is the middle port 2"
+)
+TERMINATE_IMPEDANCE_TOLERANCE_JUSTIFICATION = (
+    "Strict binary64 mixed tolerance for a deterministic, well-conditioned, "
+    "asymmetric five-port physical-load boundary.  The expected S is obtained "
+    "from one public scikit-rf connect call after constructing the one-port "
+    "load through public z2s and Network APIs; the surviving references, "
+    "frequency labels, source inputs, load values, and ordering metadata are "
+    "checked as exact contract fields."
 )
 
 # The interpolation case is kept as one direct, independently generated
@@ -3147,6 +3188,179 @@ def _connect_matched_fixture(np: Any, skrf: Any) -> dict[str, Any]:
     }
 
 
+def _terminate_impedance_fixture(np: Any, skrf: Any) -> dict[str, Any]:
+    """Build the finite physical-load case through public scikit-rf APIs."""
+
+    frequency_hz = np.array([0.91e9, 1.47e9, 2.03e9], dtype=np.float64)
+    rng = np.random.default_rng(TERMINATE_IMPEDANCE_RANDOM_SEED)
+    source_s = (
+        rng.normal(
+            loc=0.0,
+            scale=0.021,
+            size=(
+                TERMINATE_IMPEDANCE_NFREQ,
+                TERMINATE_IMPEDANCE_NPORTS,
+                TERMINATE_IMPEDANCE_NPORTS,
+            ),
+        )
+        + 1j
+        * rng.normal(
+            loc=0.0,
+            scale=0.021,
+            size=(
+                TERMINATE_IMPEDANCE_NFREQ,
+                TERMINATE_IMPEDANCE_NPORTS,
+                TERMINATE_IMPEDANCE_NPORTS,
+            ),
+        )
+    ).astype(np.complex128)
+    for frequency in range(TERMINATE_IMPEDANCE_NFREQ):
+        for port in range(TERMINATE_IMPEDANCE_NPORTS):
+            source_s[frequency, port, port] += complex(
+                0.09 + 0.012 * frequency + 0.007 * port,
+                0.01 + 0.002 * frequency - 0.001 * port,
+            )
+
+    frequency_index = np.arange(TERMINATE_IMPEDANCE_NFREQ, dtype=np.float64)[:, None]
+    port_index = np.arange(TERMINATE_IMPEDANCE_NPORTS, dtype=np.float64)[None, :]
+    source_z0 = (
+        41.0
+        + 1.6 * frequency_index
+        + 4.75 * port_index
+        + 1j * (1.25 - 0.17 * frequency_index + 0.30 * port_index)
+    ).astype(np.complex128)
+    load_ohm = np.array([0.0 + 0.0j, 38.0 + 12.0j, 73.0 - 9.0j], dtype=np.complex128)
+
+    if not np.isfinite(frequency_hz).all():
+        raise ValueError("termination frequencies must be finite")
+    if not np.isfinite(source_s).all():
+        raise ValueError("termination S input must be finite")
+    if not np.isfinite(source_z0).all() or not (source_z0.real > 0.0).all():
+        raise ValueError("termination source z0 must be finite and positive-real")
+    if not np.isfinite(load_ohm).all():
+        raise ValueError("termination loads must be finite")
+    if load_ohm.shape != (TERMINATE_IMPEDANCE_NFREQ,):
+        raise ValueError("termination load profile must have one value per frequency")
+    _assert_non_symmetric(np, source_s, name="termination S input")
+    _assert_s_conditioning(source_s)
+
+    case_id = TERMINATE_IMPEDANCE_CASE_ID
+    source_network = skrf.Network(
+        f=frequency_hz,
+        s=source_s,
+        z0=source_z0,
+        s_def="power",
+        name=f"{case_id}_source",
+    )
+
+    # The physical one-port load is represented by ZL and converted through
+    # scikit-rf's public z2s path at the selected source reference.  The
+    # expected reduced network then comes from exactly one public connect call.
+    load_z = load_ohm[:, None, None]
+    load_z0 = source_z0[:, [TERMINATE_IMPEDANCE_PORT]]
+    load_s = skrf.network.z2s(load_z, z0=load_z0, s_def="power")
+    load_network = skrf.Network(
+        f=frequency_hz,
+        s=load_s,
+        z0=load_z0,
+        s_def="power",
+        name=f"{case_id}_load",
+    )
+    terminated = skrf.network.connect(
+        source_network,
+        TERMINATE_IMPEDANCE_PORT,
+        load_network,
+        0,
+    )
+
+    output_frequency = np.asarray(terminated.f, dtype=np.float64)
+    output_s = np.asarray(terminated.s, dtype=np.complex128)
+    output_z0 = np.asarray(terminated.z0, dtype=np.complex128)
+    survivors = [
+        port
+        for port in range(TERMINATE_IMPEDANCE_NPORTS)
+        if port != TERMINATE_IMPEDANCE_PORT
+    ]
+    expected_z0 = source_z0[:, survivors]
+    if not np.array_equal(output_frequency, frequency_hz):
+        raise ValueError("termination output frequency changed")
+    if output_s.shape != (
+        TERMINATE_IMPEDANCE_NFREQ,
+        len(survivors),
+        len(survivors),
+    ):
+        raise ValueError("termination output S shape changed")
+    if not np.isfinite(output_s).all() or not np.isfinite(output_z0).all():
+        raise ValueError("termination output must be finite")
+    if not np.array_equal(output_z0, expected_z0):
+        raise ValueError("termination survivor references changed")
+
+    shape = {
+        "frequency": list(output_frequency.shape),
+        "input_s": list(source_s.shape),
+        "input_z0": list(source_z0.shape),
+        "load_ohm": list(load_ohm.shape),
+        "output_s": list(output_s.shape),
+        "output_z0": list(output_z0.shape),
+    }
+    return {
+        "metadata": {
+            "case_id": case_id,
+            "input_recipe": TERMINATE_IMPEDANCE_INPUT_RECIPE,
+            "load_boundary": {
+                "finite_only": True,
+                "includes_ideal_short": True,
+                "load_excitation": "none",
+                "open_sentinel": "rejected",
+                "unit": "ohm",
+            },
+            "numpy_version": np.__version__,
+            "operation": "terminate_port_impedance_power",
+            "port": TERMINATE_IMPEDANCE_PORT,
+            "port_order": {
+                "description": "source ports except the selected port, in original order",
+                "input": list(range(TERMINATE_IMPEDANCE_NPORTS)),
+                "output": survivors,
+            },
+            "random_seed": TERMINATE_IMPEDANCE_RANDOM_SEED,
+            "reference_impedance": {
+                "complex": True,
+                "frequency_dependent": True,
+                "per_port": True,
+                "positive_real": True,
+                "source_field": "z0_ohm",
+                "survivor_field": "z0_survivor_ohm",
+                "unit": "ohm",
+            },
+            "schema": "rfkit-rs.oracle.fixture",
+            "schema_version": SCHEMA_VERSION,
+            "scikit_rf_commit": EXPECTED_SCIKIT_RF_COMMIT,
+            "scikit_rf_version": skrf.__version__,
+            "shape": shape,
+            "tolerance_policy": {
+                "atol": TERMINATE_IMPEDANCE_ATOL,
+                "comparison": "only data.s_terminated is numeric output; abs(actual-expected) <= atol + rtol*abs(expected)",
+                "justification": TERMINATE_IMPEDANCE_TOLERANCE_JUSTIFICATION,
+                "regeneration": (
+                    "canonical UTF-8 JSON serialization; s_terminated is checked "
+                    "with the recorded numeric tolerance; frequency, source S/z0, "
+                    "load, survivor z0, ordering, and metadata are checked exactly"
+                ),
+                "rtol": TERMINATE_IMPEDANCE_RTOL,
+            },
+            "wave_definition": "power",
+        },
+        "data": {
+            "frequency_hz": [float(value) for value in output_frequency],
+            "load_ohm": _complex_array(load_ohm),
+            "s": _complex_array(source_s),
+            "s_terminated": _complex_array(output_s),
+            "z0_ohm": _complex_array(source_z0),
+            "z0_survivor_ohm": _complex_array(output_z0),
+        },
+    }
+
+
 def _inner_connect_inputs(np: Any, *, seed: int) -> tuple[Any, Any, Any, Any]:
     """Build independent finite S/z0 input for the inner-connect case."""
 
@@ -5184,6 +5398,13 @@ _CASES = (
         _connect_matched_fixture,
         "numeric_output",
         "s_connected",
+    ),
+    _OracleCase(
+        TERMINATE_IMPEDANCE_CASE_ID,
+        TERMINATE_IMPEDANCE_FIXTURE,
+        _terminate_impedance_fixture,
+        "numeric_output",
+        "s_terminated",
     ),
     _OracleCase(
         INNER_CONNECT_CASE_ID,
