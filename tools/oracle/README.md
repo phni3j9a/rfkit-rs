@@ -42,6 +42,15 @@ frequency-dependent real-positive junction impedance that is exactly equal on
 both sides, and non-trivial frequency/port-dependent external reference
 impedances. Its expected output comes from public
 `skrf.network.connect(network_a, port_a, network_b, port_b)` behavior.
+One direct physical-junction connection case is also registered: the same
+unambiguous 3+4-port shape uses one independent seed (`20260951`), selected
+ports A[1] and B[2], and unequal complex frequency-dependent references whose
+real parts are strictly positive on both selected and surviving coordinates.
+Its expected S comes only from one pinned public
+`skrf.network.connect(network_a, port_a, network_b, port_b)` call. The Rust
+method is independently defined by voltage continuity and current conservation;
+the fixture records A survivors followed by B survivors and compares only the
+connected S numerically.
 One same-network inner-connect case is also registered: an independent
 five-port input uses explicit `s_def="power"`, two non-adjacent ports, and a
 frequency-dependent real-positive junction impedance that is exactly equal at
@@ -137,7 +146,7 @@ checker.
 
 ## Generate and verify
 
-The harness has forty registered canonical cases. The original three cases
+The harness has forty-one registered canonical cases. The original three cases
 remain unchanged:
 
 - `three_port_complex_z0` — the representative four-frequency, three-port
@@ -416,6 +425,22 @@ metadata are checked exactly by the Rust and Python contract tests.
 | --- | ---: | --- | --- | --- |
 | A + B → connected network | 3 + 4 | A[1] ↔ B[2] | A[0], A[2], B[0], B[1], B[3] | `power_wave_connect_matched_three_to_four_port_real_frequency_dependent_z0` |
 
+The direct physical-junction case uses independent asymmetric, non-reciprocal
+three-port A and four-port B inputs at three exact frequencies. A port 1 is
+connected to B port 2 with unequal complex reference coordinates; every
+reference has a finite strictly positive real part and varies by frequency and
+port. The input stream is seeded with `20260951`. The expected S is produced by
+one public `skrf.network.connect` call at the pinned scikit-rf commit, while
+the direct Rust operation is an independent solve of `V_A=V_B` and
+`I_A+I_B=0`, not a matched connection or hidden renormalization. The output
+order is A ports `[0, 2]` followed by B ports `[0, 1, 3]`; survivor references
+are copied exactly and only `s_connected` receives the strict `1e-12` numeric
+tolerance.
+
+| Direction | Input ports | Junction ports | Output order | Case id |
+| --- | ---: | --- | --- | --- |
+| A + B → direct physical junction | 3 + 4 | A[1] ↔ B[2] | A[0], A[2], B[0], B[1], B[3] | `power_wave_connect_direct_three_to_four_port_complex_z0` |
+
 The explicit-grid composition case uses independent A and B source grids with
 five and six irregular samples, respectively, and an explicit eight-sample
 target grid containing both source endpoints, source knots, and interior
@@ -666,6 +691,7 @@ The JSON representation is deliberately machine-readable and byte-stable:
   S→Z, `s` for Z→S or Y→S, `y_s` for Z→Y or S→Y, `z_ohm` for Y→Z, or
   `s_renormalized` for S renormalization, `s_inner_connected` for inner
   connection, or `s_terminated` for finite physical-load termination;
+  direct physical connection removes only `s_connected`;
   interpolation removes both `s` and `z0_ohm`. The output's
   recursively validated complex array is
   compared with the recorded
@@ -675,8 +701,8 @@ The JSON representation is deliberately machine-readable and byte-stable:
   Y→Z uses `rtol=1e-12` and `atol_ohm=1e-12`; S→Y uses `rtol=1e-12` and
   `atol_s=1e-12`, Y→S uses `rtol=1e-12` and `atol=1e-12`, and inner-connect
   uses `rtol=1e-12` and `atol=1e-12`; interpolation uses `rtol=1e-12` and
-  `atol=1e-12` for both outputs; finite physical-load termination uses
-  `rtol=1e-12` and `atol=1e-12`. These are strict binary64 tolerances for
+  `atol=1e-12` for both outputs; matched and direct physical connections and
+  finite physical-load termination use `rtol=1e-12` and `atol=1e-12`. These are strict binary64 tolerances for
   the well-conditioned, modest-magnitude deterministic cases: they allow
   normal cross-language linear-algebra rounding while catching material
   disagreement.

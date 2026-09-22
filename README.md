@@ -409,6 +409,72 @@ selected port `2`, loads `[0, 38+12j, 73-9j]` ohm, and survivor order
 construction followed by public `connect`; only floating S output uses the
 recorded strict tolerance.
 
+## Connect two networks at a direct physical junction
+
+`Network::connect_direct_power` joins one port from each network with the
+physical conditions `V_A=V_B` and `I_A+I_B=0` (currents into both networks):
+
+```rust
+let connected = a.connect_direct_power(1, &b, 2)?;
+```
+
+The result keeps A's unconnected ports in original order, followed by B's
+unconnected ports in original order. The method solves the two-coordinate
+junction directly under the repository's Kurokawa power-wave equations. It
+accepts finite complex references with nonzero real parts, including unequal,
+frequency-dependent and negative-real references; the sign of `Re(z)` is
+preserved in the wave equations. It does not insert a mismatch network,
+convert through S/Z/Y, renormalize implicitly, or choose a frequency grid.
+
+Both inputs must have matching finite frequency axes with exact pointwise
+labels, valid selected ports, finite square S data and finite references, and
+at least one surviving port. Frequencies are copied from A without sorting,
+intersection, interpolation, or broadcasting. Exact singularity of the
+two-coordinate junction system is reported; finite nonsingular near-singular
+systems remain valid without an arbitrary condition cutoff, while non-finite
+arithmetic is an explicit error. Inputs and surviving references are unchanged
+and copied exactly.
+
+The end-to-end Touchstone workflow uses two separate v1.0 S/RI/Hz inputs with
+different common positive-real references, connects them without
+pre-renormalizing either source, and checks the result from the independent
+physical V/I boundary. It then explicitly calls `renormalize_direct_power` to
+a caller-chosen common writer reference before export:
+
+```rust
+use ndarray::Array2;
+use num_complex::Complex64;
+use rfkit_touchstone::{parse_touchstone_v1_0_s, write_touchstone_v1_0_s_ri_hz};
+
+fn direct_touchstone_workflow(
+    a_text: &str,
+    b_text: &str,
+) -> rfkit_touchstone::Result<String> {
+    let a = parse_touchstone_v1_0_s(a_text, 3)?; // e.g. R 50
+    let b = parse_touchstone_v1_0_s(b_text, 4)?; // e.g. R 75
+    let joined = a.connect_direct_power(1, &b, 2)?;
+    let common = Array2::from_elem(
+        joined.z0().dim(),
+        Complex64::new(60.0, 0.0),
+    );
+    let writer_ready = joined.renormalize_direct_power(common)?;
+    write_touchstone_v1_0_s_ri_hz(&writer_ready)
+}
+```
+
+The Touchstone writer retains its own v1.0 contract: one finite common
+positive-real reference, finite S values, and a finite non-negative strictly
+increasing frequency axis. It never repairs or silently renormalizes a direct
+connection. This additive Yellow API has no broad scikit-rf compatibility or
+`1.0` stability promise; alternatives such as widening the matched method,
+mandatory renormalization, an inserted mismatch Network, or a broad topology
+type were rejected. Rollback removes the method, tests, fixture, and docs with
+no persisted-data migration. Run the focused executable workflow with:
+
+```text
+cargo run -p rfkit-touchstone --example connect_direct_power_touchstone
+```
+
 ## Repository layout
 
 ```text
