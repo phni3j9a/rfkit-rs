@@ -114,6 +114,18 @@ the one-port physical load with public `skrf.network.z2s(..., s_def="power")`
 and `Network` APIs. Its survivor order `[0,1,3,4]`, frequency/reference/load
 inputs, seed, pinned dependency lineage, and finite-only/no-excitation load
 contract are exact fields; only `s_terminated` uses strict numeric tolerance.
+One sampled two-port stability case is also registered: four deterministic
+frequency samples use an independent base S stack plus a seeded NumPy
+`default_rng` complex perturbation (seed `20260954`, scale `1e-3`). True
+largest singular values derive one passive and three active/non-passive S
+classes; unequal real/complex positive-real references vary by frequency and
+port. Its finite K values come from the pinned public `Network.stability`
+property, while complex deltas come independently from NumPy `linalg.det`.
+Only `delta` and `rollet_k` are numeric-tolerance outputs; frequencies,
+S/z0 inputs, sample-class metadata, units, shapes, and the explicit
+positive-real reference contract remain exact. Exact unilateral/isolated
+cases are covered locally in Rust and are deliberately not serialized as
+non-standard JSON infinity.
 
 ## Clean-checkout setup
 
@@ -156,7 +168,7 @@ checker.
 
 ## Generate and verify
 
-The harness has forty-two registered canonical cases. The original three cases
+The harness has forty-three registered canonical cases. The original three cases
 remain unchanged:
 
 - `three_port_complex_z0` — the representative four-frequency, three-port
@@ -220,6 +232,18 @@ The finite physical-load termination case is:
   survivors in original order `[0,1,3,4]`; source inputs, load values,
   survivor z0, frequency labels, and metadata are exact, while only
   `s_terminated` is numeric-tolerance checked.
+
+The sampled two-port stability case is:
+
+- `two_port_stability_power_four_frequency` — four deterministic frequency
+  samples from a seeded base-plus-perturbation S recipe (seed `20260954`,
+  scale `1e-3`), one passive and three active/non-passive two-port S matrices
+  established by true largest singular values, unequal real/complex
+  frequency-dependent positive-real references, and no zero transmission.
+  Pinned public `Network.stability` supplies finite K, NumPy `linalg.det`
+  supplies delta, and only `data.delta`/`data.rollet_k` use strict
+  `rtol=1e-12`, `atol=1e-12` tolerance. The Rust `Option` undefined policy is
+  exercised by local unilateral/isolated tests rather than a JSON infinity.
 
 The eight existing S↔Z matrix cases are registered individually as follows.
 Each row has multiple frequency samples, and every multiport input matrix is

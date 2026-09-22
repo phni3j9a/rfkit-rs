@@ -435,6 +435,76 @@ output uses the fixture's strict `rtol=1e-12`, `atol=1e-12` policy; metadata,
 inputs, frequency labels, loads, references, and ordering are exact contract
 fields. The Rust operation is a REWRITE from the physical boundary equations.
 
+## Sampled two-port power-wave stability metrics (Issue #92 Yellow decision)
+
+The provisional public surface adds one borrowing, owned-result operation:
+
+```rust
+impl Network {
+    pub fn two_port_stability_power(&self) -> Result<Vec<TwoPortStability>>;
+}
+
+pub struct TwoPortStability {
+    pub delta: Complex64,
+    pub rollet_k: Option<f64>,
+}
+```
+
+For every source-frequency sample, the method computes directly from the
+stored Kurokawa power-wave S matrix:
+
+```text
+delta = S11*S22 - S12*S21
+K     = (1 - |S11|² - |S22|² + |delta|²) / (2*|S12|*|S21|)
+```
+
+The returned vector has exactly the source cardinality and order. `delta` and
+K are dimensionless. If either `S12` or `S21` is exactly complex zero, delta is
+still checked and returned while `rollet_k` is `None`; `None` is an explicit
+undefined denominator state, never a numerical-failure catch-all, infinity,
+or stability verdict. Nonzero transmission coefficients are not classified by
+a tolerance. A magnitude-product underflow/overflow or any non-finite
+intermediate/output returns the operation-specific structured arithmetic
+error instead.
+
+The method validates malformed serde-created values before indexing: the
+frequency axis is nonempty and finite, S has exact shape `(nfreq,2,2)`, z0
+has exact shape `(nfreq,2)`, all S/z0 components are finite, and both
+references have strictly positive real parts. Unequal, complex, per-port, and
+frequency-dependent positive-real references are supported. Frequency labels
+are opaque pointwise values, so negative, duplicate, descending, and signed
+zero values are retained. The source is borrowed and unchanged; no S/Z/Y
+conversion, renormalization, interpolation, sorting, clipping, default
+reference, pole search, or condition cutoff is introduced.
+
+The usual linear two-port interpretation requires `K > 1` and `|delta| < 1`
+together with the familiar auxiliary/proviso conditions. This method reports
+sampled metrics only: external sampled S cannot certify internal poles,
+unsampled frequencies, nonlinear/large-signal behavior, or overall circuit
+stability. It deliberately does not return verdict booleans, stability
+circles, μ factors, gain optimization, or tolerance classifications.
+
+This additive API is provisional during 0.x. Alternatives considered were
+returning K alone with scikit-rf-style infinity, returning an error for every
+zero transmission sample, and adding a broad stability-analysis hierarchy or
+signed-negative reference domain. The selected result record and explicit
+`Option` preserve useful whole-sweep inspection while making undefined values
+honest and the physical reference domain explicit. The implementation is a
+REWRITE from the determinant/Rollett equations; pinned public scikit-rf is a
+finite-domain oracle only. Rollback removes this method/type, diagnostics,
+tests, fixture, and documentation without storage migration or changes to the
+canonical `Network` model.
+
+The canonical four-sample fixture
+`two_port_stability_power_four_frequency.json` uses public scikit-rf
+`Network.stability` for finite K and NumPy determinant for delta. Its S input
+is an independent base stack plus a seeded NumPy `default_rng` complex
+perturbation (seed `20260954`, scale `1e-3`), with one passive and three
+active/non-passive samples established by true largest singular values; it
+also uses unequal real/complex positive-real references and strict
+`rtol=1e-12`, `atol=1e-12` output-only comparison. The external Touchstone workflow is
+`cargo run -p rfkit-touchstone --example two_port_stability_touchstone`.
+
 ## Direct physical power-wave connection (Issue #88 Yellow decision)
 
 The provisional public surface adds one borrowing, owned-result operation:
@@ -702,6 +772,7 @@ impl Network {
         port: usize,
         load_ohm: &[Complex64],
     ) -> Result<Network>;
+    pub fn two_port_stability_power(&self) -> Result<Vec<TwoPortStability>>;
 }
 ```
 

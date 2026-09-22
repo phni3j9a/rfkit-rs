@@ -409,6 +409,57 @@ selected port `2`, loads `[0, 38+12j, 73-9j]` ohm, and survivor order
 construction followed by public `connect`; only floating S output uses the
 recorded strict tolerance.
 
+## Inspect sampled two-port power-wave stability metrics
+
+`Network::two_port_stability_power` computes one owned
+`TwoPortStability { delta, rollet_k }` record for every source-frequency
+sample, preserving the source order and cardinality:
+
+```rust
+use rfkit_touchstone::parse_touchstone_v1_0_s;
+
+fn inspect() -> rfkit_touchstone::Result<()> {
+    let network = parse_touchstone_v1_0_s(
+        "# Hz S RI R 50\n\
+         1000000000 0.0 0.0 2.0 0.0 0.1 0.0 0.0 0.0\n",
+        2,
+    )?;
+    let metrics = network.two_port_stability_power()?;
+    assert!((metrics[0].delta.re + 0.2).abs() < 1.0e-14);
+    assert!((metrics[0].rollet_k.unwrap() - 2.6).abs() < 1.0e-14);
+    Ok(())
+}
+```
+
+The operation uses the stored Kurokawa power-wave S data directly:
+`delta=S11*S22-S12*S21` and
+`K=(1-|S11|²-|S22|²+|delta|²)/(2|S12||S21|)`. It accepts only finite
+two-port S/z0 data with strictly positive reference real parts, including
+unequal complex and frequency-dependent references. Negative, duplicate,
+descending, and signed-zero frequency labels remain opaque pointwise samples;
+no sorting, conversion, interpolation, renormalization, tolerance cutoff, or
+50-ohm default is applied. An exactly zero `S12` or `S21` gives a finite
+`delta` and `rollet_k=None`; this is an undefined metric, not infinity, a
+verdict, or a numerical-failure catch-all. A finite nonzero transmission whose
+magnitude product underflows or overflows returns a structured arithmetic
+error.
+
+The familiar linear two-port interpretation requires `K > 1` *and*
+`|delta| < 1`, with the usual auxiliary/proviso conditions; K alone is not a
+stability verdict. Sampled external S data cannot certify internal poles,
+unsampled frequencies, nonlinear or large-signal behavior, or overall circuit
+stability. The focused Touchstone ingress workflow is executable with:
+
+```text
+cargo run -p rfkit-touchstone --example two_port_stability_touchstone
+```
+
+This is a provisional additive Yellow 0.x API. The selected small result type
+and explicit `Option` semantics keep undefined samples inspectable without
+introducing poles, circles, μ factors, gain optimization, tolerance-based
+classifiers, or a broad analysis hierarchy. Removing the method, tests,
+fixture, and documentation during 0.x requires no data migration.
+
 ## Connect two networks at a direct physical junction
 
 `Network::connect_direct_power` joins one port from each network with the

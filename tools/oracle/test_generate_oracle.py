@@ -592,6 +592,17 @@ TERMINATION_CASE_SPECS = {
 }
 
 
+TWO_PORT_STABILITY_CASE_SPECS = {
+    oracle.TWO_PORT_STABILITY_CASE_ID: {
+        "operation": "network_two_port_stability_power",
+        "ports": 2,
+        "frequencies": 4,
+        "seed": oracle.TWO_PORT_STABILITY_RANDOM_SEED,
+        "output": ("delta", "rollet_k"),
+    },
+}
+
+
 PORT_PERMUTATION_CASE_SPECS = {
     "port_permutation_three_port_complex_z0": {
         "operation": "network_port_permutation",
@@ -1418,6 +1429,7 @@ class MatrixRegistrationAndCheckerTests(unittest.TestCase):
             + len(INNER_CONNECT_DIRECT_CASE_SPECS)
             + len(TOUCHSTONE_CASE_SPECS)
             + len(TERMINATION_CASE_SPECS)
+            + len(TWO_PORT_STABILITY_CASE_SPECS)
         )
         self.assertTrue(set(MATRIX_CASE_SPECS).issubset(registered))
         self.assertTrue(set(IMPEDANCE_ADMITTANCE_CASE_SPECS).issubset(registered))
@@ -1427,6 +1439,7 @@ class MatrixRegistrationAndCheckerTests(unittest.TestCase):
             set(DIRECT_S_TO_Y_SINGULAR_CASE_SPECS).issubset(registered)
         )
         self.assertTrue(set(TERMINATION_CASE_SPECS).issubset(registered))
+        self.assertTrue(set(TWO_PORT_STABILITY_CASE_SPECS).issubset(registered))
         self.assertTrue(set(DIRECT_CONNECTION_CASE_SPECS).issubset(registered))
         self.assertTrue(set(INNER_CONNECT_CASE_SPECS).issubset(registered))
         for case_id, spec in MATRIX_CASE_SPECS.items():
@@ -4257,6 +4270,110 @@ class DirectConnectionRegistrationAndCheckerTests(unittest.TestCase):
             connected.z0,
             self.np.hstack((real_z0_a[:, [0, 2]], real_z0_b[:, [0, 1, 3]])),
         )
+
+
+class TwoPortStabilityRegistrationAndCheckerTests(unittest.TestCase):
+    """Protect the public K/delta oracle contract and drift checker."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.np, cls.skrf = oracle._load_dependencies()
+        cls.case_id = oracle.TWO_PORT_STABILITY_CASE_ID
+        cls.case = next(case for case in oracle._CASES if case.case_id == cls.case_id)
+        cls.fixture = oracle._read_canonical_json(cls.case.path)
+
+    def _check_document(self, document: dict[str, object]) -> int:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / self.case.path.name
+            path.write_bytes(oracle._canonical_bytes(document))
+            return oracle._check_numeric_fixture(
+                path,
+                self.fixture,
+                ("delta", "rollet_k"),
+            )
+
+    def test_registration_metadata_shapes_and_public_output_sources(self) -> None:
+        spec = TWO_PORT_STABILITY_CASE_SPECS[self.case_id]
+        registered = {case.case_id: case for case in oracle._CASES}
+        self.assertIn(self.case_id, registered)
+        self.assertEqual(self.case.path, oracle.TWO_PORT_STABILITY_FIXTURE)
+        self.assertEqual(self.case.path.stem, self.case_id)
+        self.assertEqual(self.case.comparison, "numeric_output")
+        self.assertEqual(self.case.numeric_output_key, spec["output"])
+
+        metadata = self.fixture["metadata"]
+        self.assertEqual(metadata["case_id"], self.case_id)
+        self.assertEqual(metadata["operation"], spec["operation"])
+        self.assertEqual(metadata["random_seed"], spec["seed"])
+        self.assertIn("default_rng seed 20260954", metadata["input_recipe"])
+        self.assertIn("true largest singular values", metadata["input_recipe"])
+        self.assertEqual(metadata["numpy_version"], oracle.EXPECTED_NUMPY_VERSION)
+        self.assertEqual(metadata["scikit_rf_version"], oracle.EXPECTED_SCIKIT_RF_VERSION)
+        self.assertEqual(metadata["scikit_rf_commit"], oracle.EXPECTED_SCIKIT_RF_COMMIT)
+        self.assertEqual(metadata["wave_definition"], "power")
+        self.assertEqual(metadata["shape"]["frequency"], [4])
+        self.assertEqual(metadata["shape"]["input_s"], [4, 2, 2])
+        self.assertEqual(metadata["shape"]["input_z0"], [4, 2])
+        self.assertEqual(metadata["shape"]["output_delta"], [4])
+        self.assertEqual(metadata["shape"]["output_rollet_k"], [4])
+        self.assertEqual(
+            metadata["reference_impedance"],
+            {
+                "complex": True,
+                "frequency_dependent": True,
+                "per_port": True,
+                "real_part": "strictly positive",
+                "unit": "ohm",
+            },
+        )
+        self.assertEqual(metadata["tolerance_policy"]["rtol"], 1e-12)
+        self.assertEqual(metadata["tolerance_policy"]["atol"], 1e-12)
+        self.assertIn("public Network.stability", metadata["tolerance_policy"]["regeneration"])
+        self.assertIn("NumPy determinant", metadata["tolerance_policy"]["regeneration"])
+        self.assertEqual(
+            metadata["units"],
+            {
+                "delta": "dimensionless",
+                "frequency": "Hz",
+                "rollet_k": "dimensionless",
+                "s": "dimensionless",
+                "z0": "ohm",
+            },
+        )
+
+    def test_builder_uses_finite_public_stability_and_numpy_determinant(self) -> None:
+        generated = self.case.builder(self.np, self.skrf)
+        expected = self.fixture["data"]
+        self.assertEqual(generated["metadata"], self.fixture["metadata"])
+        self.assertEqual(generated["data"]["frequency_hz"], expected["frequency_hz"])
+        self.assertEqual(generated["data"]["s_input"], expected["s_input"])
+        self.assertEqual(generated["data"]["z0_input_ohm"], expected["z0_input_ohm"])
+        self.assertTrue(all(math.isfinite(value) for value in generated["data"]["rollet_k"]))
+        self.assertTrue(
+            all(
+                math.isfinite(value[field])
+                for value in generated["data"]["delta"]
+                for field in ("real", "imag")
+            )
+        )
+
+    def test_output_tolerance_and_contract_drift_are_separate(self) -> None:
+        adjusted = copy.deepcopy(self.fixture)
+        adjusted["data"]["rollet_k"][0] += 1e-13
+        adjusted["data"]["delta"][0]["real"] += 1e-13
+        self.assertEqual(self._check_document(adjusted), 0)
+
+        output_drift = copy.deepcopy(self.fixture)
+        output_drift["data"]["rollet_k"][0] += 1e-3
+        self.assertEqual(self._check_document(output_drift), 1)
+
+        contract_drift = copy.deepcopy(self.fixture)
+        contract_drift["data"]["frequency_hz"][0] += 1.0
+        self.assertEqual(self._check_document(contract_drift), 1)
+
+        metadata_drift = copy.deepcopy(self.fixture)
+        metadata_drift["metadata"]["reference_impedance"]["per_port"] = False
+        self.assertEqual(self._check_document(metadata_drift), 1)
 
 
 if __name__ == "__main__":

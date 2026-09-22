@@ -52,6 +52,7 @@ mod linalg;
 mod mixed_mode;
 mod power_wave_admittance;
 mod power_waves;
+mod stability;
 mod termination;
 
 /// Errors produced while constructing or manipulating RF network data.
@@ -851,6 +852,54 @@ pub enum Error {
         row: usize,
         column: usize,
     },
+
+    #[error("two-port stability frequency axis must not be empty")]
+    EmptyTwoPortStabilityFrequency,
+
+    #[error(
+        "two-port stability frequency length does not match the S-parameter frequency dimension: expected {expected}, got {actual}"
+    )]
+    TwoPortStabilityFrequencyLengthMismatch { expected: usize, actual: usize },
+
+    #[error("two-port stability requires S-parameter shape (nfreq, 2, 2), got {shape:?}")]
+    InvalidTwoPortStabilitySShape { shape: Vec<usize> },
+
+    #[error("two-port stability requires reference-impedance shape (nfreq, 2), got {shape:?}")]
+    InvalidTwoPortStabilityZ0Shape { shape: Vec<usize> },
+
+    #[error("two-port stability frequency is non-finite at index {index}: {value:?}")]
+    NonFiniteTwoPortStabilityFrequency { index: usize, value: f64 },
+
+    #[error(
+        "two-port stability received a non-finite S-parameter at frequency {frequency}, row {row}, column {column}"
+    )]
+    NonFiniteTwoPortStabilityS {
+        frequency: usize,
+        row: usize,
+        column: usize,
+    },
+
+    #[error(
+        "two-port stability received a non-finite reference impedance at frequency {frequency}, port {port}"
+    )]
+    NonFiniteTwoPortStabilityZ0 { frequency: usize, port: usize },
+
+    #[error(
+        "two-port stability reference impedance must have a strictly positive real part at frequency {frequency}, port {port}: {value:?}"
+    )]
+    NonPositiveRealTwoPortStabilityReferenceImpedance {
+        frequency: usize,
+        port: usize,
+        value: Complex64,
+    },
+
+    #[error(
+        "two-port stability arithmetic became non-finite or unrepresentable at frequency {frequency} while evaluating {stage}"
+    )]
+    NonFiniteTwoPortStabilityComputation {
+        frequency: usize,
+        stage: TwoPortStabilityArithmetic,
+    },
 }
 
 /// Identifies which input supplied a connection value or triggered a
@@ -1068,6 +1117,77 @@ pub enum MixedModeScaling {
     Half,
 }
 
+/// Arithmetic quantity used to identify an unrepresentable sampled
+/// two-port stability calculation.
+///
+/// The operation reports undefined K only for an exactly zero transmission
+/// coefficient. A finite, nonzero coefficient whose magnitude product
+/// underflows, overflows, or otherwise produces a non-finite intermediate is
+/// an arithmetic error identified by this stage instead.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TwoPortStabilityArithmetic {
+    /// The `S11*S22` determinant product.
+    DeltaS11S22Product,
+    /// The `S12*S21` determinant product.
+    DeltaS12S21Product,
+    /// The determinant subtraction `S11*S22-S12*S21`.
+    DeltaSubtraction,
+    /// The magnitude of `S11`.
+    S11Magnitude,
+    /// The magnitude of `S22`.
+    S22Magnitude,
+    /// The magnitude of `delta`.
+    DeltaMagnitude,
+    /// The squared magnitude of `S11`.
+    S11MagnitudeSquared,
+    /// The squared magnitude of `S22`.
+    S22MagnitudeSquared,
+    /// The squared magnitude of `delta`.
+    DeltaMagnitudeSquared,
+    /// The first subtraction in the Rollett numerator.
+    NumeratorS11Subtraction,
+    /// The second subtraction in the Rollett numerator.
+    NumeratorS22Subtraction,
+    /// The determinant-magnitude addition in the Rollett numerator.
+    NumeratorDeltaAddition,
+    /// The magnitude of `S12`.
+    S12Magnitude,
+    /// The magnitude of `S21`.
+    S21Magnitude,
+    /// The product of the nonzero transmission magnitudes.
+    TransmissionMagnitudeProduct,
+    /// The factor-of-two denominator scaling.
+    TransmissionDenominatorScaling,
+    /// The final Rollett K division.
+    RolletKDivision,
+}
+
+impl fmt::Display for TwoPortStabilityArithmetic {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let description = match self {
+            Self::DeltaS11S22Product => "delta S11*S22 product",
+            Self::DeltaS12S21Product => "delta S12*S21 product",
+            Self::DeltaSubtraction => "delta subtraction",
+            Self::S11Magnitude => "|S11|",
+            Self::S22Magnitude => "|S22|",
+            Self::DeltaMagnitude => "|delta|",
+            Self::S11MagnitudeSquared => "|S11|²",
+            Self::S22MagnitudeSquared => "|S22|²",
+            Self::DeltaMagnitudeSquared => "|delta|²",
+            Self::NumeratorS11Subtraction => "Rollett numerator 1-|S11|²",
+            Self::NumeratorS22Subtraction => "Rollett numerator subtraction of |S22|²",
+            Self::NumeratorDeltaAddition => "Rollett numerator addition of |delta|²",
+            Self::S12Magnitude => "|S12|",
+            Self::S21Magnitude => "|S21|",
+            Self::TransmissionMagnitudeProduct => "|S12|*|S21|",
+            Self::TransmissionDenominatorScaling => "2*|S12|*|S21|",
+            Self::RolletKDivision => "Rollett K division",
+        };
+        formatter.write_str(description)
+    }
+}
+
 /// The crate-wide public error boundary.
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -1103,6 +1223,23 @@ impl Frequency {
     pub fn is_empty(&self) -> bool {
         self.hz.is_empty()
     }
+}
+
+/// Sampled two-port power-wave stability metrics.
+///
+/// `delta` is the dimensionless complex determinant
+/// `S11*S22-S12*S21`. `rollet_k` is the dimensionless Rollett factor when
+/// both transmission coefficients are exactly nonzero, and is `None` when
+/// either `S12` or `S21` is exactly complex zero. The latter is an explicit
+/// undefined value, not a stability verdict and not a numerical-failure
+/// catch-all.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct TwoPortStability {
+    /// The sampled determinant `S11*S22-S12*S21`.
+    pub delta: Complex64,
+    /// The sampled Rollett factor, undefined for an exactly unilateral or
+    /// isolated transmission coefficient.
+    pub rollet_k: Option<f64>,
 }
 
 /// An N-port network represented by scattering parameters.
@@ -1145,6 +1282,50 @@ impl Network {
     #[must_use]
     pub fn nports(&self) -> usize {
         self.s.dim().1
+    }
+
+    /// Computes sampled two-port Rollett stability metrics from the stored
+    /// Kurokawa power-wave S-parameters.
+    ///
+    /// The returned vector has exactly one [`TwoPortStability`] record per
+    /// source-frequency sample, in the same order. For each sample,
+    /// `delta = S11*S22-S12*S21` and, when both transmission coefficients are
+    /// exactly nonzero,
+    /// `K = (1-|S11|²-|S22|²+|delta|²)/(2|S12||S21|)`. If `S12` or `S21` is
+    /// exactly complex zero, `delta` is still evaluated and `rollet_k` is
+    /// `None`; this represents an undefined denominator and is not an
+    /// unconditional-stability verdict. Finite nonzero transmissions are
+    /// never classified as undefined by a tolerance or cutoff.
+    ///
+    /// This operation borrows the network and does not convert through Z/Y,
+    /// renormalize, sort, interpolate, clip, or otherwise mutate its data.
+    /// It requires exactly two ports, finite frequency labels, finite S and
+    /// reference values, and strictly positive real parts for both stored
+    /// references. Complex, unequal, per-port, and frequency-dependent
+    /// positive-real-part references are supported; no 50-ohm default is
+    /// assumed. Frequency labels remain opaque pointwise samples, so negative,
+    /// duplicate, descending, and signed-zero values are retained.
+    ///
+    /// The familiar linear two-port interpretation requires both `K > 1` and
+    /// `|delta| < 1`, together with the usual auxiliary/proviso conditions;
+    /// this method intentionally returns only sampled metrics. Sampled
+    /// external S-parameters cannot certify internal poles, unsampled
+    /// frequencies, nonlinear or large-signal behavior, or overall circuit
+    /// stability.
+    ///
+    /// This additive operation is provisional during the `0.x` series; its
+    /// name and signature are not a `1.0` stability promise.
+    ///
+    /// # Errors
+    ///
+    /// Returns a structured [`Error`] for malformed serde-created axes or
+    /// shapes, non-finite labels/data, non-positive-real references, and any
+    /// non-finite or unrepresentable intermediate or output. In particular,
+    /// an underflow or overflow in the magnitude product of finite nonzero
+    /// transmissions is an arithmetic error rather than `None`.
+    pub fn two_port_stability_power(&self) -> Result<Vec<TwoPortStability>> {
+        stability::two_port_stability_power(&self.frequency.hz, &self.s, &self.z0)
+            .map_err(map_two_port_stability_error)
     }
 
     /// Returns an owned network with its ports in an explicitly requested
@@ -3038,6 +3219,52 @@ fn map_termination_error(error: termination::TerminationError) -> Error {
             row,
             column,
         },
+    }
+}
+
+fn map_two_port_stability_error(error: stability::TwoPortStabilityError) -> Error {
+    match error {
+        stability::TwoPortStabilityError::EmptyFrequency => Error::EmptyTwoPortStabilityFrequency,
+        stability::TwoPortStabilityError::FrequencyLengthMismatch { expected, actual } => {
+            Error::TwoPortStabilityFrequencyLengthMismatch { expected, actual }
+        }
+        stability::TwoPortStabilityError::InvalidSShape { shape } => {
+            Error::InvalidTwoPortStabilitySShape {
+                shape: vec![shape.0, shape.1, shape.2],
+            }
+        }
+        stability::TwoPortStabilityError::InvalidZ0Shape { shape } => {
+            Error::InvalidTwoPortStabilityZ0Shape {
+                shape: vec![shape.0, shape.1],
+            }
+        }
+        stability::TwoPortStabilityError::NonFiniteFrequency { index, value } => {
+            Error::NonFiniteTwoPortStabilityFrequency { index, value }
+        }
+        stability::TwoPortStabilityError::NonFiniteS {
+            frequency,
+            row,
+            column,
+        } => Error::NonFiniteTwoPortStabilityS {
+            frequency,
+            row,
+            column,
+        },
+        stability::TwoPortStabilityError::NonFiniteZ0 { frequency, port } => {
+            Error::NonFiniteTwoPortStabilityZ0 { frequency, port }
+        }
+        stability::TwoPortStabilityError::NonPositiveRealZ0 {
+            frequency,
+            port,
+            value,
+        } => Error::NonPositiveRealTwoPortStabilityReferenceImpedance {
+            frequency,
+            port,
+            value,
+        },
+        stability::TwoPortStabilityError::Arithmetic { frequency, stage } => {
+            Error::NonFiniteTwoPortStabilityComputation { frequency, stage }
+        }
     }
 }
 

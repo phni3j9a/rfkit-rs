@@ -760,6 +760,39 @@ MIXED_MODE_COORDINATE_ORDER_OUTPUT = (
 )
 MIXED_MODE_PAIR_POLARITY = "positive_then_negative; (0+,1-) and (2+,3-)"
 
+# The two-port stability fixture is deliberately a small multi-frequency
+# contract: public scikit-rf ``Network.stability`` supplies finite K values,
+# while NumPy's determinant independently supplies delta.  Inputs include a
+# passive sample, active samples, and unequal real/complex positive-real
+# references.  The production Rust operation rewrites the formula and does
+# not consume scikit-rf code.
+TWO_PORT_STABILITY_FIXTURE = (
+    Path(__file__).resolve().parent
+    / "fixtures"
+    / "two_port_stability_power_four_frequency.json"
+)
+TWO_PORT_STABILITY_CASE_ID = "two_port_stability_power_four_frequency"
+TWO_PORT_STABILITY_RANDOM_SEED = 20_260_954
+TWO_PORT_STABILITY_NFREQ = 4
+TWO_PORT_STABILITY_NPORTS = 2
+TWO_PORT_STABILITY_S_PERTURBATION_SCALE = 1.0e-3
+TWO_PORT_STABILITY_RTOL = 1e-12
+TWO_PORT_STABILITY_ATOL = 1e-12
+TWO_PORT_STABILITY_INPUT_RECIPE = (
+    "independent four-frequency two-port base S stack plus deterministic "
+    "complex perturbation from NumPy default_rng seed 20260954 at scale 1e-3; "
+    "sample classes are derived from true largest singular values with one "
+    "passive and three active/non-passive samples; unequal real/complex "
+    "positive-real z0 varies by frequency and port; no undefined "
+    "zero-transmission samples"
+)
+TWO_PORT_STABILITY_TOLERANCE_JUSTIFICATION = (
+    "Strict binary64 tolerance for finite dimensionless delta and Rollett K "
+    "outputs.  The source frequency labels, S/z0 inputs, metadata, and shapes "
+    "are exact canonical contract fields; only the two numerical output arrays "
+    "allow rtol=1e-12 and atol=1e-12 cross-language rounding."
+)
+
 
 class _OracleCase(NamedTuple):
     """A registered fixture, builder, and case-specific check strategy."""
@@ -5898,6 +5931,177 @@ def _impedance_admittance_y_to_z_near_fixture(
     )
 
 
+def _two_port_stability_inputs(np: Any) -> tuple[Any, Any, Any, list[str]]:
+    """Build the independent deterministic two-port stability input family."""
+
+    frequency_hz = np.asarray(
+        [0.8e9, 1.25e9, 2.4e9, 4.75e9],
+        dtype=np.float64,
+    )
+    base_s = np.asarray(
+        [
+            [
+                [0.12 + 0.03j, 0.25 - 0.05j],
+                [0.18 + 0.04j, 0.08 - 0.02j],
+            ],
+            [
+                [1.15 + 0.08j, 0.32 - 0.12j],
+                [0.21 + 0.09j, 0.74 - 0.16j],
+            ],
+            [
+                [0.90 - 0.11j, 0.43 + 0.06j],
+                [-0.27 + 0.19j, 0.67 + 0.05j],
+            ],
+            [
+                [1.32 + 0.21j, -0.38 + 0.14j],
+                [0.29 - 0.23j, 0.91 + 0.17j],
+            ],
+        ],
+        dtype=np.complex128,
+    )
+    rng = np.random.default_rng(TWO_PORT_STABILITY_RANDOM_SEED)
+    seeded_perturbation = (
+        rng.normal(
+            loc=0.0,
+            scale=TWO_PORT_STABILITY_S_PERTURBATION_SCALE,
+            size=base_s.shape,
+        )
+        + 1j
+        * rng.normal(
+            loc=0.0,
+            scale=TWO_PORT_STABILITY_S_PERTURBATION_SCALE,
+            size=base_s.shape,
+        )
+    )
+    source_s = np.asarray(base_s + seeded_perturbation, dtype=np.complex128)
+    source_z0 = np.asarray(
+        [
+            [50.0 + 0.0j, 73.0 + 4.0j],
+            [51.5 + 0.0j, 70.0 - 3.0j],
+            [49.0 + 0.0j, 68.0 + 2.0j],
+            [52.0 + 0.0j, 75.0 + 5.0j],
+        ],
+        dtype=np.complex128,
+    )
+    if frequency_hz.shape != (TWO_PORT_STABILITY_NFREQ,):
+        raise ValueError("two-port stability frequency shape drifted")
+    if source_s.shape != (
+        TWO_PORT_STABILITY_NFREQ,
+        TWO_PORT_STABILITY_NPORTS,
+        TWO_PORT_STABILITY_NPORTS,
+    ):
+        raise ValueError("two-port stability S shape drifted")
+    if source_z0.shape != (TWO_PORT_STABILITY_NFREQ, TWO_PORT_STABILITY_NPORTS):
+        raise ValueError("two-port stability z0 shape drifted")
+    if not np.isfinite(frequency_hz).all() or not np.isfinite(source_s).all():
+        raise ValueError("two-port stability frequency/S input must be finite")
+    if not np.isfinite(source_z0).all() or not (source_z0.real > 0.0).all():
+        raise ValueError("two-port stability z0 input must be positive-real finite")
+    if np.all(source_z0.imag == 0.0) or np.all(source_z0[:, 0] == source_z0[:, 1]):
+        raise ValueError("two-port stability z0 input must include unequal complex values")
+    if not np.all(np.abs(source_s[:, 0, 1]) > 0.0) or not np.all(
+        np.abs(source_s[:, 1, 0]) > 0.0
+    ):
+        raise ValueError("two-port stability oracle inputs must have finite K")
+    largest_singular_values = np.asarray(
+        np.linalg.svd(source_s, compute_uv=False)[:, 0],
+        dtype=np.float64,
+    )
+    if largest_singular_values.shape != (TWO_PORT_STABILITY_NFREQ,) or not np.isfinite(
+        largest_singular_values
+    ).all():
+        raise ValueError("two-port stability singular-value evidence must be finite")
+    sample_classes: list[str] = []
+    for value in largest_singular_values:
+        if value < 1.0:
+            sample_classes.append("passive")
+        elif value > 1.0:
+            sample_classes.append("active")
+        else:
+            raise ValueError("two-port stability sample cannot lie on sigma_max=1 boundary")
+    if sample_classes != ["passive", "active", "active", "active"]:
+        raise ValueError(
+            "two-port stability samples must contain one passive and three active cases; "
+            f"got {sample_classes!r} with sigma_max={largest_singular_values.tolist()!r}"
+        )
+    return frequency_hz, source_s, source_z0, sample_classes
+
+
+def _two_port_stability_fixture(np: Any, skrf: Any) -> dict[str, Any]:
+    """Generate stability outputs from public scikit-rf and NumPy APIs."""
+
+    frequency_hz, source_s, source_z0, sample_classes = _two_port_stability_inputs(np)
+    case_id = TWO_PORT_STABILITY_CASE_ID
+    network = skrf.Network(
+        f=frequency_hz,
+        s=source_s,
+        z0=source_z0,
+        s_def="power",
+        name=case_id,
+    )
+    network_s = np.asarray(network.s, dtype=np.complex128)
+    network_z0 = np.asarray(network.z0, dtype=np.complex128)
+    stability = np.asarray(network.stability, dtype=np.float64)
+    delta = np.asarray(np.linalg.det(network_s), dtype=np.complex128)
+    if stability.shape != (TWO_PORT_STABILITY_NFREQ,):
+        raise ValueError(f"two-port stability K shape drifted: {stability.shape}")
+    if delta.shape != (TWO_PORT_STABILITY_NFREQ,):
+        raise ValueError(f"two-port stability delta shape drifted: {delta.shape}")
+    if not np.isfinite(stability).all() or not np.isfinite(delta).all():
+        raise ValueError("two-port stability outputs must be finite")
+
+    return {
+        "metadata": {
+            "case_id": case_id,
+            "input_recipe": TWO_PORT_STABILITY_INPUT_RECIPE,
+            "numpy_version": np.__version__,
+            "operation": "network_two_port_stability_power",
+            "random_seed": TWO_PORT_STABILITY_RANDOM_SEED,
+            "reference_impedance": {
+                "complex": True,
+                "frequency_dependent": True,
+                "per_port": True,
+                "real_part": "strictly positive",
+                "unit": "ohm",
+            },
+            "schema": "rfkit-rs.oracle.fixture",
+            "schema_version": SCHEMA_VERSION,
+            "scikit_rf_commit": EXPECTED_SCIKIT_RF_COMMIT,
+            "scikit_rf_version": skrf.__version__,
+            "shape": {
+                "frequency": list(frequency_hz.shape),
+                "input_s": list(network_s.shape),
+                "input_z0": list(network_z0.shape),
+                "output_delta": list(delta.shape),
+                "output_rollet_k": list(stability.shape),
+            },
+            "sample_classes": sample_classes,
+            "tolerance_policy": {
+                "atol": TWO_PORT_STABILITY_ATOL,
+                "comparison": "only data.delta and data.rollet_k are numeric outputs; all input and metadata contract fields are exact",
+                "justification": TWO_PORT_STABILITY_TOLERANCE_JUSTIFICATION,
+                "regeneration": "exact canonical UTF-8 JSON contract fields; public Network.stability for K and NumPy determinant for delta",
+                "rtol": TWO_PORT_STABILITY_RTOL,
+            },
+            "units": {
+                "delta": "dimensionless",
+                "frequency": "Hz",
+                "rollet_k": "dimensionless",
+                "s": "dimensionless",
+                "z0": "ohm",
+            },
+            "wave_definition": "power",
+        },
+        "data": {
+            "delta": _complex_array(delta),
+            "frequency_hz": [float(value) for value in frequency_hz],
+            "rollet_k": [float(value) for value in stability],
+            "s_input": _complex_array(network_s),
+            "z0_input_ohm": _complex_array(network_z0),
+        },
+    }
+
+
 _CASES = (
     _OracleCase(
         "three_port_complex_z0",
@@ -6191,6 +6395,13 @@ _CASES = (
         "numeric_output",
         "z_ohm",
     ),
+    _OracleCase(
+        TWO_PORT_STABILITY_CASE_ID,
+        TWO_PORT_STABILITY_FIXTURE,
+        _two_port_stability_fixture,
+        "numeric_output",
+        ("delta", "rollet_k"),
+    ),
 )
 _CASES_BY_ID = {case.case_id: case for case in _CASES}
 
@@ -6472,6 +6683,18 @@ def _compare_numeric_output(
                 f"{path} differs by {difference:.17g}; "
                 f"allowed {bound:.17g}"
             )
+        return None
+
+    if isinstance(expected, (int, float)) and not isinstance(expected, bool):
+        try:
+            actual_value = _numeric_value(actual, f"{path} (actual)")
+            expected_value = _numeric_value(expected, f"{path} (expected)")
+        except ValueError as error:
+            return str(error)
+        difference = abs(actual_value - expected_value)
+        bound = atol + rtol * abs(expected_value)
+        if not math.isfinite(difference) or difference > bound:
+            return f"{path} differs by {difference:.17g}; allowed {bound:.17g}"
         return None
 
     return f"{path} has an invalid expected numeric-output shape"
