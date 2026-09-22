@@ -126,6 +126,46 @@ class ZToSNumericFixtureCheckerTests(unittest.TestCase):
         self.assertEqual(self._check_document(document), 1)
 
 
+class InverseCascadeNumericFixtureCheckerTests(unittest.TestCase):
+    """Keep the inverse-cascade output tolerance and contract drift visible."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.fixture_path = oracle.INVERSE_CASCADE_FIXTURE
+        cls.fixture = oracle._read_canonical_json(cls.fixture_path)
+
+    def _check_document(self, document: dict[str, object]) -> int:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / self.fixture_path.name
+            path.write_bytes(oracle._canonical_bytes(document))
+            return oracle._check_numeric_fixture(path, self.fixture, "s_inverse")
+
+    def test_inverse_output_within_recorded_tolerance_passes(self) -> None:
+        document = copy.deepcopy(self.fixture)
+        document["data"]["s_inverse"][0][0][0]["real"] += 1e-13
+
+        self.assertEqual(self._check_document(document), 0)
+
+    def test_inverse_output_outside_recorded_tolerance_fails(self) -> None:
+        document = copy.deepcopy(self.fixture)
+        document["data"]["s_inverse"][0][0][0]["real"] += 1e-3
+
+        self.assertEqual(self._check_document(document), 1)
+
+    def test_inverse_input_or_group_contract_drift_fails(self) -> None:
+        document = copy.deepcopy(self.fixture)
+        document["data"]["s_input"][0][0][0]["real"] += 1e-3
+        self.assertEqual(self._check_document(document), 1)
+
+        document = copy.deepcopy(self.fixture)
+        document["metadata"]["group_convention"]["output"][0] = "old_left_0"
+        self.assertEqual(self._check_document(document), 1)
+
+        document = copy.deepcopy(self.fixture)
+        document["metadata"]["random_seed"] += 1
+        self.assertEqual(self._check_document(document), 1)
+
+
 MATRIX_CASE_SPECS = {
     "power_wave_s_to_z_one_port_real_scalar_z0": {
         "operation": "s_to_z",
@@ -599,6 +639,17 @@ TWO_PORT_STABILITY_CASE_SPECS = {
         "frequencies": 4,
         "seed": oracle.TWO_PORT_STABILITY_RANDOM_SEED,
         "output": ("delta", "rollet_k"),
+    },
+}
+
+
+INVERSE_CASCADE_CASE_SPECS = {
+    oracle.INVERSE_CASCADE_CASE_ID: {
+        "operation": "network_inverse_cascade_power",
+        "ports": 4,
+        "frequencies": 3,
+        "seed": oracle.INVERSE_CASCADE_RANDOM_SEED,
+        "output": "s_inverse",
     },
 }
 
@@ -1430,6 +1481,7 @@ class MatrixRegistrationAndCheckerTests(unittest.TestCase):
             + len(TOUCHSTONE_CASE_SPECS)
             + len(TERMINATION_CASE_SPECS)
             + len(TWO_PORT_STABILITY_CASE_SPECS)
+            + len(INVERSE_CASCADE_CASE_SPECS)
         )
         self.assertTrue(set(MATRIX_CASE_SPECS).issubset(registered))
         self.assertTrue(set(IMPEDANCE_ADMITTANCE_CASE_SPECS).issubset(registered))
@@ -1440,6 +1492,7 @@ class MatrixRegistrationAndCheckerTests(unittest.TestCase):
         )
         self.assertTrue(set(TERMINATION_CASE_SPECS).issubset(registered))
         self.assertTrue(set(TWO_PORT_STABILITY_CASE_SPECS).issubset(registered))
+        self.assertTrue(set(INVERSE_CASCADE_CASE_SPECS).issubset(registered))
         self.assertTrue(set(DIRECT_CONNECTION_CASE_SPECS).issubset(registered))
         self.assertTrue(set(INNER_CONNECT_CASE_SPECS).issubset(registered))
         for case_id, spec in MATRIX_CASE_SPECS.items():

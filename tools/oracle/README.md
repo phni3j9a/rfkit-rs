@@ -126,6 +126,15 @@ S/z0 inputs, sample-class metadata, units, shapes, and the explicit
 positive-real reference contract remain exact. Exact unilateral/isolated
 cases are covered locally in Rust and are deliberately not serialized as
 non-standard JSON infinity.
+One inverse-cascade case is also registered: an independently seeded
+three-frequency four-port real-positive unequal-reference input uses fixed
+groups `[left_0,left_1,right_0,right_1]` and expected output groups
+`[old_right_0,old_right_1,old_left_0,old_left_1]`. Expected S comes from the
+pinned public `Network.inv` operation and is independently checked against
+NumPy `P @ solve(S,I) @ P`; only `s_inverse` is numeric-tolerance output.
+The fixture records random seed `20260955`, determinant evidence for full S
+and both transmission blocks, the scikit-rf commit, NumPy version, exact
+references/frequencies/inputs, and strict `rtol=1e-12`, `atol=1e-12` policy.
 
 ## Clean-checkout setup
 
@@ -168,7 +177,7 @@ checker.
 
 ## Generate and verify
 
-The harness has forty-three registered canonical cases. The original three cases
+The harness has forty-four registered canonical cases. The original three cases
 remain unchanged:
 
 - `three_port_complex_z0` — the representative four-frequency, three-port
@@ -244,6 +253,17 @@ The sampled two-port stability case is:
   supplies delta, and only `data.delta`/`data.rollet_k` use strict
   `rtol=1e-12`, `atol=1e-12` tolerance. The Rust `Option` undefined policy is
   exercised by local unilateral/isolated tests rather than a JSON infinity.
+
+The inverse-cascade case is:
+
+- `power_wave_inverse_cascade_four_port_real_unequal_z0` — three deterministic
+  four-port samples generated from NumPy `default_rng` seed `20260955`, with
+  unequal real-positive frequency-dependent per-port references and fixed
+  equal ordered input groups `[left_0,left_1,right_0,right_1]`. Pinned public
+  scikit-rf `Network.inv` supplies `s_inverse`; an independent NumPy solve
+  verifies `P @ solve(S,I) @ P`. The expected swapped references, frequencies,
+  input S, determinant evidence, group metadata, and recipe are exact; only
+  `data.s_inverse` uses strict `rtol=1e-12`, `atol=1e-12` comparison.
 
 The eight existing S↔Z matrix cases are registered individually as follows.
 Each row has multiple frequency samples, and every multiport input matrix is

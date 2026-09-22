@@ -48,6 +48,7 @@ mod connection;
 mod direct_connection;
 mod impedance_admittance;
 mod interpolation;
+mod inverse_cascade;
 mod linalg;
 mod mixed_mode;
 mod power_wave_admittance;
@@ -258,6 +259,67 @@ pub enum Error {
         "direct power-wave renormalization produced a non-finite computation at frequency {frequency}, row {row}, column {column}"
     )]
     NonFiniteDirectRenormalizationComputation {
+        frequency: usize,
+        row: usize,
+        column: usize,
+    },
+
+    #[error("inverse-cascade frequency axis must not be empty")]
+    EmptyInverseCascadeFrequency,
+
+    #[error(
+        "inverse-cascade frequency length does not match the S-parameter frequency dimension: expected {expected}, got {actual}"
+    )]
+    InverseCascadeFrequencyLengthMismatch { expected: usize, actual: usize },
+
+    #[error(
+        "inverse-cascade requires a square positive even-port S-parameter shape, got {shape:?}"
+    )]
+    InvalidInverseCascadeSShape { shape: Vec<usize> },
+
+    #[error("inverse-cascade reference-impedance shape must be (nfreq, nport), got {shape:?}")]
+    InvalidInverseCascadeZ0Shape { shape: Vec<usize> },
+
+    #[error("inverse-cascade requires an even positive port count, got {nports}")]
+    InvalidInverseCascadePortCount { nports: usize },
+
+    #[error("inverse-cascade frequency is non-finite at index {index}: {value:?}")]
+    NonFiniteInverseCascadeFrequency { index: usize, value: f64 },
+
+    #[error(
+        "inverse-cascade {stage} input S-parameter is non-finite at frequency {frequency}, row {row}, column {column}"
+    )]
+    NonFiniteInverseCascadeS {
+        stage: InverseCascadeStage,
+        frequency: usize,
+        row: usize,
+        column: usize,
+    },
+
+    #[error(
+        "inverse-cascade reference impedance is non-finite at frequency {frequency}, port {port}"
+    )]
+    NonFiniteInverseCascadeZ0 { frequency: usize, port: usize },
+
+    #[error(
+        "inverse-cascade reference impedance has a zero real part at frequency {frequency}, port {port}"
+    )]
+    ZeroRealInverseCascadeReferenceImpedance { frequency: usize, port: usize },
+
+    #[error(
+        "inverse-cascade {stage} system is exactly singular at frequency {frequency}, pivot {pivot}"
+    )]
+    SingularInverseCascade {
+        stage: InverseCascadeStage,
+        frequency: usize,
+        pivot: usize,
+    },
+
+    #[error(
+        "inverse-cascade {stage} computation became non-finite at frequency {frequency}, row {row}, column {column}"
+    )]
+    NonFiniteInverseCascadeComputation {
+        stage: InverseCascadeStage,
         frequency: usize,
         row: usize,
         column: usize,
@@ -1074,6 +1136,29 @@ impl fmt::Display for DirectRenormalizationReference {
         formatter.write_str(match self {
             Self::Source => "source",
             Self::Target => "target",
+        })
+    }
+}
+
+/// Stage associated with a power-wave inverse-cascade validation or solve
+/// failure.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InverseCascadeStage {
+    /// The complete source S matrix `S`.
+    FullS,
+    /// The forward transmission block `S[right, left]`.
+    ForwardTransmission,
+    /// The reverse transmission block `S[left, right]`.
+    ReverseTransmission,
+}
+
+impl fmt::Display for InverseCascadeStage {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::FullS => "full S",
+            Self::ForwardTransmission => "forward transmission",
+            Self::ReverseTransmission => "reverse transmission",
         })
     }
 }
@@ -2048,6 +2133,66 @@ impl Network {
             .map_err(map_direct_renormalization_error)?;
 
         Network::new(self.frequency.clone(), s, new_z0)
+    }
+
+    /// Returns the power-wave inverse of an ordered even-port cascade.
+    ///
+    /// The source ports are interpreted as two equal ordered groups,
+    /// `[left_0..left_(N-1), right_0..right_(N-1)]`.  The returned network
+    /// uses the fixed reversed group order `[old right, old left]`; use
+    /// [`Network::permute_ports`] first when the physical fixture uses another
+    /// ordering.  With `P` the group-exchange matrix, the S-parameters are
+    /// evaluated as `S_inverse = P S⁻¹ P`, and the references are exactly
+    /// `P conj(z0)`.
+    ///
+    /// This is a wave-reversal operation, not an elementwise reciprocal and
+    /// not a port permutation of the source S matrix.  The implementation
+    /// obtains `S⁻¹` by solving `S X = I` with the core checked exact-pivot
+    /// solver; it never forms an explicit dense inverse.  In addition to the
+    /// full S system, both directional N-by-N transmission blocks are solved
+    /// and must be nonsingular: `S[right,left]` is the forward stage and
+    /// `S[left,right]` is the reverse stage.  Only exact evaluated zero pivots
+    /// are singular, so finite near-singular systems remain eligible when all
+    /// arithmetic stays finite.
+    ///
+    /// The operation uses Kurokawa power-wave reversal with currents directed
+    /// into the source network.  It requires finite frequency labels and S/z0
+    /// values, and finite references with nonzero real parts.  Frequencies are
+    /// pointwise labels: their original order and bit patterns (including
+    /// signed zero, negative, duplicate, and descending samples) are copied
+    /// exactly.  Unequal, per-port, frequency-dependent, complex, and
+    /// negative-real references are supported under the repository's
+    /// algebraic `abs(Re(z0))` normalization; negative-real values do not
+    /// imply a passive-power interpretation.
+    ///
+    /// Inverse networks can be active or noncausal mathematical removal
+    /// operators rather than realizable passive devices.  Cascading one with a
+    /// fixture cancels that fixture only for the declared orientation, paired
+    /// physical ports, compatible frequency grids, and nonsingular connection
+    /// conditions.  No noise de-embedding, automatic calibration, pole or
+    /// stability claim, or measurement-error correction is implied.  For
+    /// complex references, the conjugated swapped references are intentional;
+    /// callers should explicitly renormalize when comparing the recovered DUT
+    /// at another reference.
+    ///
+    /// This additive operation is provisional during the `0.x` series.  Its
+    /// name and signature are not a `1.0` stability promise.
+    ///
+    /// # Errors
+    ///
+    /// Returns inverse-cascade-specific structured diagnostics for malformed
+    /// serde-created axes/shapes, odd or zero port counts, non-finite labels or
+    /// data, zero-real references, exact singular full-S or transmission
+    /// systems, and non-finite arithmetic.  Numerical diagnostics retain the
+    /// failing [`InverseCascadeStage`] plus frequency, row/column, or pivot
+    /// context where available.
+    pub fn inverse_cascade_power(&self) -> Result<Network> {
+        let (s, z0) =
+            inverse_cascade::inverse_cascade_power(self.frequency.hz(), &self.s, &self.z0)
+                .map_err(map_inverse_cascade_error)?;
+
+        let frequency = self.frequency.clone();
+        Network::new(frequency, s, z0)
     }
 
     /// Resamples this network onto an explicit frequency grid using
@@ -3398,6 +3543,68 @@ fn map_direct_renormalization_error(error: power_waves::DirectRenormalizationErr
             row,
             column,
         } => Error::NonFiniteDirectRenormalizationComputation {
+            frequency,
+            row,
+            column,
+        },
+    }
+}
+
+fn map_inverse_cascade_error(error: inverse_cascade::InverseCascadeError) -> Error {
+    match error {
+        inverse_cascade::InverseCascadeError::EmptyFrequency => Error::EmptyInverseCascadeFrequency,
+        inverse_cascade::InverseCascadeError::FrequencyLengthMismatch { expected, actual } => {
+            Error::InverseCascadeFrequencyLengthMismatch { expected, actual }
+        }
+        inverse_cascade::InverseCascadeError::InvalidSShape { shape } => {
+            Error::InvalidInverseCascadeSShape {
+                shape: vec![shape.0, shape.1, shape.2],
+            }
+        }
+        inverse_cascade::InverseCascadeError::InvalidZ0Shape { shape } => {
+            Error::InvalidInverseCascadeZ0Shape {
+                shape: vec![shape.0, shape.1],
+            }
+        }
+        inverse_cascade::InverseCascadeError::InvalidPortCount { nports } => {
+            Error::InvalidInverseCascadePortCount { nports }
+        }
+        inverse_cascade::InverseCascadeError::NonFiniteFrequency { index, value } => {
+            Error::NonFiniteInverseCascadeFrequency { index, value }
+        }
+        inverse_cascade::InverseCascadeError::NonFiniteS {
+            stage,
+            frequency,
+            row,
+            column,
+        } => Error::NonFiniteInverseCascadeS {
+            stage,
+            frequency,
+            row,
+            column,
+        },
+        inverse_cascade::InverseCascadeError::NonFiniteZ0 { frequency, port } => {
+            Error::NonFiniteInverseCascadeZ0 { frequency, port }
+        }
+        inverse_cascade::InverseCascadeError::ZeroRealReferenceImpedance { frequency, port } => {
+            Error::ZeroRealInverseCascadeReferenceImpedance { frequency, port }
+        }
+        inverse_cascade::InverseCascadeError::Singular {
+            stage,
+            frequency,
+            pivot,
+        } => Error::SingularInverseCascade {
+            stage,
+            frequency,
+            pivot,
+        },
+        inverse_cascade::InverseCascadeError::NonFiniteComputation {
+            stage,
+            frequency,
+            row,
+            column,
+        } => Error::NonFiniteInverseCascadeComputation {
+            stage,
             frequency,
             row,
             column,

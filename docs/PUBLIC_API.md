@@ -232,6 +232,79 @@ diagnostics, tests, and documentation with no storage or data migration.
 No broader wave convention, dependency, crate, default-reference, or API
 architecture change is implied.
 
+## Power-wave inverse cascade (Issue #94 Yellow decision)
+
+The provisional public surface adds one borrowing, owned-result operation:
+
+```rust
+impl Network {
+    pub fn inverse_cascade_power(&self) -> Result<Network>;
+}
+```
+
+The source must have an even positive port count `2N`, interpreted as two
+ordered groups `[left_0..left_(N-1), right_0..right_(N-1)]`. The result uses
+the fixed `[old right, old left]` group order. If `P` exchanges those groups,
+the mathematical definition is
+
+```text
+a = F (V + G I)                 b = F (V - conj(G) I)
+b = S a                         V' = P V, I' = -P I
+a' = P b, b' = P a             z0' = P conj(z0)
+S_inverse = P S^-1 P
+```
+
+The implementation evaluates `S^-1` by solving `S X = I` through the existing
+checked multiple-right-hand-side exact-pivot solver. It never forms an explicit
+dense inverse, uses an elementwise reciprocal, or silently converts through
+Z/Y. The returned `Network` owns new S/z0 arrays, copies the source frequency
+axis exactly (including order and signed-zero bits), and leaves the borrowed
+source unchanged.
+
+The inverse-cascade domain is deliberately two-sided. Before indexing, the
+operation validates a nonempty frequency axis matching S, square positive-even
+S, z0 shape `(nfreq,2N)`, finite frequency/S/z0 values, and a nonzero real part
+for every reference. At each sample it requires exact nonsingularity of the
+full S, `S[right,left]` (forward transmission), and `S[left,right]` (reverse
+transmission). [`InverseCascadeStage`] distinguishes these three stages in
+structured errors; numerical failures retain sample and pivot or row/column
+context. Only exact evaluated zero pivots are singular. Finite near-singular
+inputs remain eligible when all checked arithmetic stays finite, and no rank
+cutoff, regularization, pseudoinverse, nudge, or fallback is used.
+
+Unequal, per-port, frequency-dependent, complex, and negative-real references
+are supported under the existing algebraic `abs(Re(z0))` power-wave extension;
+negative-real references do not imply a passive-power interpretation. Inverse
+networks may be active or noncausal mathematical removal operators. A known
+fixture cancels only with the declared orientation, paired ports, compatible
+frequency grids, and nonsingular direct connection conditions. Callers must
+explicitly renormalize when comparing a recovered DUT at another reference.
+No noise de-embedding, automatic calibration, pole/stability claim,
+measurement-error correction, or broad scikit-rf compatibility promise is
+implied.
+
+The selected Yellow scope is one explicit method with a fixed group convention
+and a bounded nonsingular transmission domain. Plain reference swapping was
+rejected for complex power waves; a two-port/common-reference-only operation,
+inferred pairing metadata, and a new transfer-parameter hierarchy were also
+rejected as unnecessary or less reversible. The public method is additive and
+provisional during 0.x, so rollback removes the method/kernel, diagnostics,
+tests, fixture, and documentation without stored-data migration or changes to
+the canonical `Network` representation.
+
+Conformance uses one independently seeded four-port, three-frequency fixture
+with unequal real-positive references, generated and checked against pinned
+public scikit-rf `Network.inv` 2.0.1 at commit
+`bd651e923cac6020de49a096e1d7e9b5f949f884` and NumPy `2.5.1`. The generator
+records random seed `20260955`, ordered groups, determinant evidence, the independent
+`P @ solve(S,I) @ P` check, and strict output-only `rtol=1e-12`,
+`atol=1e-12`; frequencies, inputs, references, shapes, and metadata are exact
+contract fields. The Rust oracle test calls only the public method. Local tests
+add ideal-through, analytic/non-reciprocal two-port, complex-reference V/I,
+coupled asymmetric four-port, larger six-port, double-inverse, malformed/error,
+and both-order physical cancellation coverage. The Touchstone counterpart is
+`crates/rfkit-touchstone/examples/inverse_cascade_touchstone.rs`.
+
 ## Explicit port permutation (Issue #82 Green decision)
 
 The provisional public surface adds one owned, borrowing transformation:
@@ -722,6 +795,8 @@ impl Network {
         new_z0: Array2<Complex64>,
     ) -> Result<Network>;
 
+    pub fn inverse_cascade_power(&self) -> Result<Network>;
+
     pub fn permute_ports(&self, order: &[usize]) -> Result<Network>;
 
     pub fn to_mixed_mode_equal_pair_power(&self, pair_count: usize) -> Result<Network>;
@@ -781,6 +856,7 @@ The exact internal delegation remains an implementation detail. The semantic dis
 - `to_z_power`, `to_y_power`, and `to_y_direct_power` explicitly select the verified power-wave conversion convention; the latter names the direct S→Y equation while `to_y_power` retains composed S→Z→Y semantics;
 - `renormalize_power` explicitly selects power-wave renormalization;
 - `renormalize_direct_power` explicitly selects the direct Kurokawa wave-change equation, while `renormalize_power` retains its composed S→Z→S domain and diagnostics;
+- `inverse_cascade_power` explicitly selects fixed-group Kurokawa wave reversal `P S^-1 P` with conjugated/group-exchanged references and full/forward/reverse transmission diagnostics; it does not imply a generic dense-inverse or calibration API;
 - `permute_ports` explicitly selects a complete new-to-old physical-port reindexing and carries S rows, S columns, and z0 together without wave arithmetic;
 - `to_mixed_mode_equal_pair_power` and `to_single_ended_equal_pair_power` explicitly select the equal single-ended-reference adjacent-pair power-wave transform and its inverse, with modal layout `[d...,c...,unpaired...]`; they do not infer physical pairing or store mode metadata;
 - `interpolate_cartesian_linear` does not establish a vague interpolation default that would later need reinterpretation;
