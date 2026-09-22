@@ -534,6 +534,104 @@ physical V/I boundary independently, then explicitly calls
 reference before writing and reading. The writer does not repair or
 renormalize a direct-connection result automatically.
 
+## Direct physical power-wave inner connection (Issue #90 Green decision)
+
+The provisional public surface adds one borrowing, owned-result operation:
+
+```rust
+impl Network {
+    pub fn inner_connect_direct_power(
+        &self,
+        port_a: usize,
+        port_b: usize,
+    ) -> Result<Network>;
+}
+```
+
+The method connects two distinct coordinates of one network with the
+physical conditions `V_a = V_b` and `I_a + I_b = 0`, where both currents point
+into the source network. It removes both selected ports and returns all
+survivors in their original order. At each frequency, let `i=[port_a,port_b]`
+and let `e` be those survivors. With the Kurokawa power-wave equations
+
+```text
+a = (V + z I)/(2 sqrt(abs(Re(z))))
+b = (V - conj(z) I)/(2 sqrt(abs(Re(z))))
+q = sqrt(abs(Re(z)))/Re(z)
+I = q(a-b)
+V = q(conj(z) a + z b)
+```
+
+the internal boundary is evaluated as
+
+```text
+C = [[ q_a,             q_b            ],
+     [ q_a*conj(z_a),  -q_b*conj(z_b)  ]]
+D = [[-q_a,            -q_b           ],
+     [ q_a*z_a,         -q_b*z_b       ]]
+
+(C + D*S_ii) T = -D*S_ie
+S_out = S_ee + S_ei*T
+```
+
+`S_ii` is the complete selected 2×2 block, including both `S_ab` and
+`S_ba`; dropping either off-diagonal coupling or treating the selected ports
+as independent one-port networks is incorrect. The direct solve is only for
+this two-coordinate system. It does not convert through S/Z/Y, invert the
+whole network, divide by `z_a+z_b`, insert a mismatch network, use a
+pseudoinverse or least-squares fallback, regularize, clip, nudge an
+eigenvalue, or silently change the wave definition.
+
+The input shape is checked before selected-port indexing, including
+serde-created malformed values: the frequency axis must be nonempty, S must
+be positive and square, the frequency/S lengths must agree, and z0 must have
+exact `(nfreq,nport)` shape. Frequencies are finite pointwise labels copied
+bit-for-bit, including signed zero; negative, duplicate, and descending
+finite labels remain valid. Every S and z0 component must be finite. Every
+reference must have a finite nonzero real part, so equal or unequal complex,
+per-port, frequency-dependent, and negative-real references are in-domain.
+The sign of `Re(z)` is retained in `q`. Selected ports must be distinct and
+in range, and at least one survivor must remain. Survivor order, frequency,
+and references are preserved exactly; the source network is unchanged.
+
+An exactly zero evaluated pivot is a structured singular-junction error,
+including when external coupling is zero. A finite nonsingular near-singular
+system remains in-domain without an arbitrary condition, rank, or tolerance
+cutoff. Non-finite intermediate or output arithmetic is reported with
+operation, frequency, selected-port, and row/column/pivot context where
+available. Existing matched, direct inter-network, explicit-grid,
+termination, and writer semantics remain unchanged.
+
+This additive operation is Green, reversible, and provisional for the `0.x`
+series. It introduces no new wave convention, storage or topology model,
+compatibility promise, dependency, publication boundary, or file-format
+extension. Rollback removes the method, kernel, tests, fixture, and docs
+without persisted-data migration. The implementation is a REWRITE from the
+Kurokawa equations plus voltage continuity/current conservation; scikit-rf is
+used as a behavior oracle only, and no broad scikit-rf compatibility promise
+is made.
+
+The canonical differential case is
+`tools/oracle/fixtures/power_wave_inner_connect_direct_five_port_complex_z0.json`:
+an independently authored asymmetric non-reciprocal five-port, three
+frequency samples, selected ports 1 and 3, seed `20260952`, and unequal
+complex frequency-dependent references with positive real parts. The pinned
+scikit-rf `2.0.1` public `innerconnect` call deliberately exposes a raw
+pseudo-wave result for complex references; expected S is obtained only after
+the explicit public restoration
+`result.renormalize(result.z0, s_def="power")`. The input, grid, references,
+survivor mapping, wave-definition metadata, and tolerance policy are exact;
+only output S uses `rtol=1e-12`, `atol=1e-12`.
+
+The executable and external workflow test are
+`crates/rfkit-touchstone/examples/inner_connect_direct_power_touchstone.rs`
+and
+`crates/rfkit-touchstone/tests/public_direct_inner_connection_workflow.rs`.
+They parse the multiport input, explicitly direct-renormalize selected
+references, independently reconstruct the full physical V/I response, close
+the pair, explicitly restore one writer-compatible positive-real reference,
+and write/read the result.
+
 ## Implemented public baseline
 
 The implemented shape is:
@@ -593,6 +691,12 @@ impl Network {
         port_b: usize,
     ) -> Result<Network>;
 
+    pub fn inner_connect_direct_power(
+        &self,
+        port_a: usize,
+        port_b: usize,
+    ) -> Result<Network>;
+
     pub fn terminate_port_impedance_power(
         &self,
         port: usize,
@@ -616,6 +720,10 @@ The exact internal delegation remains an implementation detail. The semantic dis
   unequal finite nonzero-real references and retains A-then-B survivor order;
   it does not silently change the exact-grid or matched-junction contracts of
   the other connection methods.
+- `inner_connect_direct_power` exposes the same direct physical V/I boundary
+  for two ports of one network, retaining the full internal 2×2 S block and
+  original survivor order; it does not widen the matched inner-connect
+  reference contract or make a broad scikit-rf compatibility promise.
 - `terminate_port_impedance_power` applies a finite physical impedance boundary directly at one
   selected port, removes that port, and retains the original survivor order and references without
   selecting a new frequency grid or renormalizing the source.

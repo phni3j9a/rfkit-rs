@@ -722,6 +722,76 @@ pub enum Error {
         column: usize,
     },
 
+    #[error(
+        "direct inner connection S-parameter shape must be (nfreq, nport, nport), got {shape:?}"
+    )]
+    InvalidDirectInnerConnectionSShape { shape: Vec<usize> },
+
+    #[error(
+        "direct inner connection reference-impedance shape must be (nfreq, nport), got {shape:?}"
+    )]
+    InvalidDirectInnerConnectionZ0Shape { shape: Vec<usize> },
+
+    #[error("direct inner connection frequency axis must not be empty")]
+    EmptyDirectInnerConnectionFrequency,
+
+    #[error(
+        "direct inner connection frequency axis length does not match the S-parameter frequency dimension: expected {expected}, got {actual}"
+    )]
+    DirectInnerConnectionFrequencyShape { expected: usize, actual: usize },
+
+    #[error("direct inner connection frequency is non-finite at index {index}: {value:?}")]
+    NonFiniteDirectInnerConnectionFrequency { index: usize, value: f64 },
+
+    #[error(
+        "direct inner connection S-parameter is non-finite at frequency {frequency}, row {row}, column {column}"
+    )]
+    NonFiniteDirectInnerConnectionS {
+        frequency: usize,
+        row: usize,
+        column: usize,
+    },
+
+    #[error(
+        "direct inner connection reference impedance is non-finite at frequency {frequency}, port {port}"
+    )]
+    NonFiniteDirectInnerConnectionZ0 { frequency: usize, port: usize },
+
+    #[error("direct inner connection port {port} is out of range for {nports} ports")]
+    InvalidDirectInnerConnectionPort { port: usize, nports: usize },
+
+    #[error("direct inner connection requires two distinct ports, got {port_a} and {port_b}")]
+    IdenticalDirectInnerConnectionPorts { port_a: usize, port_b: usize },
+
+    #[error(
+        "direct inner connection reference impedance has a zero real part at frequency {frequency}, port {port}"
+    )]
+    ZeroRealDirectInnerConnectionReferenceImpedance { frequency: usize, port: usize },
+
+    #[error("direct inner connection leaves no external ports")]
+    NoExternalDirectInnerConnectionPorts,
+
+    #[error(
+        "direct power-wave inner connection is exactly singular at frequency {frequency}, selected ports A={port_a}, B={port_b}, pivot {pivot}"
+    )]
+    SingularDirectInnerConnection {
+        frequency: usize,
+        port_a: usize,
+        port_b: usize,
+        pivot: usize,
+    },
+
+    #[error(
+        "non-finite value while evaluating direct power-wave inner connection at frequency {frequency}, selected ports A={port_a}, B={port_b}, row {row}, column {column}"
+    )]
+    NonFiniteDirectInnerConnectionComputation {
+        frequency: usize,
+        port_a: usize,
+        port_b: usize,
+        row: usize,
+        column: usize,
+    },
+
     #[error("termination source frequency axis must not be empty")]
     EmptyTerminationFrequency,
 
@@ -2221,6 +2291,94 @@ impl Network {
         Network::new(frequency, connected.s, connected.z0)
     }
 
+    /// Connects two distinct ports of this network by direct physical voltage
+    /// continuity and current conservation under Kurokawa power waves.
+    ///
+    /// For selected internal coordinates `i = [port_a, port_b]` and the
+    /// remaining external coordinates `e`, the source relation is partitioned
+    /// as `b_i = S_ii a_i + S_ie a_e` and
+    /// `b_e = S_ei a_i + S_ee a_e`.  The junction equations use currents
+    /// directed into this network:
+    ///
+    /// ```text
+    /// a = (V + z I)/(2 sqrt(abs(Re(z))))
+    /// b = (V - conj(z) I)/(2 sqrt(abs(Re(z))))
+    /// q = sqrt(abs(Re(z))) / Re(z)
+    /// I = q (a - b)
+    /// V = q (conj(z) a + z b)
+    ///
+    /// C = [[ qa,             qb           ],
+    ///      [ qa*conj(za), -qb*conj(zb)  ]]
+    /// D = [[-qa,            -qb           ],
+    ///      [ qa*za,         -qb*zb      ]]
+    ///
+    /// (C + D*S_ii) T = -D*S_ie
+    /// S_out = S_ee + S_ei*T
+    /// ```
+    ///
+    /// The complete two-by-two internal block is used, including both
+    /// off-diagonal couplings.  This is a direct two-coordinate elimination:
+    /// it does not convert through S/Z/Y, divide by `za + zb`, insert a
+    /// mismatch network, renormalize, regularize, or choose a fixed reference.
+    /// The selected reference impedances may be unequal or equal, complex,
+    /// frequency-dependent, or have negative real parts, provided every
+    /// reference is finite with a nonzero real part.  The signed real part is
+    /// retained in `q`.
+    ///
+    /// The result contains every non-selected port in the source's original
+    /// order, with each surviving reference copied exactly.  The source and
+    /// all caller-owned data remain unchanged.  Frequencies are finite
+    /// pointwise labels and are copied bit-for-bit, including signed zero;
+    /// negative, duplicate, and descending samples are valid.  Only exact
+    /// zero pivots in the evaluated two-by-two system are singular.  Finite
+    /// near-singular systems remain in-domain, while checked arithmetic
+    /// rejects non-finite intermediate or output values.
+    ///
+    /// This additive operation is provisional while `rfkit-core` is in the
+    /// `0.x` series; its name and signature are not a `1.0` stability promise.
+    ///
+    /// # Errors
+    ///
+    /// Returns direct-inner-connection-specific structured errors for malformed
+    /// serde-created shapes, invalid frequency/S/z0 data, invalid or equal
+    /// ports, no survivors, zero-real references, exact junction singularity,
+    /// and non-finite arithmetic.  Numerical errors retain selected-port,
+    /// pivot, frequency, and computation row/column context.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use ndarray::{Array2, Array3};
+    /// use num_complex::Complex64;
+    /// use rfkit_core::{Frequency, Network};
+    ///
+    /// # fn example() -> rfkit_core::Result<()> {
+    /// let network = Network::new(
+    ///     Frequency::from_hz(vec![1.0e9])?,
+    ///     Array3::zeros((1, 3, 3)),
+    ///     Array2::from_elem((1, 3), Complex64::new(50.0, 0.0)),
+    /// )?;
+    /// let reduced = network.inner_connect_direct_power(0, 1)?;
+    /// assert_eq!(reduced.nports(), 1);
+    /// assert_eq!(reduced.s().dim(), (1, 1, 1));
+    /// # Ok(())
+    /// # }
+    /// # example().unwrap();
+    /// ```
+    pub fn inner_connect_direct_power(&self, port_a: usize, port_b: usize) -> Result<Network> {
+        let connected = direct_connection::inner_connect_direct(
+            self.frequency.hz(),
+            &self.s,
+            &self.z0,
+            port_a,
+            port_b,
+        )
+        .map_err(map_direct_inner_connection_error)?;
+
+        let frequency = Frequency::from_hz(connected.frequency_hz)?;
+        Network::new(frequency, connected.s, connected.z0)
+    }
+
     /// Applies one finite physical impedance to a selected source port and
     /// returns the reduced network with that port removed.
     ///
@@ -2659,6 +2817,81 @@ fn map_direct_connection_error(error: direct_connection::DirectConnectionError) 
             row,
             column,
         } => Error::NonFiniteDirectConnectionComputation {
+            frequency,
+            port_a,
+            port_b,
+            row,
+            column,
+        },
+    }
+}
+
+fn map_direct_inner_connection_error(
+    error: direct_connection::DirectInnerConnectionError,
+) -> Error {
+    match error {
+        direct_connection::DirectInnerConnectionError::InvalidSShape { shape } => {
+            Error::InvalidDirectInnerConnectionSShape {
+                shape: vec![shape.0, shape.1, shape.2],
+            }
+        }
+        direct_connection::DirectInnerConnectionError::InvalidZ0Shape { shape } => {
+            Error::InvalidDirectInnerConnectionZ0Shape {
+                shape: vec![shape.0, shape.1],
+            }
+        }
+        direct_connection::DirectInnerConnectionError::EmptyFrequency => {
+            Error::EmptyDirectInnerConnectionFrequency
+        }
+        direct_connection::DirectInnerConnectionError::FrequencyShape { expected, actual } => {
+            Error::DirectInnerConnectionFrequencyShape { expected, actual }
+        }
+        direct_connection::DirectInnerConnectionError::NonFiniteFrequency { index, value } => {
+            Error::NonFiniteDirectInnerConnectionFrequency { index, value }
+        }
+        direct_connection::DirectInnerConnectionError::NonFiniteS {
+            frequency,
+            row,
+            column,
+        } => Error::NonFiniteDirectInnerConnectionS {
+            frequency,
+            row,
+            column,
+        },
+        direct_connection::DirectInnerConnectionError::NonFiniteZ0 { frequency, port } => {
+            Error::NonFiniteDirectInnerConnectionZ0 { frequency, port }
+        }
+        direct_connection::DirectInnerConnectionError::InvalidPort { port, nports } => {
+            Error::InvalidDirectInnerConnectionPort { port, nports }
+        }
+        direct_connection::DirectInnerConnectionError::IdenticalPorts { port_a, port_b } => {
+            Error::IdenticalDirectInnerConnectionPorts { port_a, port_b }
+        }
+        direct_connection::DirectInnerConnectionError::ZeroRealReferenceImpedance {
+            frequency,
+            port,
+        } => Error::ZeroRealDirectInnerConnectionReferenceImpedance { frequency, port },
+        direct_connection::DirectInnerConnectionError::NoExternalPorts => {
+            Error::NoExternalDirectInnerConnectionPorts
+        }
+        direct_connection::DirectInnerConnectionError::Singular {
+            frequency,
+            port_a,
+            port_b,
+            pivot,
+        } => Error::SingularDirectInnerConnection {
+            frequency,
+            port_a,
+            port_b,
+            pivot,
+        },
+        direct_connection::DirectInnerConnectionError::NonFiniteComputation {
+            frequency,
+            port_a,
+            port_b,
+            row,
+            column,
+        } => Error::NonFiniteDirectInnerConnectionComputation {
             frequency,
             port_a,
             port_b,

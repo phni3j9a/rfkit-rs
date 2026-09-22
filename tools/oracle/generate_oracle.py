@@ -27,6 +27,14 @@ with one independent seed, unequal complex positive-real references, and the
 public ``skrf.network.connect`` operation as its sole expected-S path. Its
 metadata, inputs, grids, references, and A-then-B survivor mapping are exact;
 only the connected S output is tolerance-compared.
+The direct same-network inner-junction fixture uses an independent asymmetric
+five-port input with unequal complex positive-real references and a full,
+non-reciprocal selected 2x2 block. Its expected path deliberately calls public
+``skrf.network.innerconnect`` on a power-wave input, records the raw pseudo
+result, and then calls public ``result.renormalize(result.z0,
+s_def="power")`` before extracting the output. Only the restored output S is
+numeric-tolerance compared; the wave-definition metadata makes omitting that
+restoration observable.
 The finite physical-load termination fixture uses an independent asymmetric
 five-port source, a selected middle port, explicit finite loads including a
 short, and a one-port load built through public ``skrf.network.z2s`` and
@@ -543,6 +551,45 @@ INNER_CONNECT_TOLERANCE_JUSTIFICATION = (
     "five-port case; the output is checked with the recorded numeric bound while "
     "frequencies, inputs, z0, ordering metadata, and all other contract fields "
     "remain exact."
+)
+
+# Direct same-network inner-connect is a separate oracle case from the
+# matched-junction fixture above.  scikit-rf's public ``innerconnect`` first
+# converts a power-wave input to a pseudo-wave result for complex references;
+# the expected output therefore restores power waves explicitly before any
+# values are extracted.  Keep this path visible and auditable in both the
+# builder and fixture metadata so replacing the restored output with the raw
+# pseudo result cannot silently pass.
+INNER_CONNECT_DIRECT_FIXTURE = (
+    Path(__file__).resolve().parent
+    / "fixtures"
+    / "power_wave_inner_connect_direct_five_port_complex_z0.json"
+)
+INNER_CONNECT_DIRECT_CASE_ID = (
+    "power_wave_inner_connect_direct_five_port_complex_z0"
+)
+INNER_CONNECT_DIRECT_RANDOM_SEED = 20_260_952
+INNER_CONNECT_DIRECT_NFREQ = 3
+INNER_CONNECT_DIRECT_NPORTS = 5
+INNER_CONNECT_DIRECT_PORT_A = 1
+INNER_CONNECT_DIRECT_PORT_B = 3
+INNER_CONNECT_DIRECT_RTOL = 1e-12
+INNER_CONNECT_DIRECT_ATOL = 1e-12
+INNER_CONNECT_DIRECT_INPUT_RECIPE = (
+    "one independent NumPy default_rng stream with seed 20260952, an "
+    "asymmetric non-reciprocal five-port with a full selected 2x2 internal "
+    "coupling block, three finite frequency samples, and unequal complex "
+    "frequency-dependent positive-real references on every port"
+)
+INNER_CONNECT_DIRECT_TOLERANCE_JUSTIFICATION = (
+    "Strict binary64 tolerance for a deterministic, well-conditioned direct "
+    "same-network physical inner junction. The expected S path constructs a "
+    "power-wave scikit-rf Network, calls one pinned public "
+    "skrf.network.innerconnect call, then explicitly restores the returned "
+    "pseudo-wave result with result.renormalize(result.z0, s_def=\"power\") "
+    "before extraction; only the restored output S is numeric-tolerance "
+    "checked while source S/z0, frequency, survivor z0, ordering, and wave "
+    "definition metadata remain exact."
 )
 
 # Finite physical-load termination is kept as one small, direction-specific
@@ -3776,6 +3823,262 @@ def _inner_connect_fixture(np: Any, skrf: Any) -> dict[str, Any]:
     }
 
 
+def _inner_connect_direct_inputs(
+    np: Any, *, seed: int
+) -> tuple[Any, Any, Any]:
+    """Build the independent complex-reference direct inner-connect input."""
+
+    frequency_hz = np.array(
+        [0.67e9, 1.21e9, 1.97e9],
+        dtype=np.float64,
+    )
+    rng = np.random.default_rng(seed)
+    s = (
+        rng.normal(
+            loc=0.0,
+            scale=0.017,
+            size=(
+                INNER_CONNECT_DIRECT_NFREQ,
+                INNER_CONNECT_DIRECT_NPORTS,
+                INNER_CONNECT_DIRECT_NPORTS,
+            ),
+        )
+        + 1j
+        * rng.normal(
+            loc=0.0,
+            scale=0.017,
+            size=(
+                INNER_CONNECT_DIRECT_NFREQ,
+                INNER_CONNECT_DIRECT_NPORTS,
+                INNER_CONNECT_DIRECT_NPORTS,
+            ),
+        )
+    ).astype(np.complex128)
+    for frequency in range(INNER_CONNECT_DIRECT_NFREQ):
+        for port in range(INNER_CONNECT_DIRECT_NPORTS):
+            s[frequency, port, port] += complex(
+                0.105 + 0.012 * frequency + 0.006 * port,
+                -0.014 + 0.002 * frequency + 0.001 * port,
+            )
+
+    # Make the selected internal block visibly full and non-reciprocal in
+    # addition to the random full coupling.  This prevents a diagonal-only
+    # or reciprocal shortcut from satisfying the canonical fixture.
+    for frequency in range(INNER_CONNECT_DIRECT_NFREQ):
+        s[frequency, INNER_CONNECT_DIRECT_PORT_A, INNER_CONNECT_DIRECT_PORT_B] += (
+            0.052 + 0.006 * frequency + 1j * (0.031 - 0.003 * frequency)
+        )
+        s[frequency, INNER_CONNECT_DIRECT_PORT_B, INNER_CONNECT_DIRECT_PORT_A] += (
+            -0.041 + 0.004 * frequency + 1j * (-0.027 + 0.002 * frequency)
+        )
+
+    frequency_index = np.arange(
+        INNER_CONNECT_DIRECT_NFREQ, dtype=np.float64
+    )[:, None]
+    port_index = np.arange(
+        INNER_CONNECT_DIRECT_NPORTS, dtype=np.float64
+    )[None, :]
+    z0 = (
+        39.0
+        + 2.9 * port_index
+        + 1.75 * frequency_index
+        + 1j * (-2.6 + 0.43 * port_index + 0.24 * frequency_index)
+    ).astype(np.complex128)
+    # Keep the selected references deliberately unequal, complex, and
+    # frequency-dependent while remaining strictly positive-real.
+    z0[:, INNER_CONNECT_DIRECT_PORT_A] = np.array(
+        [68.0 + 4.5j, 74.5 + 5.25j, 83.0 + 6.0j],
+        dtype=np.complex128,
+    )
+    z0[:, INNER_CONNECT_DIRECT_PORT_B] = np.array(
+        [101.0 - 3.0j, 109.5 - 2.25j, 121.0 - 1.5j],
+        dtype=np.complex128,
+    )
+
+    if not np.isfinite(frequency_hz).all():
+        raise ValueError("direct inner-connect frequencies must be finite")
+    if not np.isfinite(s).all():
+        raise ValueError("direct inner-connect S input must be finite")
+    if not np.isfinite(z0).all() or not (z0.real > 0.0).all():
+        raise ValueError(
+            "direct inner-connect references must be finite and positive-real"
+        )
+    if not (z0.imag != 0.0).all():
+        raise ValueError("direct inner-connect references must all be complex")
+    if np.array_equal(z0[0], z0[1]):
+        raise ValueError("direct inner-connect z0 must vary by frequency")
+    if np.array_equal(z0[:, 0], z0[:, 2]):
+        raise ValueError("direct inner-connect z0 must vary by port")
+    if np.array_equal(
+        z0[:, INNER_CONNECT_DIRECT_PORT_A],
+        z0[:, INNER_CONNECT_DIRECT_PORT_B],
+    ):
+        raise ValueError("direct inner-connect selected references must be unequal")
+    if not (z0[:, INNER_CONNECT_DIRECT_PORT_A].imag != 0.0).all() or not (
+        z0[:, INNER_CONNECT_DIRECT_PORT_B].imag != 0.0
+    ).all():
+        raise ValueError("direct inner-connect selected references must be complex")
+    for frequency in range(INNER_CONNECT_DIRECT_NFREQ):
+        selected_block = (
+            s[frequency][
+                [INNER_CONNECT_DIRECT_PORT_A, INNER_CONNECT_DIRECT_PORT_B]
+            ][:, [INNER_CONNECT_DIRECT_PORT_A, INNER_CONNECT_DIRECT_PORT_B]]
+        )
+        if not np.all(selected_block != 0.0):
+            raise ValueError(
+                "direct inner-connect selected S block must be full and nonzero"
+            )
+        if selected_block[0, 1] == selected_block[1, 0]:
+            raise ValueError(
+                "direct inner-connect selected S block must be non-reciprocal"
+            )
+    _assert_non_symmetric(np, s, name="direct inner-connect S input")
+    _assert_s_conditioning(s)
+
+    return frequency_hz, s, z0
+
+
+def _inner_connect_direct_fixture(np: Any, skrf: Any) -> dict[str, Any]:
+    """Build the direct inner-connect fixture through the pinned public path."""
+
+    frequency_hz, source_s, source_z0 = _inner_connect_direct_inputs(
+        np,
+        seed=INNER_CONNECT_DIRECT_RANDOM_SEED,
+    )
+    case_id = INNER_CONNECT_DIRECT_CASE_ID
+    network = skrf.Network(
+        f=frequency_hz,
+        s=source_s,
+        z0=source_z0,
+        s_def="power",
+        name=case_id,
+    )
+
+    # The raw public result is pseudo-labelled for complex references.  Keep
+    # this call as the sole expected-operation path, record only its
+    # intermediate definition, and explicitly mutate that result back to power
+    # waves before extracting any expected S values.
+    result = skrf.network.innerconnect(
+        network,
+        INNER_CONNECT_DIRECT_PORT_A,
+        INNER_CONNECT_DIRECT_PORT_B,
+    )
+    raw_wave_definition = result.s_def
+    if raw_wave_definition != "pseudo":
+        raise ValueError(
+            "direct inner-connect raw public result must be pseudo-labelled"
+        )
+    result.renormalize(result.z0, s_def="power")
+    output_wave_definition = result.s_def
+    frequency = np.asarray(result.f, dtype=np.float64)
+    connected_s = np.asarray(result.s, dtype=np.complex128)
+    connected_z0 = np.asarray(result.z0, dtype=np.complex128)
+    if output_wave_definition != "power":
+        raise ValueError(
+            "direct inner-connect result must be power-labelled after restoration"
+        )
+    if not np.array_equal(frequency, frequency_hz):
+        raise ValueError("direct inner-connect output frequency changed")
+    if not np.isfinite(connected_s).all() or not np.isfinite(connected_z0).all():
+        raise ValueError("direct inner-connect output must be finite")
+
+    survivors = [
+        port
+        for port in range(INNER_CONNECT_DIRECT_NPORTS)
+        if port
+        not in (INNER_CONNECT_DIRECT_PORT_A, INNER_CONNECT_DIRECT_PORT_B)
+    ]
+    expected_z0 = source_z0[:, survivors]
+    if not np.array_equal(connected_z0, expected_z0):
+        raise ValueError("direct inner-connect survivor order/reference changed")
+    shape = {
+        "frequency": list(frequency.shape),
+        "input_s": list(source_s.shape),
+        "input_z0": list(source_z0.shape),
+        "intermediate_s": [
+            INNER_CONNECT_DIRECT_NFREQ,
+            INNER_CONNECT_DIRECT_NPORTS - 2,
+            INNER_CONNECT_DIRECT_NPORTS - 2,
+        ],
+        "intermediate_z0": [
+            INNER_CONNECT_DIRECT_NFREQ,
+            INNER_CONNECT_DIRECT_NPORTS - 2,
+        ],
+        "output_s": list(connected_s.shape),
+        "output_z0": list(connected_z0.shape),
+    }
+    return {
+        "metadata": {
+            "case_id": case_id,
+            "input_recipe": INNER_CONNECT_DIRECT_INPUT_RECIPE,
+            "input_structure": {
+                "asymmetric": True,
+                "full_selected_internal_block": True,
+                "nonreciprocal": True,
+            },
+            "junction_ports": {
+                "a": INNER_CONNECT_DIRECT_PORT_A,
+                "b": INNER_CONNECT_DIRECT_PORT_B,
+            },
+            "numpy_version": np.__version__,
+            "operation": "inner_connect_direct_power",
+            "port_order": {
+                "input": list(range(INNER_CONNECT_DIRECT_NPORTS)),
+                "output": survivors,
+                "survivors": survivors,
+                "description": (
+                    "Input ports excluding selected a and b, in original order"
+                ),
+            },
+            "random_seed": INNER_CONNECT_DIRECT_RANDOM_SEED,
+            "reference_impedance": {
+                "complex": True,
+                "frequency_dependent": True,
+                "per_port": True,
+                "positive_real": True,
+                "selected_references_unequal": True,
+                "unit": "ohm",
+            },
+            "schema": "rfkit-rs.oracle.fixture",
+            "schema_version": SCHEMA_VERSION,
+            "scikit_rf_commit": EXPECTED_SCIKIT_RF_COMMIT,
+            "scikit_rf_version": skrf.__version__,
+            "shape": shape,
+            "tolerance_policy": {
+                "atol": INNER_CONNECT_DIRECT_ATOL,
+                "comparison": (
+                    "only data.s_inner_connected is numeric output; "
+                    "abs(actual-expected) <= atol + rtol*abs(expected)"
+                ),
+                "justification": INNER_CONNECT_DIRECT_TOLERANCE_JUSTIFICATION,
+                "regeneration": (
+                    "canonical UTF-8 JSON serialization; s_inner_connected is "
+                    "checked with the recorded numeric tolerance; source S/z0, "
+                    "frequency, survivor z0, ordering, wave definitions, and "
+                    "metadata are checked exactly"
+                ),
+                "rtol": INNER_CONNECT_DIRECT_RTOL,
+            },
+            "wave_definition": "power",
+            "wave_definitions": {
+                "input": network.s_def,
+                "inner_connect_raw": raw_wave_definition,
+                "output": output_wave_definition,
+                "restoration": (
+                    "public result.renormalize(result.z0, s_def=\"power\")"
+                ),
+            },
+        },
+        "data": {
+            "frequency_hz": [float(value) for value in frequency],
+            "s": _complex_array(source_s),
+            "s_inner_connected": _complex_array(connected_s),
+            "z0_ohm": _complex_array(source_z0),
+            "z0_inner_connected_ohm": _complex_array(connected_z0),
+        },
+    }
+
+
 def _s_to_z_fixture(np: Any, skrf: Any) -> dict[str, Any]:
     """Build the power-wave S-to-Z operation fixture from the shared Network."""
 
@@ -5668,6 +5971,13 @@ _CASES = (
         INNER_CONNECT_CASE_ID,
         INNER_CONNECT_FIXTURE,
         _inner_connect_fixture,
+        "numeric_output",
+        "s_inner_connected",
+    ),
+    _OracleCase(
+        INNER_CONNECT_DIRECT_CASE_ID,
+        INNER_CONNECT_DIRECT_FIXTURE,
+        _inner_connect_direct_fixture,
         "numeric_output",
         "s_inner_connected",
     ),

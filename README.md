@@ -475,6 +475,67 @@ no persisted-data migration. Run the focused executable workflow with:
 cargo run -p rfkit-touchstone --example connect_direct_power_touchstone
 ```
 
+## Close two ports of one network at a direct physical junction
+
+`Network::inner_connect_direct_power` closes two distinct ports of one
+network with the physical conditions `V_a = V_b` and `I_a + I_b = 0` (both
+currents point into the source network):
+
+```rust
+let reduced = direct.inner_connect_direct_power(1, 3)?;
+```
+
+The operation is the same explicit Kurokawa power-wave boundary used by
+`connect_direct_power`, but its internal scattering block is the full
+two-by-two block for the selected coordinates:
+
+```text
+C = [[ q_a,             q_b            ],
+     [ q_a*conj(z_a),  -q_b*conj(z_b)  ]]
+D = [[-q_a,            -q_b           ],
+     [ q_a*z_a,         -q_b*z_b       ]]
+
+(C + D*S_ii) T = -D*S_ie
+S_out = S_ee + S_ei*T
+```
+
+Both `S_ab` and `S_ba` are retained; treating the selected ports as two
+independent one-port networks is not equivalent for a coupled multiport.
+Each reference must be finite with a nonzero real part. Unequal or equal
+complex, per-port, frequency-dependent, and negative-real references are
+therefore in-domain, with the signed `Re(z)` retained in
+`q = sqrt(abs(Re(z)))/Re(z)`. The frequency axis is copied bit-for-bit and
+survivor ports remain in their original order with exact references. The
+source is borrowed and unchanged.
+
+The source must have a nonempty frequency axis, a positive square S matrix,
+matching frequency/S and `(nfreq,nport)` z0 shapes, finite S/z0/frequency
+values, distinct in-range selected ports, and at least one survivor. Only the
+two-coordinate direct system is solved. An exactly zero evaluated pivot is a
+structured singular-junction error; finite nonsingular near-singular systems
+remain valid without a condition or rank cutoff. No S/Z/Y conversion,
+pseudoinverse, regularization, hidden wave conversion, fixed reference, or
+writer repair is introduced. This additive 0.x API is Green, reversible, and
+provisional; it makes no broad scikit-rf compatibility or `1.0` promise.
+
+The focused Touchstone workflow parses a five-port v1.0 input, explicitly
+renormalizes it to unequal complex selected references, checks the full
+physical V/I response independently, closes ports 1 and 3, then explicitly
+renormalizes the survivors to one common positive-real writer reference and
+performs a write/read round trip:
+
+```text
+cargo run -p rfkit-touchstone --example inner_connect_direct_power_touchstone
+```
+
+The pinned differential fixture is
+`tools/oracle/fixtures/power_wave_inner_connect_direct_five_port_complex_z0.json`
+(seed `20260952`). scikit-rf `2.0.1`'s public `innerconnect` path returns a
+pseudo-wave result for this complex-reference case, so the oracle explicitly
+calls `result.renormalize(result.z0, s_def="power")` before reading expected S.
+The raw pseudo result is deliberately not treated as a power-wave oracle, and
+this is not a general scikit-rf compatibility claim.
+
 ## Repository layout
 
 ```text

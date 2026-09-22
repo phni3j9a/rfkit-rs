@@ -155,6 +155,87 @@ pub(crate) enum DirectConnectionError {
     },
 }
 
+/// Failure modes for a direct physical junction between two ports of one
+/// network.
+///
+/// This is deliberately separate from [`DirectConnectionError`].  The two
+/// operations have different input boundaries: an inter-network connection
+/// has an A and B source, while an inner connection has one source and must
+/// report selected-port context without pretending that the ports came from
+/// independent networks.
+#[derive(Debug, Error, PartialEq)]
+pub(crate) enum DirectInnerConnectionError {
+    #[error(
+        "direct inner connection S-parameter shape must be (nfreq, nport, nport), got {shape:?}"
+    )]
+    InvalidSShape { shape: (usize, usize, usize) },
+
+    #[error(
+        "direct inner connection reference-impedance shape must be (nfreq, nport), got {shape:?}"
+    )]
+    InvalidZ0Shape { shape: (usize, usize) },
+
+    #[error("direct inner connection frequency axis must not be empty")]
+    EmptyFrequency,
+
+    #[error(
+        "direct inner connection frequency axis length does not match the S-parameter frequency dimension: expected {expected}, got {actual}"
+    )]
+    FrequencyShape { expected: usize, actual: usize },
+
+    #[error("direct inner connection frequency is non-finite at index {index}: {value:?}")]
+    NonFiniteFrequency { index: usize, value: f64 },
+
+    #[error(
+        "direct inner connection S-parameter is non-finite at frequency {frequency}, row {row}, column {column}"
+    )]
+    NonFiniteS {
+        frequency: usize,
+        row: usize,
+        column: usize,
+    },
+
+    #[error(
+        "direct inner connection reference impedance is non-finite at frequency {frequency}, port {port}"
+    )]
+    NonFiniteZ0 { frequency: usize, port: usize },
+
+    #[error("direct inner connection port {port} is out of range for {nports} ports")]
+    InvalidPort { port: usize, nports: usize },
+
+    #[error("direct inner connection requires two distinct ports, got {port_a} and {port_b}")]
+    IdenticalPorts { port_a: usize, port_b: usize },
+
+    #[error(
+        "direct inner connection reference impedance has a zero real part at frequency {frequency}, port {port}"
+    )]
+    ZeroRealReferenceImpedance { frequency: usize, port: usize },
+
+    #[error("direct inner connection leaves no external ports")]
+    NoExternalPorts,
+
+    #[error(
+        "direct power-wave inner connection is exactly singular at frequency {frequency}, selected ports A={port_a}, B={port_b}, pivot {pivot}"
+    )]
+    Singular {
+        frequency: usize,
+        port_a: usize,
+        port_b: usize,
+        pivot: usize,
+    },
+
+    #[error(
+        "non-finite value while evaluating direct power-wave inner connection at frequency {frequency}, selected ports A={port_a}, B={port_b}, row {row}, column {column}"
+    )]
+    NonFiniteComputation {
+        frequency: usize,
+        port_a: usize,
+        port_b: usize,
+        row: usize,
+        column: usize,
+    },
+}
+
 /// Result of a direct physical junction connection.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ConnectedNetwork {
@@ -448,10 +529,390 @@ pub(crate) fn connect_direct(
     })
 }
 
+/// Connect two distinct ports of one network by direct physical voltage and
+/// current constraints.
+///
+/// For internal coordinates `i = [port_a, port_b]` and all remaining external
+/// coordinates `e`, the source network is partitioned as
+/// `b_i = S_ii a_i + S_ie a_e` and `b_e = S_ei a_i + S_ee a_e`.  The physical
+/// junction equations are `C a_i + D b_i = 0`, so the only solve required is
+/// `(C + D*S_ii) T = -D*S_ie`.  The full 2-by-2 `S_ii` block is retained;
+/// neither off-diagonal internal coupling is discarded.
+///
+/// This raw-array boundary is intentional.  A `Network` can be created by
+/// serde with malformed dimensions, so every shape and axis invariant is
+/// checked before selected-port indexing.  The result preserves the source
+/// frequency bit-for-bit and contains all non-selected ports in their input
+/// order.
+pub(crate) fn inner_connect_direct(
+    frequency: &[f64],
+    s: &Array3<Complex64>,
+    z0: &Array2<Complex64>,
+    port_a: usize,
+    port_b: usize,
+) -> Result<ConnectedNetwork, DirectInnerConnectionError> {
+    let shape = validate_inner_input(frequency, s, z0)?;
+
+    // Validate both indices before applying the distinct-port rule.  This is
+    // deterministic even for a malformed one-port serde value.
+    if port_a >= shape.nports {
+        return Err(DirectInnerConnectionError::InvalidPort {
+            port: port_a,
+            nports: shape.nports,
+        });
+    }
+    if port_b >= shape.nports {
+        return Err(DirectInnerConnectionError::InvalidPort {
+            port: port_b,
+            nports: shape.nports,
+        });
+    }
+    if port_a == port_b {
+        return Err(DirectInnerConnectionError::IdenticalPorts { port_a, port_b });
+    }
+
+    let external = inner_survivors(shape.nports, port_a, port_b);
+    let n_external = shape
+        .nports
+        .checked_sub(2)
+        .ok_or(DirectInnerConnectionError::NoExternalPorts)?;
+    if n_external == 0 {
+        return Err(DirectInnerConnectionError::NoExternalPorts);
+    }
+
+    // Every reference contributes to the Kurokawa wave normalization domain,
+    // not only the selected junction references.  Validate before selecting
+    // either internal coordinate or evaluating arithmetic.
+    validate_inner_reference_real_parts(z0)?;
+
+    let mut output_s = Array3::from_elem((shape.nfreq, n_external, n_external), ZERO);
+    let mut output_z0 = Array2::from_elem((shape.nfreq, n_external), ZERO);
+
+    for frequency_index in 0..shape.nfreq {
+        for (output_port, &input_port) in external.iter().enumerate() {
+            output_z0[[frequency_index, output_port]] = z0[[frequency_index, input_port]];
+        }
+
+        let z_a = z0[[frequency_index, port_a]];
+        let z_b = z0[[frequency_index, port_b]];
+        let q_a = q_for_inner_reference(z_a, frequency_index, port_a, port_b)?;
+        let q_b = q_for_inner_reference(z_b, frequency_index, port_a, port_b)?;
+
+        // C and D are row-major 2-by-2 matrices.  Their columns correspond to
+        // [a_A, a_B] and [b_A, b_B], respectively, while rows are current and
+        // voltage constraints.
+        let mut c = [ZERO; 4];
+        c[0] = q_a;
+        c[1] = q_b;
+        c[2] = checked_inner_mul(q_a, z_a.conj(), frequency_index, port_a, port_b, 1, 0)?;
+        c[3] = checked_inner_neg(
+            checked_inner_mul(q_b, z_b.conj(), frequency_index, port_a, port_b, 1, 1)?,
+            frequency_index,
+            port_a,
+            port_b,
+            1,
+            1,
+        )?;
+
+        let mut d = [ZERO; 4];
+        d[0] = checked_inner_neg(q_a, frequency_index, port_a, port_b, 0, 0)?;
+        d[1] = checked_inner_neg(q_b, frequency_index, port_a, port_b, 0, 1)?;
+        d[2] = checked_inner_mul(q_a, z_a, frequency_index, port_a, port_b, 1, 0)?;
+        d[3] = checked_inner_neg(
+            checked_inner_mul(q_b, z_b, frequency_index, port_a, port_b, 1, 1)?,
+            frequency_index,
+            port_a,
+            port_b,
+            1,
+            1,
+        )?;
+
+        // Internal S coordinates use the selected order [port_a, port_b].
+        // Keep all four entries, including S_ab and S_ba.
+        let s_ii = [
+            s[[frequency_index, port_a, port_a]],
+            s[[frequency_index, port_a, port_b]],
+            s[[frequency_index, port_b, port_a]],
+            s[[frequency_index, port_b, port_b]],
+        ];
+
+        let mut system = [ZERO; 4];
+        for row in 0..2 {
+            for column in 0..2 {
+                let left_product = checked_inner_mul(
+                    d[row * 2],
+                    s_ii[column],
+                    frequency_index,
+                    port_a,
+                    port_b,
+                    row,
+                    column,
+                )?;
+                let right_product = checked_inner_mul(
+                    d[row * 2 + 1],
+                    s_ii[2 + column],
+                    frequency_index,
+                    port_a,
+                    port_b,
+                    row,
+                    column,
+                )?;
+                let product_sum = checked_inner_add(
+                    left_product,
+                    right_product,
+                    frequency_index,
+                    port_a,
+                    port_b,
+                    row,
+                    column,
+                )?;
+                system[row * 2 + column] = checked_inner_add(
+                    c[row * 2 + column],
+                    product_sum,
+                    frequency_index,
+                    port_a,
+                    port_b,
+                    row,
+                    column,
+                )?;
+            }
+        }
+
+        // Solve one right-hand side per external incident coordinate.  The
+        // shared solver accepts two RHS columns; the unused column is kept at
+        // zero.  This reuses its scale-safe exact-pivot behavior without
+        // introducing a rectangular or operation-specific solver.
+        for (output_column, &input_column) in external.iter().enumerate() {
+            let s_ie_a = s[[frequency_index, port_a, input_column]];
+            let s_ie_b = s[[frequency_index, port_b, input_column]];
+
+            let rhs_a = checked_inner_add(
+                checked_inner_mul(
+                    d[0],
+                    s_ie_a,
+                    frequency_index,
+                    port_a,
+                    port_b,
+                    0,
+                    output_column,
+                )?,
+                checked_inner_mul(
+                    d[1],
+                    s_ie_b,
+                    frequency_index,
+                    port_a,
+                    port_b,
+                    0,
+                    output_column,
+                )?,
+                frequency_index,
+                port_a,
+                port_b,
+                0,
+                output_column,
+            )?;
+            let rhs_b = checked_inner_add(
+                checked_inner_mul(
+                    d[2],
+                    s_ie_a,
+                    frequency_index,
+                    port_a,
+                    port_b,
+                    1,
+                    output_column,
+                )?,
+                checked_inner_mul(
+                    d[3],
+                    s_ie_b,
+                    frequency_index,
+                    port_a,
+                    port_b,
+                    1,
+                    output_column,
+                )?,
+                frequency_index,
+                port_a,
+                port_b,
+                1,
+                output_column,
+            )?;
+            let mut rhs = [
+                checked_inner_neg(rhs_a, frequency_index, port_a, port_b, 0, output_column)?,
+                ZERO,
+                checked_inner_neg(rhs_b, frequency_index, port_a, port_b, 1, output_column)?,
+                ZERO,
+            ];
+            let mut system_for_rhs = system;
+
+            match linalg::solve_multiple_rhs(&mut system_for_rhs, &mut rhs, 2) {
+                Ok(()) => {}
+                Err(linalg::SolveError::InvalidStorage { .. }) => {
+                    unreachable!("direct-inner solver storage is fixed 2x2")
+                }
+                Err(linalg::SolveError::Singular { pivot }) => {
+                    return Err(DirectInnerConnectionError::Singular {
+                        frequency: frequency_index,
+                        port_a,
+                        port_b,
+                        pivot,
+                    });
+                }
+                Err(linalg::SolveError::NonFinite { row, column }) => {
+                    return Err(DirectInnerConnectionError::NonFiniteComputation {
+                        frequency: frequency_index,
+                        port_a,
+                        port_b,
+                        row,
+                        column,
+                    });
+                }
+            }
+
+            for (output_row, &input_row) in external.iter().enumerate() {
+                let left_a = s[[frequency_index, input_row, port_a]];
+                let left_b = s[[frequency_index, input_row, port_b]];
+                let correction_a = checked_inner_mul(
+                    left_a,
+                    rhs[0],
+                    frequency_index,
+                    port_a,
+                    port_b,
+                    output_row,
+                    output_column,
+                )?;
+                let correction_b = checked_inner_mul(
+                    left_b,
+                    rhs[2],
+                    frequency_index,
+                    port_a,
+                    port_b,
+                    output_row,
+                    output_column,
+                )?;
+                let correction = checked_inner_add(
+                    correction_a,
+                    correction_b,
+                    frequency_index,
+                    port_a,
+                    port_b,
+                    output_row,
+                    output_column,
+                )?;
+                output_s[[frequency_index, output_row, output_column]] = checked_inner_add(
+                    s[[frequency_index, input_row, input_column]],
+                    correction,
+                    frequency_index,
+                    port_a,
+                    port_b,
+                    output_row,
+                    output_column,
+                )?;
+            }
+        }
+    }
+
+    // Keep a result-wide guard near the public boundary.  It protects the
+    // operation if a future edit adds an unguarded assignment.
+    for (index, &value) in output_s.indexed_iter() {
+        if !is_finite(value) {
+            return Err(DirectInnerConnectionError::NonFiniteComputation {
+                frequency: index.0,
+                port_a,
+                port_b,
+                row: index.1,
+                column: index.2,
+            });
+        }
+    }
+    for (index, &value) in output_z0.indexed_iter() {
+        if !is_finite(value) {
+            return Err(DirectInnerConnectionError::NonFiniteComputation {
+                frequency: index.0,
+                port_a,
+                port_b,
+                row: index.1,
+                column: index.1,
+            });
+        }
+    }
+
+    Ok(ConnectedNetwork {
+        frequency_hz: frequency.to_vec(),
+        s: output_s,
+        z0: output_z0,
+    })
+}
+
 #[derive(Debug, Clone, Copy)]
 struct InputShape {
     nfreq: usize,
     nports: usize,
+}
+
+fn validate_inner_input(
+    frequency: &[f64],
+    s: &Array3<Complex64>,
+    z0: &Array2<Complex64>,
+) -> Result<InputShape, DirectInnerConnectionError> {
+    let shape = s.dim();
+    if shape.1 == 0 || shape.1 != shape.2 {
+        return Err(DirectInnerConnectionError::InvalidSShape { shape });
+    }
+    if frequency.is_empty() || shape.0 == 0 {
+        return Err(DirectInnerConnectionError::EmptyFrequency);
+    }
+    if frequency.len() != shape.0 {
+        return Err(DirectInnerConnectionError::FrequencyShape {
+            expected: shape.0,
+            actual: frequency.len(),
+        });
+    }
+    let z0_shape = z0.dim();
+    if z0_shape != (shape.0, shape.1) {
+        return Err(DirectInnerConnectionError::InvalidZ0Shape { shape: z0_shape });
+    }
+
+    for (index, &value) in frequency.iter().enumerate() {
+        if !value.is_finite() {
+            return Err(DirectInnerConnectionError::NonFiniteFrequency { index, value });
+        }
+    }
+    for (index, &value) in s.indexed_iter() {
+        if !is_finite(value) {
+            return Err(DirectInnerConnectionError::NonFiniteS {
+                frequency: index.0,
+                row: index.1,
+                column: index.2,
+            });
+        }
+    }
+    for (index, &value) in z0.indexed_iter() {
+        if !is_finite(value) {
+            return Err(DirectInnerConnectionError::NonFiniteZ0 {
+                frequency: index.0,
+                port: index.1,
+            });
+        }
+    }
+
+    Ok(InputShape {
+        nfreq: shape.0,
+        nports: shape.1,
+    })
+}
+
+fn validate_inner_reference_real_parts(
+    z0: &Array2<Complex64>,
+) -> Result<(), DirectInnerConnectionError> {
+    for (index, &reference) in z0.indexed_iter() {
+        if reference.re == 0.0 {
+            return Err(DirectInnerConnectionError::ZeroRealReferenceImpedance {
+                frequency: index.0,
+                port: index.1,
+            });
+        }
+    }
+    Ok(())
 }
 
 fn validate_input(
@@ -537,6 +998,12 @@ fn survivors(nports: usize, selected: usize) -> Vec<usize> {
     (0..nports).filter(|&port| port != selected).collect()
 }
 
+fn inner_survivors(nports: usize, selected_a: usize, selected_b: usize) -> Vec<usize> {
+    (0..nports)
+        .filter(|&port| port != selected_a && port != selected_b)
+        .collect()
+}
+
 fn external_coordinates(external_a: &[usize], external_b: &[usize]) -> Vec<(NetworkSide, usize)> {
     let mut coordinates = Vec::with_capacity(external_a.len() + external_b.len());
     coordinates.extend(
@@ -562,6 +1029,16 @@ fn q_for_reference(
 ) -> Result<Complex64, DirectConnectionError> {
     let q = Complex64::new(reference.re.abs().sqrt() / reference.re, 0.0);
     checked_value(q, frequency, port_a, port_b, 0, 0)
+}
+
+fn q_for_inner_reference(
+    reference: Complex64,
+    frequency: usize,
+    port_a: usize,
+    port_b: usize,
+) -> Result<Complex64, DirectInnerConnectionError> {
+    let q = Complex64::new(reference.re.abs().sqrt() / reference.re, 0.0);
+    checked_inner_value(q, frequency, port_a, port_b, 0, 0)
 }
 
 fn checked_add(
@@ -611,6 +1088,62 @@ fn checked_value(
         Ok(value)
     } else {
         Err(DirectConnectionError::NonFiniteComputation {
+            frequency,
+            port_a,
+            port_b,
+            row,
+            column,
+        })
+    }
+}
+
+fn checked_inner_add(
+    left: Complex64,
+    right: Complex64,
+    frequency: usize,
+    port_a: usize,
+    port_b: usize,
+    row: usize,
+    column: usize,
+) -> Result<Complex64, DirectInnerConnectionError> {
+    checked_inner_value(left + right, frequency, port_a, port_b, row, column)
+}
+
+fn checked_inner_mul(
+    left: Complex64,
+    right: Complex64,
+    frequency: usize,
+    port_a: usize,
+    port_b: usize,
+    row: usize,
+    column: usize,
+) -> Result<Complex64, DirectInnerConnectionError> {
+    checked_inner_value(left * right, frequency, port_a, port_b, row, column)
+}
+
+fn checked_inner_neg(
+    value: Complex64,
+    frequency: usize,
+    port_a: usize,
+    port_b: usize,
+    row: usize,
+    column: usize,
+) -> Result<Complex64, DirectInnerConnectionError> {
+    checked_inner_value(-value, frequency, port_a, port_b, row, column)
+}
+
+fn checked_inner_value(
+    value: Complex64,
+    frequency: usize,
+    port_a: usize,
+    port_b: usize,
+    row: usize,
+    column: usize,
+) -> Result<Complex64, DirectInnerConnectionError> {
+    if is_finite(value) {
+        Ok(value)
+    } else {
+        Err(DirectInnerConnectionError::NonFiniteComputation {
             frequency,
             port_a,
             port_b,
