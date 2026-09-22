@@ -200,6 +200,44 @@ write/read the four-port result with unchanged common 50-ohm survivor
 references. No writer-side renormalization, open sentinel, load excitation,
 or mixed-mode/file-format extension is involved.
 
+Issue #92 adds the sampled two-port power-wave stability operation
+`Network::two_port_stability_power`. Core tests cover direct analytic values
+including `K=2.6, delta=-0.2`, the ideal-through boundary, `K>1` with
+`|delta|>1`, negative and sub-unity finite K, complex non-reciprocal and
+singular S, mixed defined/undefined sweeps, tiny nonzero transmission,
+malformed serde-created shapes, finite/non-finite labels and data, strict
+positive-real reference validation, input immutability, port exchange, and
+representative positive-real power renormalization. Exactly zero `S12` or
+`S21` produces `None` only after finite determinant arithmetic; nonzero
+magnitude-product underflow/overflow remains a structured arithmetic error.
+
+The canonical fixture
+`two_port_stability_power_four_frequency.json` has four deterministic
+two-port samples from an independent base S stack plus a seeded NumPy
+`default_rng` complex perturbation (seed `20260954`, scale `1e-3`), with one
+passive and three active/non-passive S matrices established by true largest
+singular values. It also has unequal real/complex positive-real references,
+exact input/metadata contracts, and finite nonzero transmissions. Pinned scikit-rf `2.0.1` (commit
+`bd651e923cac6020de49a096e1d7e9b5f949f884`) public `Network.stability`
+generates K, while NumPy `2.5.1` `linalg.det` independently generates delta;
+the local Rust formula is a REWRITE. Only `data.delta` and `data.rollet_k`
+use strict `rtol=1e-12`, `atol=1e-12` comparison. The Python generator tests
+protect registration, public-output sources, numeric-only tolerance, and
+metadata/input drift; `crates/rfkit-core/tests/oracle_two_port_stability.rs`
+rechecks metadata, shapes, source arrays, determinant relation, active/passive
+representatives, and source immutability before comparing the public method.
+
+The focused Touchstone workflow in
+`crates/rfkit-touchstone/tests/public_two_port_stability_workflow.rs` and
+`crates/rfkit-touchstone/examples/two_port_stability_touchstone.rs` parses a
+two-port v1.0 sweep, independently checks aligned K and `|delta|`, displays an
+explicit undefined K, and leaves the source unchanged. The familiar linear
+two-port interpretation requires `K>1` and `|delta|<1` with its usual
+auxiliary/proviso conditions; sampled external S cannot certify internal
+poles, unsampled frequencies, nonlinear/large-signal behavior, or overall
+circuit stability. No verdict booleans, circles, μ factors, gain optimization,
+or tolerance classifications are part of this slice.
+
 Issue #88 adds the direct physical-junction operation
 `Network::connect_direct_power`. Its canonical fixture
 `power_wave_connect_direct_three_to_four_port_complex_z0.json` is an

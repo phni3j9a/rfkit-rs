@@ -1,0 +1,225 @@
+{
+  "data": {
+    "delta": [
+      {
+        "imag": -0.0011504905048383834,
+        "real": -0.03643714211838103
+      },
+      {
+        "imag": -0.12779478993695148,
+        "real": 0.7862457247299416
+      },
+      {
+        "imag": -0.0948110017371114,
+        "real": 0.7363327862889296
+      },
+      {
+        "imag": 0.28785121236801187,
+        "real": 1.244514765686819
+      }
+    ],
+    "frequency_hz": [
+      800000000.0,
+      1250000000.0,
+      2400000000.0,
+      4750000000.0
+    ],
+    "rollet_k": [
+      10.463724202929573,
+      -1.716021308582406,
+      0.9626592529277069,
+      -0.048015912313064374
+    ],
+    "s_input": [
+      [
+        [
+          {
+            "imag": 0.028285862730071505,
+            "real": 0.11999852934007443
+          },
+          {
+            "imag": -0.04805161623629937,
+            "real": 0.25003482118795284
+          }
+        ],
+        [
+          {
+            "imag": 0.03871100901743727,
+            "real": 0.17962918555528826
+          },
+          {
+            "imag": -0.02004779654513015,
+            "real": 0.08141321859617448
+          }
+        ]
+      ],
+      [
+        [
+          {
+            "imag": 0.07862652929759052,
+            "real": 1.149095489798197
+          },
+          {
+            "imag": -0.12107395735841882,
+            "real": 0.31874168891653976
+          }
+        ],
+        [
+          {
+            "imag": 0.08942563327266645,
+            "real": 0.20912740038522867
+          },
+          {
+            "imag": -0.15912984341401565,
+            "real": 0.7407727565715502
+          }
+        ]
+      ],
+      [
+        [
+          {
+            "imag": -0.11039334279587178,
+            "real": 0.9010140469882575
+          },
+          {
+            "imag": 0.06150241903361319,
+            "real": 0.43055599418637447
+          }
+        ],
+        [
+          {
+            "imag": 0.19126783068534897,
+            "real": -0.2696028098589554
+          },
+          {
+            "imag": 0.04976520926559325,
+            "real": 0.6692420616460157
+          }
+        ]
+      ],
+      [
+        [
+          {
+            "imag": 0.2096198025995254,
+            "real": 1.3208942677932844
+          },
+          {
+            "imag": 0.140152518245394,
+            "real": -0.38056857223760865
+          }
+        ],
+        [
+          {
+            "imag": -0.23125778278987388,
+            "real": 0.29081665511995825
+          },
+          {
+            "imag": 0.1709848212674357,
+            "real": 0.9100594051154326
+          }
+        ]
+      ]
+    ],
+    "z0_input_ohm": [
+      [
+        {
+          "imag": 0.0,
+          "real": 50.0
+        },
+        {
+          "imag": 4.0,
+          "real": 73.0
+        }
+      ],
+      [
+        {
+          "imag": 0.0,
+          "real": 51.5
+        },
+        {
+          "imag": -3.0,
+          "real": 70.0
+        }
+      ],
+      [
+        {
+          "imag": 0.0,
+          "real": 49.0
+        },
+        {
+          "imag": 2.0,
+          "real": 68.0
+        }
+      ],
+      [
+        {
+          "imag": 0.0,
+          "real": 52.0
+        },
+        {
+          "imag": 5.0,
+          "real": 75.0
+        }
+      ]
+    ]
+  },
+  "metadata": {
+    "case_id": "two_port_stability_power_four_frequency",
+    "input_recipe": "independent four-frequency two-port base S stack plus deterministic complex perturbation from NumPy default_rng seed 20260954 at scale 1e-3; sample classes are derived from true largest singular values with one passive and three active/non-passive samples; unequal real/complex positive-real z0 varies by frequency and port; no undefined zero-transmission samples",
+    "numpy_version": "2.5.1",
+    "operation": "network_two_port_stability_power",
+    "random_seed": 20260954,
+    "reference_impedance": {
+      "complex": true,
+      "frequency_dependent": true,
+      "per_port": true,
+      "real_part": "strictly positive",
+      "unit": "ohm"
+    },
+    "sample_classes": [
+      "passive",
+      "active",
+      "active",
+      "active"
+    ],
+    "schema": "rfkit-rs.oracle.fixture",
+    "schema_version": 1,
+    "scikit_rf_commit": "bd651e923cac6020de49a096e1d7e9b5f949f884",
+    "scikit_rf_version": "2.0.1",
+    "shape": {
+      "frequency": [
+        4
+      ],
+      "input_s": [
+        4,
+        2,
+        2
+      ],
+      "input_z0": [
+        4,
+        2
+      ],
+      "output_delta": [
+        4
+      ],
+      "output_rollet_k": [
+        4
+      ]
+    },
+    "tolerance_policy": {
+      "atol": 1e-12,
+      "comparison": "only data.delta and data.rollet_k are numeric outputs; all input and metadata contract fields are exact",
+      "justification": "Strict binary64 tolerance for finite dimensionless delta and Rollett K outputs.  The source frequency labels, S/z0 inputs, metadata, and shapes are exact canonical contract fields; only the two numerical output arrays allow rtol=1e-12 and atol=1e-12 cross-language rounding.",
+      "regeneration": "exact canonical UTF-8 JSON contract fields; public Network.stability for K and NumPy determinant for delta",
+      "rtol": 1e-12
+    },
+    "units": {
+      "delta": "dimensionless",
+      "frequency": "Hz",
+      "rollet_k": "dimensionless",
+      "s": "dimensionless",
+      "z0": "ohm"
+    },
+    "wave_definition": "power"
+  }
+}
