@@ -57,6 +57,16 @@ frequency-dependent real-positive junction impedance that is exactly equal at
 the selected ports. Its expected output comes from public
 `skrf.network.innerconnect(network, k, l)` behavior, and the three surviving
 ports are recorded in their original order.
+One direct same-network inner-connect case is also registered: an independent
+asymmetric, non-reciprocal five-port input uses a full selected 2×2 internal
+coupling block and unequal complex, frequency-dependent, positive-real
+references on every port. Its expected path constructs a power-wave Network,
+calls public `skrf.network.innerconnect(network, 1, 3)`, records the raw
+`pseudo` result, and then explicitly calls
+`result.renormalize(result.z0, s_def="power")` before extracting the restored
+output. The input, raw/intermediate/output wave definitions, survivor order,
+references, dependency commit, and tolerance policy are exact fixture contract
+fields; only restored `s_inner_connected` is numerically compared.
 One port-permutation case is also registered: an independently generated,
 asymmetric three-port input has unequal complex per-port/frequency-dependent
 z0 and uses the non-involutive new-to-old order `[2, 0, 1]`. Its expected
@@ -146,7 +156,7 @@ checker.
 
 ## Generate and verify
 
-The harness has forty-one registered canonical cases. The original three cases
+The harness has forty-two registered canonical cases. The original three cases
 remain unchanged:
 
 - `three_port_complex_z0` — the representative four-frequency, three-port
@@ -469,6 +479,25 @@ Network; output z0 and order metadata are checked exactly.
 | --- | ---: | --- | --- | --- |
 | Inner connection | 5 | 1 ↔ 3 | 0, 2, 4 | `power_wave_inner_connect_matched_five_port_real_frequency_dependent_z0` |
 
+The direct same-network inner-connect fixture uses seed `20260952` and the
+same five-port/three-frequency shape, but its selected references at ports 1
+and 3 are unequal complex positive-real values that vary with frequency. The
+input S stack is asymmetric and non-reciprocal, with both off-diagonal terms
+of the selected internal 2×2 block populated. The pinned public
+`skrf.network.innerconnect` result is initially labelled `pseudo`; the builder
+must snapshot that intermediate state and then call exactly
+`result.renormalize(result.z0, s_def="power")` before reading the expected S.
+The fixture records `input`, `inner_connect_raw`, and `output` wave definitions
+as `power`, `pseudo`, and `power`, respectively. The output-only numeric
+check and the recorded wave transition guard against accidentally checking
+the raw result.
+Only `s_inner_connected` is numeric-tolerance output; frequency, S/z0 input,
+survivor z0/order, shapes, metadata, and wave-definition records are exact.
+
+| Direction | Input ports | Junction ports | Output order | Case id |
+| --- | ---: | --- | --- | --- |
+| Direct inner connection | 5 | 1 ↔ 3 | 0, 2, 4 | `power_wave_inner_connect_direct_five_port_complex_z0` |
+
 The port-permutation fixture is a pure coordinate relabeling case. Its
 frequency axis and direct S/z0 inputs use local seed `20260947`; all three
 frequencies and all three ports have distinct complex reference values, and
@@ -623,6 +652,18 @@ fixture. The checker removes only
 `s_inner_connected` for numeric comparison and checks output z0 and survivor
 order exactly.
 
+The direct inner-connect fixture is independent of that matched case and uses
+seed `20260952`, unequal complex positive-real frequency-dependent references,
+and a full non-reciprocal selected 2×2 S block. The public
+`skrf.network.innerconnect` call is made on an explicit power-wave Network;
+its raw result is recorded as `pseudo`, then the builder explicitly calls
+`result.renormalize(result.z0, s_def="power")` and extracts the restored
+`power` output. The metadata records the pinned scikit-rf commit, input /
+intermediate / output wave definitions, restoration call, wave-transition guard,
+selected/survivor order, shapes, and reference traits. The checker
+removes only `s_inner_connected`; it rejects raw-pseudo omission and any drift
+in the frequency, input S/z0, survivor z0/order, metadata, or wave records.
+
 The interpolation fixture uses an independent local NumPy generator with seed
 `20260942`. It serializes `source_frequency_hz`, `target_frequency_hz`,
 `s_input`, and `z0_input_ohm` exactly, then obtains both numeric outputs (`s`
@@ -690,7 +731,8 @@ The JSON representation is deliberately machine-readable and byte-stable:
   inputs, z0, and every other field except the computed output (`z_ohm` for
   S→Z, `s` for Z→S or Y→S, `y_s` for Z→Y or S→Y, `z_ohm` for Y→Z, or
   `s_renormalized` for S renormalization, `s_inner_connected` for inner
-  connection, or `s_terminated` for finite physical-load termination;
+  connection (including the direct complex-reference case), or `s_terminated`
+  for finite physical-load termination;
   direct physical connection removes only `s_connected`;
   interpolation removes both `s` and `z0_ohm`. The output's
   recursively validated complex array is
@@ -699,8 +741,8 @@ The JSON representation is deliberately machine-readable and byte-stable:
   `rtol=1e-12` and `atol_ohm=1e-12`; Z→S and S renormalization use
   `rtol=1e-12` and `atol=1e-12`; Z→Y uses `rtol=1e-12` and `atol_s=1e-12`,
   Y→Z uses `rtol=1e-12` and `atol_ohm=1e-12`; S→Y uses `rtol=1e-12` and
-  `atol_s=1e-12`, Y→S uses `rtol=1e-12` and `atol=1e-12`, and inner-connect
-  uses `rtol=1e-12` and `atol=1e-12`; interpolation uses `rtol=1e-12` and
+  `atol_s=1e-12`, Y→S uses `rtol=1e-12` and `atol=1e-12`, and both matched
+  and direct inner-connect cases use `rtol=1e-12` and `atol=1e-12`; interpolation uses `rtol=1e-12` and
   `atol=1e-12` for both outputs; matched and direct physical connections and
   finite physical-load termination use `rtol=1e-12` and `atol=1e-12`. These are strict binary64 tolerances for
   the well-conditioned, modest-magnitude deterministic cases: they allow

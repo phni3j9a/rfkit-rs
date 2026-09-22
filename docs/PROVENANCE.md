@@ -149,8 +149,33 @@ The method's complex and negative-real nonzero-real domain is governed by the
 repository equations, not claimed as broad scikit-rf compatibility. Rollback
 of this additive 0.x slice requires no persisted-data migration.
 
+Issue #90's same-network direct inner connection is a separate REWRITE from
+the same Kurokawa power-wave equations plus voltage continuity and current
+conservation, now applied to the complete selected 2×2 `S_ii` block. The
+implementation retains both off-diagonal internal couplings and does not copy
+scikit-rf's implementation or its singular fallback. The canonical fixture
+`power_wave_inner_connect_direct_five_port_complex_z0.json` is independently
+authored with seed `20260952`, NumPy `2.5.1`, and scikit-rf `2.0.1` at commit
+`bd651e923cac6020de49a096e1d7e9b5f949f884`. Its expected path deliberately
+calls public `skrf.network.innerconnect` on a power-wave input and then calls
+the public `result.renormalize(result.z0, s_def="power")` before extracting
+S: the raw return is pseudo-wave for this complex-reference case and is a
+deliberate oracle trap, not a power-wave expected output. In the pinned
+feasibility check, raw pseudo output differed from the independently derived
+physical response by `0.09591317335389245`, while explicit power restoration
+reduced the maximum difference to `1.18774731498903e-16`; the V/I residual was
+`1.2412670766236366e-16`. Only output S is tolerance-compared; input data,
+frequency labels, references, survivor order, wave-definition metadata, and
+fixture recipe remain exact. Complex and negative-real references are local
+equation-domain coverage rather than a broad scikit-rf compatibility claim.
+Rollback of this additive Green 0.x slice requires no persisted-data
+migration.
+
 | Local path | Source project | Source commit/tag | Source path | Use | License | Notes |
 |---|---|---|---|---|---|---|
+| `crates/rfkit-core/src/direct_connection.rs`; `crates/rfkit-core/src/lib.rs`; `crates/rfkit-core/tests/public_direct_inner_connection.rs`; `crates/rfkit-core/tests/oracle_direct_inner_connection.rs` | Kurokawa power-wave equations plus physical V/I junction conditions; scikit-rf public behavior reference | Kurokawa DOI `10.1109/TMTT.1965.1125964`; scikit-rf `bd651e923cac6020de49a096e1d7e9b5f949f884` (`v2.0.1`) | Issue #90 direct same-network inner junction over a full selected 2×2 S block | REWRITE | Published mathematics; scikit-rf BSD-3-Clause | Independent Rust kernel, public adapter, invariant tests, and pinned-fixture checker. The finite nonzero-real reference domain includes unequal/equal complex, frequency-dependent, and negative-real references; signed `Re(z)` is retained, survivor/frequency/reference order is exact, only exact evaluated zero pivots are singular, and no code or fixture values are copied. The oracle comparison restores scikit-rf's raw pseudo result explicitly to power waves before extracting S. |
+| `tools/oracle/generate_oracle.py`; `tools/oracle/fixtures/power_wave_inner_connect_direct_five_port_complex_z0.json` | scikit-rf | `bd651e923cac6020de49a096e1d7e9b5f949f884` (`v2.0.1`); NumPy `2.5.1`; seed `20260952` | Public `skrf.network.innerconnect` followed by public `result.renormalize(result.z0, s_def="power")` | REWRITE | BSD-3-Clause | Independently generated asymmetric non-reciprocal five-port, three-frequency canonical fixture with selected ports 1/3, unequal complex frequency-dependent positive-real references, full non-reciprocal internal coupling, exact contract metadata, and output-only `rtol=1e-12`/`atol=1e-12`. The explicit restoration is mandatory because the raw public return is pseudo-wave; no source code, output values, or upstream fixture values were copied. |
+| `crates/rfkit-touchstone/tests/public_direct_inner_connection_workflow.rs`; `crates/rfkit-touchstone/examples/inner_connect_direct_power_touchstone.rs` | Kurokawa physical V/I equations; IBIS Open Forum Touchstone File Format Specification | Kurokawa DOI `10.1109/TMTT.1965.1125964`; Touchstone Format Specification v2.1 (2024-01-26) | Five-port v1.0 ingress → explicit unequal-complex direct renormalization → full-block inner physical check → direct inner connection → explicit common positive-real writer renormalization → write/read | REWRITE | Published mathematics; IBIS Open Forum specification | The input reuses the existing local five-port Touchstone pattern; the direct V/I reconstruction and executable/test workflow are independently authored. The writer is called only after explicit direct restoration to one common finite positive-real reference; no hidden wave conversion, automatic repair, format extension, copied third-party source, or broad scikit-rf compatibility promise is introduced. |
 | `tools/oracle/generate_oracle.py`; `tools/oracle/fixtures/power_wave_renormalize_{one,two,eight}_port_*.json` | scikit-rf | `bd651e923cac6020de49a096e1d7e9b5f949f884` (`v2.0.1`) | Public `Network` constructor, `Network.renormalize(..., s_def="power")`, `Network.s`, and `Network.z0` APIs | REWRITE | BSD-3-Clause | Three additional deterministic local S inputs covering real scalar, complex per-port constant, and real frequency-dependent same-across-port source/target z0; expected output is obtained only through public renormalization behavior, with no source code or fixture values copied |
 | `tools/oracle/generate_oracle.py` | scikit-rf | `v2.0.1` | `skrf.Network` constructor, public `Network.z` and `Network.renormalize` APIs, and public `Network.from_z`/`Network.s` API | REWRITE | BSD-3-Clause | Independent deterministic generator; direct Z inputs and renormalization source/target z0 use local deterministic construction; scikit-rf is a behavior/API reference only; no source code or fixture copied |
 | `tools/oracle/fixtures/three_port_complex_z0.json`; `tools/oracle/fixtures/power_wave_s_to_z_three_port_complex_z0.json`; `tools/oracle/fixtures/power_wave_z_to_s_three_port_complex_z0.json` | scikit-rf | `v2.0.1` | Public `Network` read-back, `Network.z`, and `Network.from_z`/`Network.s` behavior | REWRITE | BSD-3-Clause | Independently generated canonical outputs; Z-to-S input is direct deterministic data and expected S is obtained through public `Network.from_z`/`Network.s`; no fixture values copied |
