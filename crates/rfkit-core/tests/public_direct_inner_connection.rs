@@ -227,6 +227,96 @@ fn direct_inner_uses_full_internal_block_and_preserves_source_and_order() {
 }
 
 #[test]
+fn direct_inner_preserves_asymmetric_real_junction_samples_and_survivor_order() {
+    let frequency = vec![-0.0, 2.0, -2.0, -2.0, 0.0];
+    let base = structured_network(frequency.clone(), 5);
+    let mut z0 = base.z0().clone();
+    for f in 0..frequency.len() {
+        z0[[f, 1]] = c(61.0 + 3.0 * f as f64, 0.0);
+        z0[[f, 3]] = c(83.0 + 2.0 * f as f64, 0.0);
+        assert_ne!(z0[[f, 1]], z0[[f, 3]]);
+        assert_eq!(z0[[f, 1]].im.to_bits(), 0.0f64.to_bits());
+        assert_eq!(z0[[f, 3]].im.to_bits(), 0.0f64.to_bits());
+    }
+    let source = network(frequency.clone(), base.s().clone(), z0.clone());
+    for f in 0..frequency.len() {
+        assert_ne!(source.s()[[f, 1, 3]], source.s()[[f, 3, 1]]);
+    }
+
+    let expected_s = direct_reference(source.s(), source.z0(), 1, 3);
+    assert_ne!(expected_s[[2, 0, 0]], expected_s[[3, 0, 0]]);
+    let reduced = source.inner_connect_direct_power(1, 3).unwrap();
+
+    assert_eq!(reduced.s().dim(), (frequency.len(), 3, 3));
+    assert_array3_close(reduced.s(), &expected_s, 3.0e-12, 3.0e-12);
+    let survivors = [0, 2, 4];
+    let expected_z0 =
+        Array2::from_shape_fn((frequency.len(), survivors.len()), |(f, output_port)| {
+            z0[[f, survivors[output_port]]]
+        });
+    assert_eq!(reduced.z0(), &expected_z0);
+
+    for (actual, expected) in reduced.frequency().hz().iter().zip(&frequency) {
+        assert_eq!(actual.to_bits(), expected.to_bits());
+    }
+}
+
+#[test]
+fn direct_inner_rejects_empty_serde_frequency_axes_without_panicking() {
+    let valid = structured_network(vec![1.0e9], 3);
+
+    let mut empty_frequency_value = serde_json::to_value(&valid).unwrap();
+    empty_frequency_value["frequency"]["hz"] = json!([]);
+    let empty_frequency: Network = serde_json::from_value(empty_frequency_value).unwrap();
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        empty_frequency.inner_connect_direct_power(0, 1)
+    }));
+    assert!(result.is_ok());
+    assert_eq!(
+        result.unwrap().unwrap_err(),
+        Error::EmptyDirectInnerConnectionFrequency
+    );
+
+    let mut empty_axes_value = serde_json::to_value(&valid).unwrap();
+    empty_axes_value["frequency"]["hz"] = json!([]);
+    empty_axes_value["s"]["dim"] = json!([0, 3, 3]);
+    empty_axes_value["s"]["data"] = json!([]);
+    empty_axes_value["z0"]["dim"] = json!([0, 3]);
+    empty_axes_value["z0"]["data"] = json!([]);
+    let empty_axes: Network = serde_json::from_value(empty_axes_value).unwrap();
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        empty_axes.inner_connect_direct_power(0, 1)
+    }));
+    assert!(result.is_ok());
+    assert_eq!(
+        result.unwrap().unwrap_err(),
+        Error::EmptyDirectInnerConnectionFrequency
+    );
+}
+
+#[test]
+fn direct_inner_rejects_zero_port_square_serde_shape_before_port_indexing() {
+    let valid = structured_network(vec![1.0e9], 3);
+    let mut zero_port_value = serde_json::to_value(&valid).unwrap();
+    zero_port_value["s"]["dim"] = json!([1, 0, 0]);
+    zero_port_value["s"]["data"] = json!([]);
+    zero_port_value["z0"]["dim"] = json!([1, 0]);
+    zero_port_value["z0"]["data"] = json!([]);
+    let zero_port: Network = serde_json::from_value(zero_port_value).unwrap();
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        zero_port.inner_connect_direct_power(0, 1)
+    }));
+    assert!(result.is_ok());
+    assert_eq!(
+        result.unwrap().unwrap_err(),
+        Error::InvalidDirectInnerConnectionSShape {
+            shape: vec![1, 0, 0]
+        }
+    );
+}
+
+#[test]
 fn direct_inner_matches_independent_z_domain_port_elimination() {
     let frequency = vec![0.9e9, 1.7e9];
     let mut source = structured_network(frequency, 4);
