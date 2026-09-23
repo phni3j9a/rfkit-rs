@@ -165,6 +165,18 @@ class InverseCascadeNumericFixtureCheckerTests(unittest.TestCase):
         document["metadata"]["random_seed"] += 1
         self.assertEqual(self._check_document(document), 1)
 
+    def test_runtime_derived_diagnostics_are_not_canonical_fields(self) -> None:
+        self.assertNotIn("solve_difference_max_abs", self.fixture["metadata"])
+        self.assertNotIn("determinant_evidence", self.fixture["metadata"])
+
+        for key, value in (
+            ("solve_difference_max_abs", 4.32e-14),
+            ("determinant_evidence", {"full_s_abs": [0.001]}),
+        ):
+            document = copy.deepcopy(self.fixture)
+            document["metadata"][key] = value
+            self.assertEqual(self._check_document(document), 1)
+
 
 MATRIX_CASE_SPECS = {
     "power_wave_s_to_z_one_port_real_scalar_z0": {

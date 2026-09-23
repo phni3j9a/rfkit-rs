@@ -261,10 +261,12 @@ Pinned public scikit-rf `Network.inv` 2.0.1 (commit
 `bd651e923cac6020de49a096e1d7e9b5f949f884`) supplies expected S; NumPy `2.5.1`
 independently checks `P @ solve(S,I) @ P`. Only output S uses strict
 `rtol=1e-12`, `atol=1e-12`; frequencies, source S/z0, swapped conjugate
-references, shapes, group metadata, determinant evidence, and recipe fields are
-exact. `crates/rfkit-core/tests/oracle_inverse_cascade.rs` calls only the public
-Rust method, while Python generator/checker tests reject registration,
-input/group, and metadata drift.
+references, shapes, group metadata, and recipe fields are exact. The generator
+keeps the independent solve as a `<=1e-12` guard but does not serialize its
+runtime residual or determinant magnitudes as canonical metadata, so BLAS
+rounding does not change the contract. `crates/rfkit-core/tests/oracle_inverse_cascade.rs`
+calls only the public Rust method, while Python generator/checker tests reject
+registration, input/group, and metadata drift.
 
 The focused external workflow in
 `crates/rfkit-touchstone/tests/public_inverse_cascade_workflow.rs` and

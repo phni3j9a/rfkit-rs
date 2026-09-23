@@ -376,6 +376,193 @@ fn cascade_four_port(
     connect_groupwise(&left_dut, right, &[2, 3], &[0, 1])
 }
 
+fn compose_two_port(first: &Network, second: &Network) -> rfkit_core::Result<Network> {
+    // Each two-port is ordered [left, right].  The right port of `first` is
+    // physically connected to the left port of `second`; survivors therefore
+    // remain [first.left, second.right].
+    first.connect_direct_power(1, second, 0)
+}
+
+fn well_conditioned_two_port_complex_reference_fixture() -> Network {
+    let frequency = Frequency::from_hz(vec![0.9e9, 1.8e9]).unwrap();
+    let s = Array3::from_shape_fn((2, 2, 2), |(f, row, column)| match (row, column) {
+        (0, 0) => c(0.04 + 0.004 * f as f64, -0.015),
+        (0, 1) => c(0.62 - 0.01 * f as f64, 0.08),
+        (1, 0) => c(0.57 + 0.008 * f as f64, -0.06),
+        (1, 1) => c(-0.03 + 0.003 * f as f64, 0.012),
+        _ => unreachable!(),
+    });
+    let z0 = Array2::from_shape_vec(
+        (2, 2),
+        vec![c(43.0, 6.0), c(68.0, -4.0), c(44.0, 6.5), c(69.0, -4.5)],
+    )
+    .unwrap();
+    Network::new(frequency, s, z0).unwrap()
+}
+
+fn physical_through(frequency: &Frequency, z0: Array2<Complex64>) -> Network {
+    let nports = z0.dim().1;
+    assert_eq!(nports % 2, 0);
+    let group_size = nports / 2;
+    let s = Array3::from_shape_fn((frequency.len(), nports, nports), |(_, row, column)| {
+        if (row < group_size && column == row + group_size)
+            || (row >= group_size && column == row - group_size)
+        {
+            c(1.0, 0.0)
+        } else {
+            c(0.0, 0.0)
+        }
+    });
+    Network::new(frequency.clone(), s, z0).unwrap()
+}
+
+fn coupled_four_port_complex_reference_fixture() -> Network {
+    let frequency = Frequency::from_hz(vec![1.0e9, 1.7e9]).unwrap();
+    let s = Array3::from_shape_fn((2, 4, 4), |(f, row, column)| {
+        let left = row < 2;
+        let other_left = column < 2;
+        if left == other_left {
+            if row == column {
+                c(0.045 + 0.003 * f as f64, -0.012 + 0.001 * f as f64)
+            } else {
+                c(0.011 + 0.002 * row as f64, 0.004 - 0.001 * column as f64)
+            }
+        } else if left {
+            // Reverse transmission: diagonally dominant but deliberately
+            // asymmetric, with nonzero cross-mode terms.
+            match (row, column) {
+                (0, 2) => c(0.68 + 0.01 * f as f64, 0.06 + 0.003 * f as f64),
+                (0, 3) => c(0.07 + 0.002 * f as f64, -0.025),
+                (1, 2) => c(-0.05, 0.031 + 0.001 * f as f64),
+                (1, 3) => c(0.74 - 0.006 * f as f64, -0.04 + 0.002 * f as f64),
+                _ => unreachable!(),
+            }
+        } else {
+            // Forward transmission: a distinct diagonally dominant block
+            // with nonzero cross-mode coupling in both directions.
+            match (row, column) {
+                (2, 0) => c(0.63 + 0.008 * f as f64, -0.03),
+                (2, 1) => c(0.06, 0.022 + 0.001 * f as f64),
+                (3, 0) => c(-0.04 - 0.001 * f as f64, 0.027),
+                (3, 1) => c(0.70 - 0.005 * f as f64, 0.05 + 0.002 * f as f64),
+                _ => unreachable!(),
+            }
+        }
+    });
+    let z0 = Array2::from_shape_fn((2, 4), |(f, port)| {
+        c(
+            [41.0, 53.0, 67.0, 79.0][port] + 0.5 * f as f64,
+            [3.0, -4.0, 5.0, -6.0][port] + 0.25 * f as f64,
+        )
+    });
+    Network::new(frequency, s, z0).unwrap()
+}
+
+fn two_norm_condition(matrix: [[Complex64; 2]; 2]) -> f64 {
+    let column_zero_norm_squared = matrix[0][0].norm_sqr() + matrix[1][0].norm_sqr();
+    let column_one_norm_squared = matrix[0][1].norm_sqr() + matrix[1][1].norm_sqr();
+    let gram_off_diagonal = matrix[0][0].conj() * matrix[0][1] + matrix[1][0].conj() * matrix[1][1];
+    let trace = column_zero_norm_squared + column_one_norm_squared;
+    let discriminant = ((column_zero_norm_squared - column_one_norm_squared).powi(2)
+        + 4.0 * gram_off_diagonal.norm_sqr())
+    .sqrt();
+    let largest = 0.5 * (trace + discriminant);
+    let smallest = 0.5 * (trace - discriminant);
+    (largest / smallest).sqrt()
+}
+
+fn assert_coupled_fixture_transmission_blocks_are_well_conditioned(network: &Network) {
+    for frequency in 0..network.frequency().len() {
+        let reverse = [
+            [
+                network.s()[[frequency, 0, 2]],
+                network.s()[[frequency, 0, 3]],
+            ],
+            [
+                network.s()[[frequency, 1, 2]],
+                network.s()[[frequency, 1, 3]],
+            ],
+        ];
+        let forward = [
+            [
+                network.s()[[frequency, 2, 0]],
+                network.s()[[frequency, 2, 1]],
+            ],
+            [
+                network.s()[[frequency, 3, 0]],
+                network.s()[[frequency, 3, 1]],
+            ],
+        ];
+        for (name, block) in [("reverse", reverse), ("forward", forward)] {
+            assert!(block[0][1].norm() > 0.0 && block[1][0].norm() > 0.0);
+            assert!(
+                block[0][0].norm() > block[0][1].norm() && block[1][1].norm() > block[1][0].norm(),
+                "{name} block must remain diagonally dominant at frequency {frequency}"
+            );
+            let condition = two_norm_condition(block);
+            assert!(
+                condition < 2.0,
+                "{name} block condition={condition} at frequency {frequency}"
+            );
+        }
+    }
+}
+
+fn assert_fixture_inverse_composes_to_through(fixture: &Network, tolerance: f64) {
+    let inverse = fixture.inverse_cascade_power().unwrap();
+    let group_size = fixture.nports() / 2;
+
+    // Forward orientation: fixture [left,right] followed by inverse
+    // [old_right,old_left], joining fixture.right -> inverse.old_right.
+    let fixture_then_inverse = if fixture.nports() == 2 {
+        compose_two_port(fixture, &inverse).unwrap()
+    } else {
+        connect_groupwise(fixture, &inverse, &[2, 3], &[0, 1]).unwrap()
+    };
+    let expected_forward_z0 = Array2::from_shape_fn(
+        (fixture.frequency().len(), fixture.nports()),
+        |(frequency, port)| {
+            if port < group_size {
+                fixture.z0()[[frequency, port]]
+            } else {
+                fixture.z0()[[frequency, port - group_size]].conj()
+            }
+        },
+    );
+    let expected_forward = physical_through(fixture.frequency(), expected_forward_z0);
+    assert_eq!(
+        fixture_then_inverse.frequency(),
+        expected_forward.frequency()
+    );
+    assert_eq!(fixture_then_inverse.z0(), expected_forward.z0());
+    assert_array_close(fixture_then_inverse.s(), expected_forward.s(), tolerance);
+
+    // Reverse orientation: inverse [old_right,old_left] followed by fixture
+    // [left,right], joining inverse.old_left -> fixture.left.
+    let inverse_then_fixture = if fixture.nports() == 2 {
+        compose_two_port(&inverse, fixture).unwrap()
+    } else {
+        connect_groupwise(&inverse, fixture, &[2, 3], &[0, 1]).unwrap()
+    };
+    let expected_reverse_z0 = Array2::from_shape_fn(
+        (fixture.frequency().len(), fixture.nports()),
+        |(frequency, port)| {
+            if port < group_size {
+                fixture.z0()[[frequency, port + group_size]].conj()
+            } else {
+                fixture.z0()[[frequency, port]]
+            }
+        },
+    );
+    let expected_reverse = physical_through(fixture.frequency(), expected_reverse_z0);
+    assert_eq!(
+        inverse_then_fixture.frequency(),
+        expected_reverse.frequency()
+    );
+    assert_eq!(inverse_then_fixture.z0(), expected_reverse.z0());
+    assert_array_close(inverse_then_fixture.s(), expected_reverse.s(), tolerance);
+}
+
 fn remove_left_then_right_four_port(
     measured: &Network,
     left: &Network,
@@ -411,6 +598,24 @@ fn inverse_cancels_both_orders_of_a_coupled_four_port_cascade() {
     assert_eq!(recovered_right_left.z0(), dut.z0());
     assert_array_close(recovered_left_right.s(), dut.s(), 2.0e-9);
     assert_array_close(recovered_right_left.s(), dut.s(), 2.0e-9);
+}
+
+#[test]
+fn inverse_and_fixture_cancel_to_physical_through_in_both_orientations() {
+    // The two-port has unequal, per-port complex references with nonzero
+    // imaginary parts and remains well-conditioned for both public solves.
+    assert_fixture_inverse_composes_to_through(
+        &well_conditioned_two_port_complex_reference_fixture(),
+        2.0e-13,
+    );
+
+    // This fixture is a genuinely coupled four-port: both transmission blocks
+    // contain cross-mode terms, and every surviving reference is unequal and
+    // complex.  The expected through is constructed independently from the
+    // declared physical survivor orientation above.
+    let coupled = coupled_four_port_complex_reference_fixture();
+    assert_coupled_fixture_transmission_blocks_are_well_conditioned(&coupled);
+    assert_fixture_inverse_composes_to_through(&coupled, 2.0e-13);
 }
 
 fn simple_source(s: Array3<Complex64>, z0: Array2<Complex64>) -> Network {

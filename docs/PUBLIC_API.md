@@ -254,10 +254,10 @@ a' = P b, b' = P a             z0' = P conj(z0)
 S_inverse = P S^-1 P
 ```
 
-The implementation evaluates `S^-1` by solving `S X = I` through the existing
-checked multiple-right-hand-side exact-pivot solver. It never forms an explicit
-dense inverse, uses an elementwise reciprocal, or silently converts through
-Z/Y. The returned `Network` owns new S/z0 arrays, copies the source frequency
+The implementation computes and stores the full `S^-1` by solving `S X = I`
+through the existing checked multiple-right-hand-side exact-pivot solver. It
+does not use an elementwise reciprocal or silently convert through Z/Y. The
+returned `Network` owns new S/z0 arrays, copies the source frequency
 axis exactly (including order and signed-zero bits), and leaves the borrowed
 source unchanged.
 
@@ -296,10 +296,11 @@ Conformance uses one independently seeded four-port, three-frequency fixture
 with unequal real-positive references, generated and checked against pinned
 public scikit-rf `Network.inv` 2.0.1 at commit
 `bd651e923cac6020de49a096e1d7e9b5f949f884` and NumPy `2.5.1`. The generator
-records random seed `20260955`, ordered groups, determinant evidence, the independent
-`P @ solve(S,I) @ P` check, and strict output-only `rtol=1e-12`,
-`atol=1e-12`; frequencies, inputs, references, shapes, and metadata are exact
-contract fields. The Rust oracle test calls only the public method. Local tests
+records random seed `20260955`, ordered groups, and the independent
+`P @ solve(S,I) @ P` check with a `<=1e-12` guard; runtime floating residuals
+and determinant magnitudes are not canonical metadata. Strict output-only
+`rtol=1e-12`, `atol=1e-12` remains unchanged; frequencies, inputs, references,
+shapes, and the remaining metadata are exact contract fields. The Rust oracle test calls only the public method. Local tests
 add ideal-through, analytic/non-reciprocal two-port, complex-reference V/I,
 coupled asymmetric four-port, larger six-port, double-inverse, malformed/error,
 and both-order physical cancellation coverage. The Touchstone counterpart is

@@ -253,8 +253,9 @@ The source ports are two equal ordered groups `[left..., right...]`; the result
 uses the fixed `[old right, old left]` order. With `P` exchanging those groups,
 the operation is `S_inverse = P S⁻¹ P` and its references are exactly
 `P conj(z0)`. It is a Kurokawa wave-reversal operation, not an elementwise
-reciprocal or a port permutation. The implementation solves `S X = I` with the
-checked exact-pivot solver and never forms a dense explicit inverse.
+reciprocal or a port permutation. The implementation computes and stores the
+full inverse by solving `S X = I` with the checked exact-pivot solver; it does
+not use an elementwise reciprocal or silently convert through Z/Y.
 
 The operation validates every finite frequency label, S/z0 value and
 nonzero-real reference before indexing. At every sample the full S matrix and

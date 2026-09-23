@@ -131,10 +131,12 @@ three-frequency four-port real-positive unequal-reference input uses fixed
 groups `[left_0,left_1,right_0,right_1]` and expected output groups
 `[old_right_0,old_right_1,old_left_0,old_left_1]`. Expected S comes from the
 pinned public `Network.inv` operation and is independently checked against
-NumPy `P @ solve(S,I) @ P`; only `s_inverse` is numeric-tolerance output.
-The fixture records random seed `20260955`, determinant evidence for full S
-and both transmission blocks, the scikit-rf commit, NumPy version, exact
-references/frequencies/inputs, and strict `rtol=1e-12`, `atol=1e-12` policy.
+NumPy `P @ solve(S,I) @ P` with a `<=1e-12` guard; only `s_inverse` is
+numeric-tolerance output. The fixture records random seed `20260955`, the
+scikit-rf commit, NumPy version, exact references/frequencies/inputs, and
+strict `rtol=1e-12`, `atol=1e-12` policy. Runtime solve residuals and
+determinant magnitudes are generation-time checks only and are not serialized
+as exact metadata.
 
 ## Clean-checkout setup
 
@@ -261,8 +263,9 @@ The inverse-cascade case is:
   unequal real-positive frequency-dependent per-port references and fixed
   equal ordered input groups `[left_0,left_1,right_0,right_1]`. Pinned public
   scikit-rf `Network.inv` supplies `s_inverse`; an independent NumPy solve
-  verifies `P @ solve(S,I) @ P`. The expected swapped references, frequencies,
-  input S, determinant evidence, group metadata, and recipe are exact; only
+  verifies `P @ solve(S,I) @ P` with a `<=1e-12` guard. The expected swapped
+  references, frequencies, input S, group metadata, and recipe are exact;
+  runtime residuals and determinant magnitudes are not canonical fields; only
   `data.s_inverse` uses strict `rtol=1e-12`, `atol=1e-12` comparison.
 
 The eight existing S↔Z matrix cases are registered individually as follows.

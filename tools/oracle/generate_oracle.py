@@ -6133,7 +6133,7 @@ def _two_port_stability_fixture(np: Any, skrf: Any) -> dict[str, Any]:
     }
 
 
-def _inverse_cascade_inputs(np: Any) -> tuple[Any, Any, Any, Any, Any]:
+def _inverse_cascade_inputs(np: Any) -> tuple[Any, Any, Any]:
     """Build an independently seeded, usable four-port inverse fixture."""
 
     frequency_hz = np.asarray([0.91e9, 1.73e9, 2.87e9], dtype=np.float64)
@@ -6223,25 +6223,16 @@ def _inverse_cascade_inputs(np: Any) -> tuple[Any, Any, Any, Any, Any]:
         np.abs(forward_determinants) == 0.0
     ) or np.any(np.abs(reverse_determinants) == 0.0):
         raise ValueError("inverse-cascade source and transmission systems must be nonsingular")
-    return (
-        frequency_hz,
-        source_s,
-        source_z0,
-        full_determinants,
-        np.stack((forward_determinants, reverse_determinants)),
-    )
+    # Determinants are generation-time guards only.  Their floating-point
+    # magnitudes are derived diagnostics, not canonical fixture data: BLAS
+    # reduction order can change their last bits across CPU kernels.
+    return frequency_hz, source_s, source_z0
 
 
 def _inverse_cascade_fixture(np: Any, skrf: Any) -> dict[str, Any]:
     """Generate the inverse cascade through pinned public ``Network.inv``."""
 
-    (
-        frequency_hz,
-        source_s,
-        source_z0,
-        full_determinants,
-        transmission_determinants,
-    ) = _inverse_cascade_inputs(np)
+    frequency_hz, source_s, source_z0 = _inverse_cascade_inputs(np)
     case_id = INVERSE_CASCADE_CASE_ID
     network = skrf.Network(
         f=frequency_hz,
@@ -6270,7 +6261,8 @@ def _inverse_cascade_fixture(np: Any, skrf: Any) -> dict[str, Any]:
         raise ValueError("inverse-cascade public output must be finite")
     if solve_difference > 1.0e-12:
         raise ValueError(
-            "pinned Network.inv differs from P solve(S,I) P beyond the recorded domain: "
+            "pinned Network.inv differs from P solve(S,I) P beyond the independent "
+            "comparison threshold: "
             f"{solve_difference:.17g}"
         )
     expected_z0 = np.concatenate(
@@ -6312,16 +6304,6 @@ def _inverse_cascade_fixture(np: Any, skrf: Any) -> dict[str, Any]:
             "scikit_rf_commit": EXPECTED_SCIKIT_RF_COMMIT,
             "scikit_rf_version": skrf.__version__,
             "shape": shape,
-            "solve_difference_max_abs": solve_difference,
-            "determinant_evidence": {
-                "full_s_abs": [float(value) for value in np.abs(full_determinants)],
-                "forward_transmission_abs": [
-                    float(value) for value in np.abs(transmission_determinants[0])
-                ],
-                "reverse_transmission_abs": [
-                    float(value) for value in np.abs(transmission_determinants[1])
-                ],
-            },
             "tolerance_policy": {
                 "atol": INVERSE_CASCADE_ATOL,
                 "comparison": "only data.s_inverse is numeric output; all input, frequency, references, group-order, and metadata contract fields are exact",

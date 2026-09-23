@@ -2147,10 +2147,11 @@ impl Network {
     ///
     /// This is a wave-reversal operation, not an elementwise reciprocal and
     /// not a port permutation of the source S matrix.  The implementation
-    /// obtains `S⁻¹` by solving `S X = I` with the core checked exact-pivot
-    /// solver; it never forms an explicit dense inverse.  In addition to the
-    /// full S system, both directional N-by-N transmission blocks are solved
-    /// and must be nonsingular: `S[right,left]` is the forward stage and
+    /// computes and stores the full `S⁻¹` by solving `S X = I` with the core
+    /// checked exact-pivot solver.  It does not use an elementwise reciprocal
+    /// or silently convert through Z/Y.  In addition to the full S system,
+    /// both directional N-by-N transmission blocks are solved and must be
+    /// nonsingular: `S[right,left]` is the forward stage and
     /// `S[left,right]` is the reverse stage.  Only exact evaluated zero pivots
     /// are singular, so finite near-singular systems remain eligible when all
     /// arithmetic stays finite.

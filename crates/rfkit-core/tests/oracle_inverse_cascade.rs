@@ -48,7 +48,6 @@ struct ComplexValue {
 #[serde(deny_unknown_fields)]
 struct FixtureMetadata {
     case_id: String,
-    determinant_evidence: DeterminantEvidence,
     group_convention: GroupConvention,
     input_recipe: String,
     numpy_version: String,
@@ -60,18 +59,9 @@ struct FixtureMetadata {
     scikit_rf_commit: String,
     scikit_rf_version: String,
     shape: DeclaredShape,
-    solve_difference_max_abs: f64,
     tolerance_policy: TolerancePolicy,
     units: Units,
     wave_definition: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct DeterminantEvidence {
-    forward_transmission_abs: Vec<f64>,
-    full_s_abs: Vec<f64>,
-    reverse_transmission_abs: Vec<f64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -229,19 +219,6 @@ fn validate_contract(metadata: &FixtureMetadata) {
     assert_eq!(metadata.units.frequency, "Hz");
     assert_eq!(metadata.units.s, "dimensionless");
     assert_eq!(metadata.units.z0, "ohm");
-    assert_eq!(
-        metadata.determinant_evidence.full_s_abs.len(),
-        EXPECTED_NFREQ
-    );
-    assert_eq!(
-        metadata.determinant_evidence.forward_transmission_abs.len(),
-        EXPECTED_NFREQ
-    );
-    assert_eq!(
-        metadata.determinant_evidence.reverse_transmission_abs.len(),
-        EXPECTED_NFREQ
-    );
-    assert!(metadata.solve_difference_max_abs <= EXPECTED_ATOL);
 }
 
 #[test]

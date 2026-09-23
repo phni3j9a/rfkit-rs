@@ -1,10 +1,10 @@
 //! Power-wave inverse cascade for even-port networks.
 //!
 //! This kernel implements the wave-reversal relation for an ordered 2N-port
-//! network without forming a dense inverse.  For each frequency sample it
-//! solves `S X = I` with the core exact-pivot solver and then applies the
-//! group exchange `P X P`, where `P` swaps the first and second N-port
-//! groups.  The source references are conjugated and exchanged because the
+//! network.  For each frequency sample it computes and stores the full
+//! inverse by solving `S X = I` with the core exact-pivot solver and then
+//! applies the group exchange `P X P`, where `P` swaps the first and second
+//! N-port groups.  The source references are conjugated and exchanged because the
 //! reversed boundary has `V' = P V`, `I' = -P I` under the Kurokawa
 //! power-wave definition.
 
