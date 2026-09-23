@@ -43,6 +43,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use thiserror::Error;
 
+mod cascade;
 mod composition;
 mod connection;
 mod direct_connection;
@@ -320,6 +321,98 @@ pub enum Error {
     )]
     NonFiniteInverseCascadeComputation {
         stage: InverseCascadeStage,
+        frequency: usize,
+        row: usize,
+        column: usize,
+    },
+
+    #[error(
+        "{input} direct cascade S-parameter shape must be (nfreq, nport, nport), got {shape:?}"
+    )]
+    InvalidCascadeSShape {
+        input: ConnectionInput,
+        shape: Vec<usize>,
+    },
+
+    #[error(
+        "{input} direct cascade reference-impedance shape must be (nfreq, nport), got {shape:?}"
+    )]
+    InvalidCascadeZ0Shape {
+        input: ConnectionInput,
+        shape: Vec<usize>,
+    },
+
+    #[error("{input} direct cascade frequency axis must not be empty")]
+    EmptyCascadeFrequency { input: ConnectionInput },
+
+    #[error(
+        "{input} direct cascade frequency axis length does not match the S-parameter frequency dimension: expected {expected}, got {actual}"
+    )]
+    CascadeFrequencyShape {
+        input: ConnectionInput,
+        expected: usize,
+        actual: usize,
+    },
+
+    #[error("A and B direct cascade frequency axes have different lengths: A={a}, B={b}")]
+    CascadeFrequencyLengthMismatch { a: usize, b: usize },
+
+    #[error("direct cascade frequency axes differ at index {index}: A={a:?}, B={b:?}")]
+    CascadeFrequencyMismatch { index: usize, a: f64, b: f64 },
+
+    #[error("{input} direct cascade requires a positive even port count, got {nports}")]
+    InvalidCascadePortCount {
+        input: ConnectionInput,
+        nports: usize,
+    },
+
+    #[error("direct cascade input port counts differ: A={a}, B={b}")]
+    CascadePortCountMismatch { a: usize, b: usize },
+
+    #[error("{input} direct cascade frequency is non-finite at index {index}: {value:?}")]
+    NonFiniteCascadeFrequency {
+        input: ConnectionInput,
+        index: usize,
+        value: f64,
+    },
+
+    #[error(
+        "{input} direct cascade S-parameter is non-finite at frequency {frequency}, row {row}, column {column}"
+    )]
+    NonFiniteCascadeS {
+        input: ConnectionInput,
+        frequency: usize,
+        row: usize,
+        column: usize,
+    },
+
+    #[error(
+        "{input} direct cascade reference impedance is non-finite at frequency {frequency}, port {port}"
+    )]
+    NonFiniteCascadeZ0 {
+        input: ConnectionInput,
+        frequency: usize,
+        port: usize,
+    },
+
+    #[error(
+        "{input} direct cascade reference impedance has a zero real part at frequency {frequency}, port {port}"
+    )]
+    ZeroRealCascadeReferenceImpedance {
+        input: ConnectionInput,
+        frequency: usize,
+        port: usize,
+    },
+
+    #[error(
+        "simultaneous direct power-wave cascade is exactly singular at frequency {frequency}, pivot {pivot}"
+    )]
+    SingularCascade { frequency: usize, pivot: usize },
+
+    #[error(
+        "non-finite value while evaluating simultaneous direct power-wave cascade at frequency {frequency}, row {row}, column {column}"
+    )]
+    NonFiniteCascadeComputation {
         frequency: usize,
         row: usize,
         column: usize,
@@ -2196,6 +2289,69 @@ impl Network {
         Network::new(frequency, s, z0)
     }
 
+    /// Simultaneously cascades two equal ordered even-port networks through
+    /// all corresponding group ports using direct Kurokawa power-wave
+    /// physical boundary equations.
+    ///
+    /// Both inputs must have the same positive even port count `2N`, with
+    /// ports ordered `[left_0..left_(N-1), right_0..right_(N-1)]`.  Every
+    /// `self.right_k` is connected to `other.left_k` in one joint solve.  The
+    /// returned order is `[self.left..., other.right...]`; use
+    /// [`Network::permute_ports`] when a physical fixture uses a different
+    /// arrangement.  The complete within-group coupling blocks are retained,
+    /// so this operation is not implemented as repeated one-port connections.
+    ///
+    /// The internal incident/reflected coordinates are
+    /// `[self.right..., other.left...]`, and the external coordinates are
+    /// `[self.left..., other.right...]`.  At each frequency the kernel forms
+    /// `C + D*S_ii`, solves the complete multiple-right-hand-side system
+    /// `(C + D*S_ii) X = -D*S_ie`, and evaluates
+    /// `S_out = S_ee + S_ei*X`.  This direct V/I elimination does not convert
+    /// through Z/Y/transfer parameters, form an inverse, regularize, or apply
+    /// a condition cutoff.  Only an exactly zero evaluated pivot is singular;
+    /// finite near-singular systems remain eligible when their arithmetic is
+    /// finite.  Full input S matrices and directional transmission blocks do
+    /// not need to be invertible.
+    ///
+    /// Frequencies are exact pointwise labels: both axes must be finite,
+    /// non-empty, equal in length, and equal at each position under ordinary
+    /// `f64` equality.  The returned axis is a bit-for-bit copy of `self`,
+    /// including signed zero, duplicate, descending, or negative samples.
+    /// All S and reference values must be finite, and every reference must
+    /// have a nonzero real part.  Unequal, per-port, frequency-dependent,
+    /// complex, and signed negative-real references are supported using the
+    /// algebraic `abs(Re(z0))` normalization; no common-reference assumption
+    /// or implicit renormalization is made.  Surviving references are copied
+    /// exactly from `self.left` followed by `other.right`.  Inputs are
+    /// borrowed and unchanged.
+    ///
+    /// This additive operation is provisional while `rfkit-core` is in the
+    /// `0.x` series; its name and signature are not a `1.0` stability promise.
+    /// It does not add graph/topology, arbitrary pair maps, calibration,
+    /// de-embedding, noise, mode metadata, or file-format semantics.
+    ///
+    /// # Errors
+    ///
+    /// Returns cascade-specific structured errors for malformed serde-created
+    /// axes/shapes, odd or zero port counts, unequal input counts, grid
+    /// mismatches, non-finite labels/data, zero-real references, exact joint
+    /// singularity, and non-finite arithmetic.  Numerical diagnostics retain
+    /// frequency and matrix row/column or pivot context where available.
+    pub fn cascade_direct_power(&self, other: &Network) -> Result<Network> {
+        let cascaded = cascade::cascade_direct(
+            self.frequency.hz(),
+            &self.s,
+            &self.z0,
+            other.frequency.hz(),
+            &other.s,
+            &other.z0,
+        )
+        .map_err(map_cascade_error)?;
+
+        let frequency = Frequency::from_hz(cascaded.frequency_hz)?;
+        Network::new(frequency, cascaded.s, cascaded.z0)
+    }
+
     /// Resamples this network onto an explicit frequency grid using
     /// component-wise Cartesian linear interpolation.
     ///
@@ -3606,6 +3762,96 @@ fn map_inverse_cascade_error(error: inverse_cascade::InverseCascadeError) -> Err
             column,
         } => Error::NonFiniteInverseCascadeComputation {
             stage,
+            frequency,
+            row,
+            column,
+        },
+    }
+}
+
+fn map_cascade_error(error: cascade::CascadeError) -> Error {
+    match error {
+        cascade::CascadeError::InvalidSShape { network, shape } => Error::InvalidCascadeSShape {
+            input: map_direct_connection_input(network),
+            shape: vec![shape.0, shape.1, shape.2],
+        },
+        cascade::CascadeError::InvalidZ0Shape { network, shape } => Error::InvalidCascadeZ0Shape {
+            input: map_direct_connection_input(network),
+            shape: vec![shape.0, shape.1],
+        },
+        cascade::CascadeError::EmptyFrequency { network } => Error::EmptyCascadeFrequency {
+            input: map_direct_connection_input(network),
+        },
+        cascade::CascadeError::FrequencyShape {
+            network,
+            expected,
+            actual,
+        } => Error::CascadeFrequencyShape {
+            input: map_direct_connection_input(network),
+            expected,
+            actual,
+        },
+        cascade::CascadeError::FrequencyLengthMismatch { a, b } => {
+            Error::CascadeFrequencyLengthMismatch { a, b }
+        }
+        cascade::CascadeError::FrequencyMismatch { index, a, b } => {
+            Error::CascadeFrequencyMismatch { index, a, b }
+        }
+        cascade::CascadeError::InvalidPortCount { network, nports } => {
+            Error::InvalidCascadePortCount {
+                input: map_direct_connection_input(network),
+                nports,
+            }
+        }
+        cascade::CascadeError::PortCountMismatch { a, b } => {
+            Error::CascadePortCountMismatch { a, b }
+        }
+        cascade::CascadeError::NonFiniteFrequency {
+            network,
+            index,
+            value,
+        } => Error::NonFiniteCascadeFrequency {
+            input: map_direct_connection_input(network),
+            index,
+            value,
+        },
+        cascade::CascadeError::NonFiniteS {
+            network,
+            frequency,
+            row,
+            column,
+        } => Error::NonFiniteCascadeS {
+            input: map_direct_connection_input(network),
+            frequency,
+            row,
+            column,
+        },
+        cascade::CascadeError::NonFiniteZ0 {
+            network,
+            frequency,
+            port,
+        } => Error::NonFiniteCascadeZ0 {
+            input: map_direct_connection_input(network),
+            frequency,
+            port,
+        },
+        cascade::CascadeError::ZeroRealReferenceImpedance {
+            network,
+            frequency,
+            port,
+        } => Error::ZeroRealCascadeReferenceImpedance {
+            input: map_direct_connection_input(network),
+            frequency,
+            port,
+        },
+        cascade::CascadeError::Singular { frequency, pivot } => {
+            Error::SingularCascade { frequency, pivot }
+        }
+        cascade::CascadeError::NonFiniteComputation {
+            frequency,
+            row,
+            column,
+        } => Error::NonFiniteCascadeComputation {
             frequency,
             row,
             column,

@@ -306,6 +306,82 @@ coupled asymmetric four-port, larger six-port, double-inverse, malformed/error,
 and both-order physical cancellation coverage. The Touchstone counterpart is
 `crates/rfkit-touchstone/examples/inverse_cascade_touchstone.rs`.
 
+## Simultaneous direct power-wave cascade (Issue #96 Yellow decision)
+
+The provisional public surface adds one borrowing, owned-result operation:
+
+```rust
+impl Network {
+    pub fn cascade_direct_power(&self, other: &Network) -> Result<Network>;
+}
+```
+
+Both inputs must have the same positive even port count `2N`, with ordered
+groups `[left_0..left_(N-1), right_0..right_(N-1)]`.  The operation connects
+every `self.right_k` to `other.left_k` simultaneously and returns surviving
+order `[self.left..., other.right...]`.  It does not infer a pairing or
+physical ordering; callers use `permute_ports` explicitly for another layout.
+
+For internal coordinates `i=[self.right...,other.left...]` and external
+coordinates `e=[self.left...,other.right...]`, the full source blocks satisfy
+`b_i=S_ie a_e+S_ii a_i` and the Kurokawa physical boundary is
+`C a_i+D b_i=0`.  The kernel solves the complete joint system and evaluates
+
+```text
+(C + D S_ii) X = -D S_ie
+S_out = S_ee + S_ei X
+```
+
+The `S_ii` block retains all within-group coupling.  The implementation uses
+the checked exact-pivot multiple-right-hand-side solver and does not use an
+inverse, pseudoinverse, least-squares fallback, regularization, condition
+cutoff, transfer/Z/Y conversion, or an identity shortcut.  Full input S and
+directional transmission blocks need not be invertible.  Only an exactly zero
+evaluated joint pivot is singular; finite near-singular systems remain in the
+domain when arithmetic stays finite.
+
+The two frequency axes must be nonempty, finite, equal in length, and equal at
+each position under ordinary `f64` equality.  The returned axis is an exact
+copy of `self`, including signed-zero bits and non-monotone point labels.
+Every S/reference value is finite and every reference has nonzero real part.
+Unequal, per-port, frequency-dependent, complex, and signed negative-real
+references use the existing algebraic `abs(Re(z0))` normalization; surviving
+references are copied exactly and no common-reference or hidden
+renormalization is applied.  The source networks are borrowed and unchanged.
+
+Malformed serde-created shapes are checked before group indexing.  Structured
+errors identify A/B input context for shapes, frequency axes, finite values,
+and zero-real references, plus frequency and matrix row/column or pivot
+context for arithmetic and exact singularity.  The method is additive and
+provisional during `0.x`; rollback removes the kernel, method, diagnostics,
+tests, fixture, and documentation without persisted-data migration.
+
+The compared alternatives were retaining caller-side repeated connections,
+composing through transfer/Z/Y parameters, and introducing arbitrary pair
+maps, unequal-size graph/topology cascades, calibration, or a parameter
+hierarchy.  They were rejected because repeated connections lose the
+partial-singular/joint-nonsingular domain, intermediate parameter inverses
+add unnecessary restrictions, and the broader surfaces are not required by
+the coupled fixture workflow.  No release, stability, passivity, calibration,
+noise, or broad scikit-rf compatibility promise is implied.
+
+Conformance uses the independently seeded
+`power_wave_cascade_direct_four_port_complex_z0.json` fixture (seed
+`20260956`), with coupled four-port A/B inputs, unequal complex
+frequency-dependent positive-real references, and pinned public scikit-rf
+`Network.cascade` 2.0.1 at commit
+`bd651e923cac6020de49a096e1d7e9b5f949f884`; NumPy `2.5.1` is recorded.  The
+oracle explicitly restores the public result with
+`output.renormalize(output.z0, s_def="power")` before extracting S.  Only
+output S uses `rtol=1e-12`, `atol=1e-12`; inputs, surviving references, order,
+frequency, shapes, and metadata are exact contract fields.  Local tests cover
+two-port sequential agreement, coupled four-port and larger even-port
+composition, complex/signed-reference V/I behavior, the partial-singular
+witness, exact singular/near-singular systems, zero S, malformed/error and
+arithmetic cases, inverse composition/removal, and source immutability.  The
+Touchstone counterpart is
+`crates/rfkit-touchstone/examples/cascade_direct_power_touchstone.rs`.
+
 ## Explicit port permutation (Issue #82 Green decision)
 
 The provisional public surface adds one owned, borrowing transformation:
@@ -798,6 +874,8 @@ impl Network {
 
     pub fn inverse_cascade_power(&self) -> Result<Network>;
 
+    pub fn cascade_direct_power(&self, other: &Network) -> Result<Network>;
+
     pub fn permute_ports(&self, order: &[usize]) -> Result<Network>;
 
     pub fn to_mixed_mode_equal_pair_power(&self, pair_count: usize) -> Result<Network>;
@@ -858,6 +936,10 @@ The exact internal delegation remains an implementation detail. The semantic dis
 - `renormalize_power` explicitly selects power-wave renormalization;
 - `renormalize_direct_power` explicitly selects the direct Kurokawa wave-change equation, while `renormalize_power` retains its composed S→Z→S domain and diagnostics;
 - `inverse_cascade_power` explicitly selects fixed-group Kurokawa wave reversal `P S^-1 P` with conjugated/group-exchanged references and full/forward/reverse transmission diagnostics; it does not imply a generic dense-inverse or calibration API;
+- `cascade_direct_power` explicitly selects one simultaneous fixed-group
+  direct V/I cascade with `[self.left...,other.right...]` survivors and full
+  within-group coupling; it does not imply sequential connection semantics,
+  transfer/Z/Y composition, arbitrary pair maps, topology, or calibration;
 - `permute_ports` explicitly selects a complete new-to-old physical-port reindexing and carries S rows, S columns, and z0 together without wave arithmetic;
 - `to_mixed_mode_equal_pair_power` and `to_single_ended_equal_pair_power` explicitly select the equal single-ended-reference adjacent-pair power-wave transform and its inverse, with modal layout `[d...,c...,unpaired...]`; they do not infer physical pairing or store mode metadata;
 - `interpolate_cartesian_linear` does not establish a vague interpolation default that would later need reinterpretation;

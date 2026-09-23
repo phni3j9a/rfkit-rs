@@ -138,6 +138,26 @@ strict `rtol=1e-12`, `atol=1e-12` policy. Runtime solve residuals and
 determinant magnitudes are generation-time checks only and are not serialized
 as exact metadata.
 
+One simultaneous group-cascade case is also registered:
+`power_wave_cascade_direct_four_port_complex_z0` uses two independently
+generated, fully coupled four-port inputs with fixed groups
+`[left_0,left_1,right_0,right_1]` and output order
+`[a_left_0,a_left_1,b_right_0,b_right_1]`.  It uses NumPy `default_rng` seed
+`20260956`, unequal complex frequency-dependent references with strictly
+positive real parts, and the pinned public `Network.cascade` operation.  The
+builder explicitly calls `output.renormalize(output.z0, s_def="power")` before
+extracting `s_cascaded`, making the power-wave output convention an explicit
+contract.  Only `s_cascaded` is numeric-tolerance output; source S/z0 arrays,
+frequency, survivor references, group metadata, pinned versions, and shapes
+are exact.  This is a shared well-conditioned oracle domain; local Rust tests
+cover signed/negative references and the partial-singular joint solve without
+turning recursive/fallback scikit-rf behavior into a general specification.
+At generation time the builder forms the actual Kurokawa `C`, `D`, `S_ii`, and
+`S_ie` blocks, solves `(C + D*S_ii)X = -D*S_ie`, and checks finite determinant,
+`abs(det) >= 1e-3`, condition number `<= 1e4`, and finite relative solve
+residual `<= 1e-12` at every frequency.  These are conservative guards only;
+the observed determinant, condition, and residual values are not serialized.
+
 ## Clean-checkout setup
 
 From a clean checkout, create an isolated environment and install the exact
@@ -179,7 +199,7 @@ checker.
 
 ## Generate and verify
 
-The harness has forty-four registered canonical cases. The original three cases
+The harness has forty-five registered canonical cases. The original three cases
 remain unchanged:
 
 - `three_port_complex_z0` — the representative four-frequency, three-port
@@ -498,6 +518,20 @@ tolerance.
 | --- | ---: | --- | --- | --- |
 | A + B → direct physical junction | 3 + 4 | A[1] ↔ B[2] | A[0], A[2], B[0], B[1], B[3] | `power_wave_connect_direct_three_to_four_port_complex_z0` |
 
+The simultaneous direct cascade case uses two four-port networks at three
+exactly shared frequencies.  Every A right port is connected to the matching
+B left port in one joint `C + D*S_ii` solve; full within-group coupling is
+retained and no sequential one-port path is used.  Inputs use seed `20260956`
+and complex, frequency-dependent, per-port references with strictly positive
+real parts.  The expected output comes from one public `Network.cascade` call
+followed by explicit `output.renormalize(output.z0, s_def="power")`; only
+`s_cascaded` receives strict `rtol=1e-12`, `atol=1e-12` tolerance.  The
+canonical output is `power_wave_cascade_direct_four_port_complex_z0.json`.
+
+| Direction | Input ports | Joined groups | Output order | Case id |
+| --- | ---: | --- | --- | --- |
+| A + B → simultaneous direct cascade | 4 + 4 | A[right_0,right_1] ↔ B[left_0,left_1] | A[left_0,left_1], B[right_0,right_1] | `power_wave_cascade_direct_four_port_complex_z0` |
+
 The explicit-grid composition case uses independent A and B source grids with
 five and six irregular samples, respectively, and an explicit eight-sample
 target grid containing both source endpoints, source knots, and interior
@@ -778,7 +812,8 @@ The JSON representation is deliberately machine-readable and byte-stable:
   inputs, z0, and every other field except the computed output (`z_ohm` for
   S→Z, `s` for Z→S or Y→S, `y_s` for Z→Y or S→Y, `z_ohm` for Y→Z, or
   `s_renormalized` for S renormalization, `s_inner_connected` for inner
-  connection (including the direct complex-reference case), or `s_terminated`
+  connection (including the direct complex-reference case), `s_cascaded` for
+  simultaneous direct cascade, or `s_terminated`
   for finite physical-load termination;
   direct physical connection removes only `s_connected`;
   interpolation removes both `s` and `z0_ohm`. The output's
