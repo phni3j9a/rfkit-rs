@@ -278,6 +278,62 @@ orientation, reference conversion, noise calibration, or broad scikit-rf
 compatibility claim is introduced; inverse networks remain mathematical
 removal operators that may be active or noncausal.
 
+Issue #96 adds `Network::cascade_direct_power` for one simultaneous physical
+group junction between equal ordered even-port inputs.  Its internal
+coordinates are `[A.right..., B.left...]`, its external coordinates are
+`[A.left..., B.right...]`, and it solves
+`(C + D S_ii) X = -D S_ie` before evaluating `S_ee + S_ei X`.  The full
+within-group `S_ii` blocks remain present; the implementation does not wrap
+sequential one-port connections or convert through Z/Y/transfer parameters.
+The public domain retains finite complex and signed negative-real references
+with nonzero real parts, exact shared frequency grids, exact surviving
+references, exact-pivot singularity, and checked finite arithmetic.  Full S and
+directional transmission blocks are not independently required to be
+invertible.
+
+Core tests in `crates/rfkit-core/tests/public_cascade.rs` cover two-port
+agreement with `connect_direct_power` on the shared well-conditioned domain,
+genuinely coupled four-port and inverse composition/removal, exact metadata
+and source immutability, complex/signed-reference physical behavior, zero and
+larger even-port inputs, the independently stated partial-singular but joint-
+nonsingular witness, exact singular and finite near-singular systems,
+malformed serde shapes, odd/zero/unequal cardinality, non-finite data/grids,
+zero-real references, and checked arithmetic failures.  The witness also
+asserts that the former single-junction method continues to reject its
+singular intermediate system.
+
+The canonical fixture
+`power_wave_cascade_direct_four_port_complex_z0.json` uses seed `20260956`,
+three frequencies, two coupled four-port inputs, and unequal complex
+frequency-dependent per-port references with strictly positive real parts.
+Pinned public scikit-rf `Network.cascade` 2.0.1 at commit
+`bd651e923cac6020de49a096e1d7e9b5f949f884` supplies the expected output on
+this well-conditioned shared domain.  The generator explicitly calls
+`output.renormalize(output.z0, s_def="power")` before extracting the output
+S.  As a generation-time guard, it forms the actual Kurokawa `C`, `D`, `S_ii`,
+and `S_ie` blocks and requires finite joint determinants with `abs(det) >=
+1e-3`, condition number `<= 1e4`, and finite relative solve residual `<=
+1e-12` at each frequency; observed diagnostics are not serialized.
+`crates/rfkit-core/tests/oracle_cascade_direct.rs` calls only the public
+Rust method and checks exact input/group/order/reference metadata plus
+output-only `rtol=1e-12`, `atol=1e-12`; `tools/oracle/test_generate_oracle.py`
+rejects output, input, group, metadata, and runtime-diagnostic drift.  The
+generator/checker registration is verified with:
+
+```text
+/home/server/.cache/rfkit-rs-oracle-venv/bin/python tools/oracle/generate_oracle.py check --case power_wave_cascade_direct_four_port_complex_z0
+```
+
+The focused external workflow in
+`crates/rfkit-touchstone/tests/public_cascade_direct_workflow.rs` and
+`crates/rfkit-touchstone/examples/cascade_direct_power_touchstone.rs` parses
+independent four-port Touchstone inputs, performs simultaneous cascade and
+inverse removal, explicitly renormalizes to the writer's common positive-real
+reference, and verifies write/read.  No interpolation, writer repair,
+automatic calibration, noise propagation, or broad scikit-rf compatibility is
+claimed; complex/negative-real and partial-singularity cases remain local
+equation/invariant evidence.
+
 Issue #88 adds the direct physical-junction operation
 `Network::connect_direct_power`. Its canonical fixture
 `power_wave_connect_direct_three_to_four_port_complex_z0.json` is an

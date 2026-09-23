@@ -290,6 +290,67 @@ hierarchy were rejected. Removing the method, diagnostics, fixture, tests, and
 documentation during 0.x requires no data migration; existing Network,
 connection, renormalization, and Touchstone APIs remain unchanged.
 
+## Cascade coupled even-port fixtures in one direct solve
+
+`Network::cascade_direct_power` composes two equal ordered `2N`-port networks
+through all corresponding internal pairs in one simultaneous Kurokawa
+power-wave V/I solve:
+
+```rust
+let cascaded = left.cascade_direct_power(&right)?;
+```
+
+Inputs use `[left_0..left_(N-1), right_0..right_(N-1)]`; every
+`self.right_k` is joined to `other.left_k`, and the result is ordered
+`[self.left..., other.right...]`.  The joint equation is
+
+```text
+(C + D S_ii) X = -D S_ie
+S_out = S_ee + S_ei X
+```
+
+so full within-group coupling is retained.  This is not a wrapper around
+repeated one-port connections: a partial one-port junction can be singular
+while the complete coupled group junction is nonsingular.  The operation
+supports finite unequal/per-port/frequency-dependent complex references,
+including signed negative-real references with nonzero real parts, and copies
+the surviving references exactly.  It requires equal finite frequency grids,
+does no interpolation or hidden renormalization, and leaves both borrowed
+inputs unchanged.  Only an exactly zero evaluated joint pivot is singular;
+finite near-singular arithmetic remains eligible.
+
+The operation deliberately does not add arbitrary pair maps, topology or
+calibration semantics.  Use `permute_ports` when a fixture's physical order
+differs, and explicitly call `renormalize_direct_power` before Touchstone
+export when the resulting references are not the writer's one common
+positive-real scalar.  A focused load → simultaneous cascade → inverse removal
+→ explicit writer-compatible renormalization → write/read workflow is
+available as:
+
+```text
+cargo test -p rfkit-touchstone --test public_cascade_direct_workflow
+cargo run -p rfkit-touchstone --example cascade_direct_power_touchstone
+```
+
+The canonical pinned differential fixture is
+`tools/oracle/fixtures/power_wave_cascade_direct_four_port_complex_z0.json`;
+its expected S is generated through scikit-rf 2.0.1 and explicitly restored
+to power waves after `Network.cascade`.  Complex and negative-real references,
+the partial-singular boundary witness, and singular/near-singular decisions
+remain independently authored equation/invariant coverage rather than a broad
+scikit-rf compatibility promise.
+
+This additive Yellow 0.x decision keeps the fixed group ordering and direct
+joint-solve domain visible at the call site. Caller-side sequential one-port
+repetition was rejected because it loses the simultaneous partial-singular
+domain; transfer/Z/Y composition was rejected because it adds avoidable
+invertibility restrictions; and arbitrary pairing maps, graph/topology
+cascades, calibration, and broader parameter hierarchies were rejected because
+they are outside this bounded coupled-fixture workflow. Removing the method,
+diagnostics, fixture, tests, and documentation during 0.x requires no data
+migration; existing Network, connection, renormalization, and Touchstone APIs
+remain unchanged.
+
 ## Reorder physical ports before Touchstone export
 
 `Network::permute_ports` is the explicit, wave-definition-independent way to

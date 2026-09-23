@@ -824,6 +824,47 @@ INVERSE_CASCADE_TOLERANCE_JUSTIFICATION = (
     "swapped references, group order, and metadata are exact contract fields."
 )
 
+# The simultaneous group-cascade fixture is independent from the inverse
+# fixture above.  It uses two genuinely coupled four-port inputs, complex
+# positive-real per-port references, and the fixed [left..., right...] group
+# convention.  scikit-rf's public cascade path is used only on this
+# well-conditioned shared domain; its output is explicitly restored to the
+# power-wave definition before extraction so the wave convention is visible
+# in the fixture recipe and checker.
+CASCADE_DIRECT_FIXTURE = (
+    Path(__file__).resolve().parent
+    / "fixtures"
+    / "power_wave_cascade_direct_four_port_complex_z0.json"
+)
+CASCADE_DIRECT_CASE_ID = "power_wave_cascade_direct_four_port_complex_z0"
+CASCADE_DIRECT_RANDOM_SEED = 20_260_956
+CASCADE_DIRECT_NFREQ = 3
+CASCADE_DIRECT_NPORTS = 4
+CASCADE_DIRECT_GROUP_SIZE = 2
+CASCADE_DIRECT_RTOL = 1e-12
+CASCADE_DIRECT_ATOL = 1e-12
+# These are generation-time guards for the actual simultaneous physical
+# boundary system.  They are deliberately much looser than the expected
+# binary64 residual while still excluding an accidental singular or badly
+# conditioned seeded fixture.  The observed determinant/condition/residual
+# values are intentionally not serialized into the canonical fixture.
+CASCADE_DIRECT_MIN_JOINT_DETERMINANT_ABS = 1e-3
+CASCADE_DIRECT_MAX_JOINT_CONDITION = 1e4
+CASCADE_DIRECT_MAX_JOINT_RELATIVE_RESIDUAL = 1e-12
+CASCADE_DIRECT_INPUT_RECIPE = (
+    "independent coupled four-port A/B S stacks from NumPy default_rng seed "
+    "20260956 with deterministic diagonal terms and full non-reciprocal within-"
+    "group/cross-group perturbations; unequal complex frequency-dependent "
+    "per-port references with strictly positive real parts; no prior fixture "
+    "values reused"
+)
+CASCADE_DIRECT_TOLERANCE_JUSTIFICATION = (
+    "Strict binary64 tolerance for a deterministic, well-conditioned coupled "
+    "four-port simultaneous group-junction output.  Only the restored output "
+    "S stack is numeric-tolerance data; both input networks, surviving "
+    "references, frequency/group metadata, and shape fields are exact."
+)
+
 
 class _OracleCase(NamedTuple):
     """A registered fixture, builder, and case-specific check strategy."""
@@ -6328,6 +6369,316 @@ def _inverse_cascade_fixture(np: Any, skrf: Any) -> dict[str, Any]:
     }
 
 
+def _assert_cascade_direct_joint_conditioning(
+    np: Any,
+    s_a: Any,
+    s_b: Any,
+    z0_a: Any,
+    z0_b: Any,
+) -> None:
+    """Guard the actual simultaneous Kurokawa boundary solve.
+
+    This is deliberately a generation-time check rather than fixture data.  It
+    builds the same internal coordinates as the Rust kernel,
+    ``[A.right..., B.left...]``, with the external coordinates
+    ``[A.left..., B.right...]``.  The determinant and 2-norm condition bound
+    reject accidental singular or badly conditioned seeded cases; the solve
+    residual independently checks that NumPy produced a finite solution.
+    """
+
+    group_size = CASCADE_DIRECT_GROUP_SIZE
+    dimension = group_size * 2
+    s_ii = np.zeros(
+        (CASCADE_DIRECT_NFREQ, dimension, dimension), dtype=np.complex128
+    )
+    s_ie = np.zeros(
+        (CASCADE_DIRECT_NFREQ, dimension, dimension), dtype=np.complex128
+    )
+    s_ii[:, :group_size, :group_size] = s_a[:, group_size:, group_size:]
+    s_ii[:, group_size:, group_size:] = s_b[:, :group_size, :group_size]
+    s_ie[:, :group_size, :group_size] = s_a[:, group_size:, :group_size]
+    s_ie[:, group_size:, group_size:] = s_b[:, :group_size, group_size:]
+
+    for frequency in range(CASCADE_DIRECT_NFREQ):
+        boundary_c = np.zeros((dimension, dimension), dtype=np.complex128)
+        boundary_d = np.zeros((dimension, dimension), dtype=np.complex128)
+        for index in range(group_size):
+            z_a = z0_a[frequency, group_size + index]
+            z_b = z0_b[frequency, index]
+            q_a = np.sqrt(abs(z_a.real)) / z_a.real
+            q_b = np.sqrt(abs(z_b.real)) / z_b.real
+
+            boundary_c[index, index] = q_a
+            boundary_c[index, group_size + index] = q_b
+            boundary_c[group_size + index, index] = q_a * np.conj(z_a)
+            boundary_c[group_size + index, group_size + index] = -q_b * np.conj(z_b)
+
+            boundary_d[index, index] = -q_a
+            boundary_d[index, group_size + index] = -q_b
+            boundary_d[group_size + index, index] = q_a * z_a
+            boundary_d[group_size + index, group_size + index] = -q_b * z_b
+
+        system = boundary_c + boundary_d @ s_ii[frequency]
+        rhs = -(boundary_d @ s_ie[frequency])
+        if not np.isfinite(system).all() or not np.isfinite(rhs).all():
+            raise ValueError(
+                "cascade direct joint boundary system/RHS became non-finite "
+                f"at frequency {frequency}"
+            )
+
+        try:
+            determinant = np.linalg.det(system)
+            condition = np.linalg.cond(system)
+        except np.linalg.LinAlgError as error:
+            raise ValueError(
+                "cascade direct joint boundary system failed determinant/"
+                f"condition evaluation at frequency {frequency}"
+            ) from error
+        if not np.isfinite(determinant) or abs(determinant) < (
+            CASCADE_DIRECT_MIN_JOINT_DETERMINANT_ABS
+        ):
+            raise ValueError(
+                "cascade direct joint boundary determinant guard failed at "
+                f"frequency {frequency}: abs(det)={abs(determinant)!r}, "
+                f"required >= {CASCADE_DIRECT_MIN_JOINT_DETERMINANT_ABS}"
+            )
+        if not np.isfinite(condition) or condition > CASCADE_DIRECT_MAX_JOINT_CONDITION:
+            raise ValueError(
+                "cascade direct joint boundary condition guard failed at "
+                f"frequency {frequency}: cond={condition!r}, "
+                f"required <= {CASCADE_DIRECT_MAX_JOINT_CONDITION}"
+            )
+
+        try:
+            solution = np.linalg.solve(system, rhs)
+        except np.linalg.LinAlgError as error:
+            raise ValueError(
+                "cascade direct joint boundary solve failed at "
+                f"frequency {frequency} despite determinant/condition guards"
+            ) from error
+        if not np.isfinite(solution).all():
+            raise ValueError(
+                "cascade direct joint boundary solve became non-finite "
+                f"at frequency {frequency}"
+            )
+        residual = system @ solution - rhs
+        if not np.isfinite(residual).all():
+            raise ValueError(
+                "cascade direct joint boundary solve residual became non-finite "
+                f"at frequency {frequency}"
+            )
+        residual_scale = max(
+            1.0,
+            float(np.linalg.norm(system, ord=np.inf))
+            * float(np.linalg.norm(solution, ord=np.inf))
+            + float(np.linalg.norm(rhs, ord=np.inf)),
+        )
+        relative_residual = float(np.linalg.norm(residual, ord=np.inf)) / residual_scale
+        if not np.isfinite(relative_residual) or (
+            relative_residual > CASCADE_DIRECT_MAX_JOINT_RELATIVE_RESIDUAL
+        ):
+            raise ValueError(
+                "cascade direct joint boundary residual guard failed at "
+                f"frequency {frequency}: relative residual={relative_residual!r}, "
+                f"required <= {CASCADE_DIRECT_MAX_JOINT_RELATIVE_RESIDUAL}"
+            )
+
+
+def _cascade_direct_inputs(np: Any) -> tuple[Any, Any, Any, Any, Any]:
+    """Build independently seeded, coupled four-port cascade inputs."""
+
+    frequency_hz = np.asarray([0.87e9, 1.61e9, 2.93e9], dtype=np.float64)
+    rng = np.random.default_rng(CASCADE_DIRECT_RANDOM_SEED)
+    s_a = np.asarray(
+        rng.normal(
+            loc=0.0,
+            scale=0.018,
+            size=(CASCADE_DIRECT_NFREQ, CASCADE_DIRECT_NPORTS, CASCADE_DIRECT_NPORTS),
+        )
+        + 1j
+        * rng.normal(
+            loc=0.0,
+            scale=0.015,
+            size=(CASCADE_DIRECT_NFREQ, CASCADE_DIRECT_NPORTS, CASCADE_DIRECT_NPORTS),
+        ),
+        dtype=np.complex128,
+    )
+    s_b = np.asarray(
+        rng.normal(
+            loc=0.0,
+            scale=0.017,
+            size=(CASCADE_DIRECT_NFREQ, CASCADE_DIRECT_NPORTS, CASCADE_DIRECT_NPORTS),
+        )
+        + 1j
+        * rng.normal(
+            loc=0.0,
+            scale=0.014,
+            size=(CASCADE_DIRECT_NFREQ, CASCADE_DIRECT_NPORTS, CASCADE_DIRECT_NPORTS),
+        ),
+        dtype=np.complex128,
+    )
+    diagonal_a = np.asarray(
+        [
+            [0.12 + 0.02j, 0.16 - 0.01j, 0.13 + 0.03j, 0.18 - 0.02j],
+            [0.1224 + 0.0204j, 0.1632 - 0.0102j, 0.1326 + 0.0306j, 0.1836 - 0.0204j],
+            [0.1248 + 0.0208j, 0.1664 - 0.0104j, 0.1352 + 0.0312j, 0.1872 - 0.0208j],
+        ],
+        dtype=np.complex128,
+    )
+    diagonal_b = np.asarray(
+        [
+            [0.11 - 0.01j, 0.15 + 0.02j, 0.14 - 0.02j, 0.17 + 0.01j],
+            [0.1133 - 0.0103j, 0.1545 + 0.0206j, 0.1442 - 0.0206j, 0.1751 + 0.0103j],
+            [0.1166 - 0.0106j, 0.159 + 0.0212j, 0.1484 - 0.0212j, 0.1802 + 0.0106j],
+        ],
+        dtype=np.complex128,
+    )
+    for frequency in range(CASCADE_DIRECT_NFREQ):
+        s_a[frequency] += np.diag(diagonal_a[frequency])
+        s_b[frequency] += np.diag(diagonal_b[frequency])
+
+    z0_a = np.asarray(
+        [
+            [41 + 7j, 58 - 5j, 73 + 9j, 89 - 6j],
+            [42.5 + 7.5j, 59.5 - 5.5j, 74.5 + 9.5j, 90.5 - 6.5j],
+            [44 + 8j, 61 - 6j, 76 + 10j, 92 - 7j],
+        ],
+        dtype=np.complex128,
+    )
+    z0_b = np.asarray(
+        [
+            [47 - 4j, 63 + 6j, 78 - 8j, 96 + 5j],
+            [48.5 - 4.5j, 64.5 + 6.5j, 79.5 - 8.5j, 97.5 + 5.5j],
+            [50 - 5j, 66 + 7j, 81 - 9j, 99 + 6j],
+        ],
+        dtype=np.complex128,
+    )
+    expected_shapes = {
+        "frequency": (CASCADE_DIRECT_NFREQ,),
+        "s_a": (CASCADE_DIRECT_NFREQ, CASCADE_DIRECT_NPORTS, CASCADE_DIRECT_NPORTS),
+        "s_b": (CASCADE_DIRECT_NFREQ, CASCADE_DIRECT_NPORTS, CASCADE_DIRECT_NPORTS),
+        "z0_a": (CASCADE_DIRECT_NFREQ, CASCADE_DIRECT_NPORTS),
+        "z0_b": (CASCADE_DIRECT_NFREQ, CASCADE_DIRECT_NPORTS),
+    }
+    actual_shapes = {
+        "frequency": frequency_hz.shape,
+        "s_a": s_a.shape,
+        "s_b": s_b.shape,
+        "z0_a": z0_a.shape,
+        "z0_b": z0_b.shape,
+    }
+    if actual_shapes != expected_shapes:
+        raise ValueError(f"cascade direct input shape drifted: {actual_shapes}")
+    if not np.isfinite(frequency_hz).all() or not np.isfinite(s_a).all() or not np.isfinite(s_b).all():
+        raise ValueError("cascade direct frequency/S inputs must be finite")
+    if (
+        not np.isfinite(z0_a).all()
+        or not np.isfinite(z0_b).all()
+        or not (z0_a.real > 0.0).all()
+        or not (z0_b.real > 0.0).all()
+    ):
+        raise ValueError("cascade direct references must be finite and positive-real")
+    if np.array_equal(s_a, s_a.swapaxes(1, 2)) or np.array_equal(
+        s_b, s_b.swapaxes(1, 2)
+    ):
+        raise ValueError("cascade direct inputs must exercise non-reciprocal coupling")
+    _assert_cascade_direct_joint_conditioning(np, s_a, s_b, z0_a, z0_b)
+    return frequency_hz, s_a, s_b, z0_a, z0_b
+
+
+def _cascade_direct_fixture(np: Any, skrf: Any) -> dict[str, Any]:
+    """Generate expected S through pinned public cascade and power restoration."""
+
+    frequency_hz, s_a, s_b, z0_a, z0_b = _cascade_direct_inputs(np)
+    case_id = CASCADE_DIRECT_CASE_ID
+    network_a = skrf.Network(
+        f=frequency_hz,
+        s=s_a,
+        z0=z0_a,
+        s_def="power",
+        name=f"{case_id}_a",
+    )
+    network_b = skrf.Network(
+        f=frequency_hz,
+        s=s_b,
+        z0=z0_b,
+        s_def="power",
+        name=f"{case_id}_b",
+    )
+    raw_output = skrf.network.cascade(network_a, network_b)
+    restored = raw_output.copy()
+    restored.renormalize(raw_output.z0, s_def="power")
+    cascaded_s = np.asarray(restored.s, dtype=np.complex128)
+    cascaded_z0 = np.asarray(restored.z0, dtype=np.complex128)
+    expected_z0 = np.concatenate(
+        (z0_a[:, :CASCADE_DIRECT_GROUP_SIZE], z0_b[:, CASCADE_DIRECT_GROUP_SIZE:]),
+        axis=1,
+    )
+    if not np.isfinite(cascaded_s).all() or not np.isfinite(cascaded_z0).all():
+        raise ValueError("cascade direct public output must be finite")
+    if not np.array_equal(cascaded_z0, expected_z0):
+        raise ValueError("cascade direct public references did not preserve survivors")
+    shape = {
+        "frequency": list(frequency_hz.shape),
+        "input_s_a": list(s_a.shape),
+        "input_s_b": list(s_b.shape),
+        "input_z0_a": list(z0_a.shape),
+        "input_z0_b": list(z0_b.shape),
+        "output_s": list(cascaded_s.shape),
+        "output_z0": list(cascaded_z0.shape),
+    }
+    return {
+        "metadata": {
+            "case_id": case_id,
+            "group_convention": {
+                "input_a": ["left_0", "left_1", "right_0", "right_1"],
+                "input_b": ["left_0", "left_1", "right_0", "right_1"],
+                "output": ["a_left_0", "a_left_1", "b_right_0", "b_right_1"],
+                "description": "simultaneous right-to-left group junction with full S_ii coupling",
+            },
+            "input_recipe": CASCADE_DIRECT_INPUT_RECIPE,
+            "numpy_version": np.__version__,
+            "operation": "network_cascade_direct_power",
+            "random_seed": CASCADE_DIRECT_RANDOM_SEED,
+            "reference_impedance": {
+                "complex": True,
+                "frequency_dependent": True,
+                "per_port": True,
+                "real_part": "strictly positive",
+                "survivors_exact": True,
+                "unit": "ohm",
+            },
+            "schema": "rfkit-rs.oracle.fixture",
+            "schema_version": SCHEMA_VERSION,
+            "scikit_rf_commit": EXPECTED_SCIKIT_RF_COMMIT,
+            "scikit_rf_version": skrf.__version__,
+            "shape": shape,
+            "tolerance_policy": {
+                "atol": CASCADE_DIRECT_ATOL,
+                "comparison": "only data.s_cascaded is numeric output; all input, frequency, references, group-order, and metadata contract fields are exact",
+                "justification": CASCADE_DIRECT_TOLERANCE_JUSTIFICATION,
+                "regeneration": "canonical UTF-8 JSON; expected S comes from pinned public Network.cascade followed by explicit output.renormalize(output.z0, s_def=power) restoration",
+                "rtol": CASCADE_DIRECT_RTOL,
+            },
+            "units": {
+                "frequency": "Hz",
+                "s": "dimensionless",
+                "z0": "ohm",
+            },
+            "wave_definition": "power",
+        },
+        "data": {
+            "frequency_hz": [float(value) for value in frequency_hz],
+            "s_a": _complex_array(s_a),
+            "s_b": _complex_array(s_b),
+            "s_cascaded": _complex_array(cascaded_s),
+            "z0_a_ohm": _complex_array(z0_a),
+            "z0_b_ohm": _complex_array(z0_b),
+            "z0_output_ohm": _complex_array(cascaded_z0),
+        },
+    }
+
+
 _CASES = (
     _OracleCase(
         "three_port_complex_z0",
@@ -6627,6 +6978,13 @@ _CASES = (
         _inverse_cascade_fixture,
         "numeric_output",
         "s_inverse",
+    ),
+    _OracleCase(
+        CASCADE_DIRECT_CASE_ID,
+        CASCADE_DIRECT_FIXTURE,
+        _cascade_direct_fixture,
+        "numeric_output",
+        "s_cascaded",
     ),
     _OracleCase(
         TWO_PORT_STABILITY_CASE_ID,

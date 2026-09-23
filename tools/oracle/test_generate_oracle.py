@@ -178,6 +178,55 @@ class InverseCascadeNumericFixtureCheckerTests(unittest.TestCase):
             self.assertEqual(self._check_document(document), 1)
 
 
+class CascadeDirectNumericFixtureCheckerTests(unittest.TestCase):
+    """Keep simultaneous-cascade output tolerance and group contract visible."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.fixture_path = oracle.CASCADE_DIRECT_FIXTURE
+        cls.fixture = oracle._read_canonical_json(cls.fixture_path)
+
+    def _check_document(self, document: dict[str, object]) -> int:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / self.fixture_path.name
+            path.write_bytes(oracle._canonical_bytes(document))
+            return oracle._check_numeric_fixture(path, self.fixture, "s_cascaded")
+
+    def test_cascade_output_within_recorded_tolerance_passes(self) -> None:
+        document = copy.deepcopy(self.fixture)
+        document["data"]["s_cascaded"][0][0][0]["real"] += 1e-13
+        self.assertEqual(self._check_document(document), 0)
+
+    def test_cascade_output_outside_recorded_tolerance_fails(self) -> None:
+        document = copy.deepcopy(self.fixture)
+        document["data"]["s_cascaded"][0][0][0]["real"] += 1e-3
+        self.assertEqual(self._check_document(document), 1)
+
+    def test_cascade_input_or_group_contract_drift_fails(self) -> None:
+        document = copy.deepcopy(self.fixture)
+        document["data"]["s_a"][0][0][0]["real"] += 1e-3
+        self.assertEqual(self._check_document(document), 1)
+
+        document = copy.deepcopy(self.fixture)
+        document["metadata"]["group_convention"]["output"][0] = "b_right_0"
+        self.assertEqual(self._check_document(document), 1)
+
+        document = copy.deepcopy(self.fixture)
+        document["metadata"]["random_seed"] += 1
+        self.assertEqual(self._check_document(document), 1)
+
+    def test_cascade_runtime_diagnostics_are_not_canonical_fields(self) -> None:
+        self.assertNotIn("joint_determinant_evidence", self.fixture["metadata"])
+        self.assertNotIn("condition_estimate", self.fixture["metadata"])
+        for key, value in (
+            ("joint_determinant_evidence", [0.001]),
+            ("condition_estimate", 4.32e-14),
+        ):
+            document = copy.deepcopy(self.fixture)
+            document["metadata"][key] = value
+            self.assertEqual(self._check_document(document), 1)
+
+
 MATRIX_CASE_SPECS = {
     "power_wave_s_to_z_one_port_real_scalar_z0": {
         "operation": "s_to_z",
@@ -662,6 +711,17 @@ INVERSE_CASCADE_CASE_SPECS = {
         "frequencies": 3,
         "seed": oracle.INVERSE_CASCADE_RANDOM_SEED,
         "output": "s_inverse",
+    },
+}
+
+
+CASCADE_DIRECT_CASE_SPECS = {
+    oracle.CASCADE_DIRECT_CASE_ID: {
+        "operation": "network_cascade_direct_power",
+        "ports": 4,
+        "frequencies": 3,
+        "seed": oracle.CASCADE_DIRECT_RANDOM_SEED,
+        "output": "s_cascaded",
     },
 }
 
@@ -1494,6 +1554,7 @@ class MatrixRegistrationAndCheckerTests(unittest.TestCase):
             + len(TERMINATION_CASE_SPECS)
             + len(TWO_PORT_STABILITY_CASE_SPECS)
             + len(INVERSE_CASCADE_CASE_SPECS)
+            + len(CASCADE_DIRECT_CASE_SPECS)
         )
         self.assertTrue(set(MATRIX_CASE_SPECS).issubset(registered))
         self.assertTrue(set(IMPEDANCE_ADMITTANCE_CASE_SPECS).issubset(registered))
@@ -1505,6 +1566,7 @@ class MatrixRegistrationAndCheckerTests(unittest.TestCase):
         self.assertTrue(set(TERMINATION_CASE_SPECS).issubset(registered))
         self.assertTrue(set(TWO_PORT_STABILITY_CASE_SPECS).issubset(registered))
         self.assertTrue(set(INVERSE_CASCADE_CASE_SPECS).issubset(registered))
+        self.assertTrue(set(CASCADE_DIRECT_CASE_SPECS).issubset(registered))
         self.assertTrue(set(DIRECT_CONNECTION_CASE_SPECS).issubset(registered))
         self.assertTrue(set(INNER_CONNECT_CASE_SPECS).issubset(registered))
         for case_id, spec in MATRIX_CASE_SPECS.items():
