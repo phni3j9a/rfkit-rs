@@ -156,7 +156,7 @@ fn validate_fixture_contract(fixture: &FixtureDocument) {
     assert_eq!(metadata.wave_definition, "power");
     assert_eq!(
         metadata.input_recipe,
-        "independent four-frequency coupled non-reciprocal four-port S stack from NumPy default_rng seed 20260957; each sample is normalized by its scalar numpy.linalg.svd(..., compute_uv=False) maximum and scaled to the target values [0.35, 0.65, 1.35, 1.85]; unequal complex positive-real frequency-dependent per-port references; no prior fixture values reused"
+        "independent four-frequency coupled non-reciprocal four-port S stack from NumPy default_rng seed 20260957; each sample is multiplied by fixed binary-exact factors [1.0, 2.0, 4.5, 5.0] (SVD is not used to construct exact inputs); unequal complex positive-real frequency-dependent per-port references; no prior fixture values reused"
     );
     assert_eq!(
         metadata.sample_classes,

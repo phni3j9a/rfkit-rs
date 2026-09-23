@@ -258,9 +258,11 @@ non-convergence and non-finite solver output are structured failures.
 The canonical fixture
 `max_singular_value_power_four_port_complex_z0.json` is independently seeded
 with NumPy `default_rng` seed `20260957`: four coupled, non-reciprocal
-four-port samples are scaled to scalar maxima `[0.35, 0.65, 1.35, 1.85]` and
-use unequal complex, frequency-dependent positive-real references. Expected
-`sigma_max` values come only from public NumPy `2.5.1`
+four-port samples use fixed binary-exact sample factors `[1.0, 2.0, 4.5, 5.0]`
+applied to the seeded raw S stack and use unequal complex, frequency-dependent
+positive-real references. Input construction does not call SVD, so exact source
+arrays are independent of platform LAPACK details. Expected `sigma_max` values
+come only from public NumPy `2.5.1`
 `numpy.linalg.svd(..., compute_uv=False)[:,0]`. Pinned scikit-rf `2.0.1` at
 commit `bd651e923cac6020de49a096e1d7e9b5f949f884` is called through public
 `Network.is_passive(tol=1e-12)` on one-sample Networks solely for a limited

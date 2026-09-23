@@ -808,16 +808,16 @@ MAX_SINGULAR_VALUE_POWER_CASE_ID = "max_singular_value_power_four_port_complex_z
 MAX_SINGULAR_VALUE_POWER_RANDOM_SEED = 20_260_957
 MAX_SINGULAR_VALUE_POWER_NFREQ = 4
 MAX_SINGULAR_VALUE_POWER_NPORTS = 4
-MAX_SINGULAR_VALUE_POWER_TARGET_SIGMA = (0.35, 0.65, 1.35, 1.85)
+MAX_SINGULAR_VALUE_POWER_SAMPLE_FACTORS = (1.0, 2.0, 4.5, 5.0)
 MAX_SINGULAR_VALUE_POWER_RTOL = 1e-12
 MAX_SINGULAR_VALUE_POWER_ATOL = 1e-12
 MAX_SINGULAR_VALUE_POWER_IS_PASSIVE_TOL = 1e-12
 MAX_SINGULAR_VALUE_POWER_INPUT_RECIPE = (
     "independent four-frequency coupled non-reciprocal four-port S stack from "
-    "NumPy default_rng seed 20260957; each sample is normalized by its scalar "
-    "numpy.linalg.svd(..., compute_uv=False) maximum and scaled to the target "
-    "values [0.35, 0.65, 1.35, 1.85]; unequal complex positive-real "
-    "frequency-dependent per-port references; no prior fixture values reused"
+    "NumPy default_rng seed 20260957; each sample is multiplied by fixed "
+    "binary-exact factors [1.0, 2.0, 4.5, 5.0] (SVD is not used to construct "
+    "exact inputs); unequal complex positive-real frequency-dependent per-port "
+    "references; no prior fixture values reused"
 )
 MAX_SINGULAR_VALUE_POWER_TOLERANCE_JUSTIFICATION = (
     "Strict binary64 mixed tolerance for the dimensionless scalar maximum "
@@ -6209,8 +6209,8 @@ def _two_port_stability_fixture(np: Any, skrf: Any) -> dict[str, Any]:
     }
 
 
-def _max_singular_value_power_inputs(np: Any) -> tuple[Any, Any, Any, list[str]]:
-    """Build the independent seeded four-port scalar-SVD input family."""
+def _max_singular_value_power_inputs(np: Any) -> tuple[Any, Any, Any]:
+    """Build exact seeded inputs without calling a numerical SVD."""
 
     frequency_hz = np.asarray([0.83e9, 1.37e9, 2.61e9, 5.19e9], dtype=np.float64)
     rng = np.random.default_rng(MAX_SINGULAR_VALUE_POWER_RANDOM_SEED)
@@ -6227,11 +6227,15 @@ def _max_singular_value_power_inputs(np: Any) -> tuple[Any, Any, Any, list[str]]
             size=(MAX_SINGULAR_VALUE_POWER_NFREQ, MAX_SINGULAR_VALUE_POWER_NPORTS, MAX_SINGULAR_VALUE_POWER_NPORTS),
         )
     ).astype(np.complex128)
-    raw_sigma = np.asarray(np.linalg.svd(raw_s, compute_uv=False)[:, 0], dtype=np.float64)
-    if not np.isfinite(raw_sigma).all() or np.any(raw_sigma <= 0.0):
-        raise ValueError("maximum singular-value raw S input must have finite nonzero scales")
-    target_sigma = np.asarray(MAX_SINGULAR_VALUE_POWER_TARGET_SIGMA, dtype=np.float64)
-    source_s = raw_s * (target_sigma / raw_sigma)[:, None, None]
+    sample_factors = np.asarray(
+        MAX_SINGULAR_VALUE_POWER_SAMPLE_FACTORS,
+        dtype=np.float64,
+    )
+    if sample_factors.shape != (MAX_SINGULAR_VALUE_POWER_NFREQ,):
+        raise ValueError("maximum singular-value sample-factor shape drifted")
+    if not np.isfinite(sample_factors).all() or np.any(sample_factors <= 0.0):
+        raise ValueError("maximum singular-value sample factors must be finite and positive")
+    source_s = raw_s * sample_factors[:, None, None]
     source_z0 = np.asarray(
         [
             [41.0 + 3.0j, 58.0 - 2.0j, 73.0 + 4.0j, 66.0 + 1.0j],
@@ -6260,24 +6264,13 @@ def _max_singular_value_power_inputs(np: Any) -> tuple[Any, Any, Any, list[str]]
         raise ValueError("maximum singular-value z0 input must be positive-real finite")
     if np.all(source_z0.imag == 0.0) or np.all(source_z0[:, 0] == source_z0[:, 1]):
         raise ValueError("maximum singular-value z0 input must include unequal complex values")
-    singular_values = np.asarray(np.linalg.svd(source_s, compute_uv=False)[:, 0], dtype=np.float64)
-    if not np.isfinite(singular_values).all():
-        raise ValueError("maximum singular-value output must be finite")
-    if not np.allclose(singular_values, target_sigma, rtol=0.0, atol=5.0e-15):
-        raise ValueError(
-            "maximum singular-value targets drifted: "
-            f"expected {target_sigma.tolist()!r}, got {singular_values.tolist()!r}"
-        )
-    if np.any(np.abs(singular_values - 1.0) <= 0.28):
-        raise ValueError("maximum singular-value samples must be comfortably away from one")
-    sample_classes = ["passive" if value < 1.0 else "active" for value in singular_values]
-    return frequency_hz, source_s, source_z0, sample_classes
+    return frequency_hz, source_s, source_z0
 
 
 def _max_singular_value_power_fixture(np: Any, skrf: Any) -> dict[str, Any]:
     """Generate scalar SVD outputs and limited pinned passivity evidence."""
 
-    frequency_hz, source_s, source_z0, sample_classes = _max_singular_value_power_inputs(np)
+    frequency_hz, source_s, source_z0 = _max_singular_value_power_inputs(np)
     case_id = MAX_SINGULAR_VALUE_POWER_CASE_ID
     network = skrf.Network(
         f=frequency_hz,
@@ -6291,6 +6284,11 @@ def _max_singular_value_power_fixture(np: Any, skrf: Any) -> dict[str, Any]:
     if not np.array_equal(network_s, source_s) or not np.array_equal(network_z0, source_z0):
         raise ValueError("scikit-rf changed maximum singular-value inputs on read-back")
     sigma_max = np.asarray(np.linalg.svd(network_s, compute_uv=False)[:, 0], dtype=np.float64)
+    if not np.isfinite(sigma_max).all():
+        raise ValueError("maximum singular-value output must be finite")
+    if np.any(np.abs(sigma_max - 1.0) <= 0.28):
+        raise ValueError("maximum singular-value samples must be comfortably away from one")
+    sample_classes = ["passive" if value < 1.0 else "active" for value in sigma_max]
     # Pinned scikit-rf exposes ``Network.is_passive`` as one Boolean for a
     # Network sweep.  Construct one-sample public Networks so the comparison
     # remains aligned with each scalar SVD output without treating a sweep

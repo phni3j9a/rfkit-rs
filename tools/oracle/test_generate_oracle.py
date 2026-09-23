@@ -4545,7 +4545,12 @@ class MaxSingularValuePowerRegistrationAndCheckerTests(unittest.TestCase):
         self.assertEqual(metadata["operation"], spec["operation"])
         self.assertEqual(metadata["random_seed"], spec["seed"])
         self.assertIn("default_rng seed 20260957", metadata["input_recipe"])
-        self.assertIn("numpy.linalg.svd", metadata["input_recipe"])
+        self.assertIn(
+            "fixed binary-exact factors [1.0, 2.0, 4.5, 5.0]",
+            metadata["input_recipe"],
+        )
+        self.assertIn("SVD is not used to construct exact inputs", metadata["input_recipe"])
+        self.assertNotIn("normalized by", metadata["input_recipe"])
         self.assertEqual(metadata["numpy_version"], oracle.EXPECTED_NUMPY_VERSION)
         self.assertEqual(metadata["scikit_rf_version"], oracle.EXPECTED_SCIKIT_RF_VERSION)
         self.assertEqual(metadata["scikit_rf_commit"], oracle.EXPECTED_SCIKIT_RF_COMMIT)
@@ -4558,6 +4563,32 @@ class MaxSingularValuePowerRegistrationAndCheckerTests(unittest.TestCase):
         self.assertEqual(metadata["reference_impedance"]["real_part"], "strictly positive")
         self.assertEqual(metadata["scikit_rf_is_passive_comparison"]["tol"], 1e-12)
         self.assertEqual(self.fixture["data"]["is_passive"], [True, True, False, False])
+
+    def test_input_builder_does_not_call_svd(self) -> None:
+        with mock.patch.object(
+            self.np.linalg,
+            "svd",
+            side_effect=AssertionError("input construction must not call SVD"),
+        ) as svd:
+            frequency_hz, source_s, source_z0 = oracle._max_singular_value_power_inputs(
+                self.np
+            )
+
+        svd.assert_not_called()
+        self.assertEqual(frequency_hz.shape, (4,))
+        self.assertEqual(source_s.shape, (4, 4, 4))
+        self.assertEqual(source_z0.shape, (4, 4))
+
+    def test_builder_calls_public_numpy_svd_for_numeric_output(self) -> None:
+        with mock.patch.object(
+            self.np.linalg,
+            "svd",
+            wraps=self.np.linalg.svd,
+        ) as svd:
+            generated = self.case.builder(self.np, self.skrf)
+
+        self.assertGreaterEqual(svd.call_count, 1)
+        self.assertTrue(all(math.isfinite(value) for value in generated["data"]["sigma_max"]))
 
     def test_builder_matches_contract_and_limited_passive_comparison(self) -> None:
         generated = self.case.builder(self.np, self.skrf)
