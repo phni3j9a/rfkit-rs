@@ -238,6 +238,46 @@ poles, unsampled frequencies, nonlinear/large-signal behavior, or overall
 circuit stability. No verdict booleans, circles, μ factors, gain optimization,
 or tolerance classifications are part of this slice.
 
+Issue #94 adds the borrowing `Network::inverse_cascade_power` operation for
+ordered even-port power-wave cascades. Core coverage includes analytic and
+non-reciprocal two-port cases, an ideal through, complex/signed-reference V/I
+wave reversal, a genuinely cross-mode-coupled asymmetric four-port, a larger
+six-port double inverse, exact metadata/source preservation, and finite
+near-singular transmission acceptance. The four-port invariant workflow
+connects each group pair through the existing public `connect_direct_power` and
+`inner_connect_direct_power` methods, then removes both left-first and
+right-first fixtures with the same helpers; it checks the coupled DUT response
+and exact output references rather than only testing a relational inverse.
+Structured tests distinguish malformed zero-port/cardinality/z0 shapes,
+non-finite frequency/S/z0 data, zero-real references, full-S versus forward
+and reverse transmission singularity, and finite-input arithmetic overflow.
+
+The canonical fixture
+`power_wave_inverse_cascade_four_port_real_unequal_z0.json` is independently
+seeded with NumPy `default_rng` seed `20260955`, has three frequency samples and
+unequal real-positive frequency-dependent per-port references, and fixes input
+groups as `[left_0,left_1,right_0,right_1]` with output `[old_right,old_left]`.
+Pinned public scikit-rf `Network.inv` 2.0.1 (commit
+`bd651e923cac6020de49a096e1d7e9b5f949f884`) supplies expected S; NumPy `2.5.1`
+independently checks `P @ solve(S,I) @ P`. Only output S uses strict
+`rtol=1e-12`, `atol=1e-12`; frequencies, source S/z0, swapped conjugate
+references, shapes, group metadata, and recipe fields are exact. The generator
+keeps the independent solve as a `<=1e-12` guard but does not serialize its
+runtime residual or determinant magnitudes as canonical metadata, so BLAS
+rounding does not change the contract. `crates/rfkit-core/tests/oracle_inverse_cascade.rs`
+calls only the public Rust method, while Python generator/checker tests reject
+registration, input/group, and metadata drift.
+
+The focused external workflow in
+`crates/rfkit-touchstone/tests/public_inverse_cascade_workflow.rs` and
+`crates/rfkit-touchstone/examples/inverse_cascade_touchstone.rs` parses
+independent two-port LEFT/DUT/RIGHT sweeps, constructs the measured cascade
+with `connect_direct_power`, removes fixtures in both orders, explicitly
+renormalizes to common 50 Ω, and verifies writer/readback. No implicit
+orientation, reference conversion, noise calibration, or broad scikit-rf
+compatibility claim is introduced; inverse networks remain mathematical
+removal operators that may be active or noncausal.
+
 Issue #88 adds the direct physical-junction operation
 `Network::connect_direct_power`. Its canonical fixture
 `power_wave_connect_direct_three_to_four_port_complex_z0.json` is an

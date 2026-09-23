@@ -240,6 +240,56 @@ choose the domain explicitly by the method name. Direct renormalization does
 not silently fall back, route through Y, regularize, or choose a target
 reference.
 
+## Remove a known fixture with a power-wave inverse cascade
+
+`Network::inverse_cascade_power` returns an owned inverse of an ordered even-port
+cascade:
+
+```rust
+let fixture_inverse = fixture.inverse_cascade_power()?;
+```
+
+The source ports are two equal ordered groups `[left..., right...]`; the result
+uses the fixed `[old right, old left]` order. With `P` exchanging those groups,
+the operation is `S_inverse = P S⁻¹ P` and its references are exactly
+`P conj(z0)`. It is a Kurokawa wave-reversal operation, not an elementwise
+reciprocal or a port permutation. The implementation computes and stores the
+full inverse by solving `S X = I` with the checked exact-pivot solver; it does
+not use an elementwise reciprocal or silently convert through Z/Y.
+
+The operation validates every finite frequency label, S/z0 value and
+nonzero-real reference before indexing. At every sample the full S matrix and
+both directional transmission blocks `S[right,left]` and `S[left,right]` must
+be exactly nonsingular. Errors identify the full-S, forward-transmission, or
+reverse-transmission stage and retain frequency/pivot or coordinate context;
+finite near-singular systems remain eligible when their checked arithmetic
+stays finite. Frequency order, signed-zero bits, and references are otherwise
+preserved according to the contract, including unequal complex or negative-real
+references under the repository's algebraic power-wave extension.
+
+Known-fixture removal is explicit about physical orientation and connection
+ports. For a two-port measured cascade built as `left[1] → dut[0]` followed by
+`[1] → right[0]`, callers can remove either side first with the existing
+`connect_direct_power` method, then explicitly renormalize the recovered DUT to
+the writer's common positive-real reference. Inverse networks can be active or
+noncausal mathematical removal operators; this method is not noise
+de-embedding, automatic calibration, a pole/stability claim, or a general
+scikit-rf compatibility promise.
+
+The focused Touchstone load → cascade → remove → write/read workflow is
+executable with:
+
+```text
+cargo run -p rfkit-touchstone --example inverse_cascade_touchstone
+```
+
+This additive Yellow 0.x decision keeps the fixed ordering and transmission
+domain visible at the call site. Alternatives such as plain reference swapping,
+a two-port-only API, an inferred pairing map, or a broad transfer-parameter
+hierarchy were rejected. Removing the method, diagnostics, fixture, tests, and
+documentation during 0.x requires no data migration; existing Network,
+connection, renormalization, and Touchstone APIs remain unchanged.
+
 ## Reorder physical ports before Touchstone export
 
 `Network::permute_ports` is the explicit, wave-definition-independent way to

@@ -793,6 +793,37 @@ TWO_PORT_STABILITY_TOLERANCE_JUSTIFICATION = (
     "allow rtol=1e-12 and atol=1e-12 cross-language rounding."
 )
 
+# The inverse-cascade fixture is deliberately independent from the stability
+# case above.  It exercises the fixed equal-group convention on a genuine
+# four-port, multi-frequency source with unequal real-positive references.
+# Expected S is obtained through the pinned public ``Network.inv`` property;
+# the generator also checks the independently stated ``P solve(S,I) P``
+# relation so a transfer-parameter-only drift cannot go unnoticed.
+INVERSE_CASCADE_FIXTURE = (
+    Path(__file__).resolve().parent
+    / "fixtures"
+    / "power_wave_inverse_cascade_four_port_real_unequal_z0.json"
+)
+INVERSE_CASCADE_CASE_ID = "power_wave_inverse_cascade_four_port_real_unequal_z0"
+INVERSE_CASCADE_RANDOM_SEED = 20_260_955
+INVERSE_CASCADE_NFREQ = 3
+INVERSE_CASCADE_NPORTS = 4
+INVERSE_CASCADE_GROUP_SIZE = 2
+INVERSE_CASCADE_RTOL = 1e-12
+INVERSE_CASCADE_ATOL = 1e-12
+INVERSE_CASCADE_INPUT_RECIPE = (
+    "independent multi-frequency four-port complex S stack from NumPy "
+    "default_rng seed 20260955, modest random non-reciprocal perturbations "
+    "with deterministic diagonal terms, and unequal real-positive "
+    "frequency-dependent per-port references; no prior fixture values reused"
+)
+INVERSE_CASCADE_TOLERANCE_JUSTIFICATION = (
+    "Strict binary64 tolerance for a deterministic, well-conditioned, "
+    "real-positive-reference four-port inverse-cascade output.  Only the "
+    "inverse S stack is numeric-tolerance output; source S/z0, frequency, "
+    "swapped references, group order, and metadata are exact contract fields."
+)
+
 
 class _OracleCase(NamedTuple):
     """A registered fixture, builder, and case-specific check strategy."""
@@ -6102,6 +6133,201 @@ def _two_port_stability_fixture(np: Any, skrf: Any) -> dict[str, Any]:
     }
 
 
+def _inverse_cascade_inputs(np: Any) -> tuple[Any, Any, Any]:
+    """Build an independently seeded, usable four-port inverse fixture."""
+
+    frequency_hz = np.asarray([0.91e9, 1.73e9, 2.87e9], dtype=np.float64)
+    rng = np.random.default_rng(INVERSE_CASCADE_RANDOM_SEED)
+    source_s = np.asarray(
+        rng.normal(
+            loc=0.0,
+            scale=0.024,
+            size=(INVERSE_CASCADE_NFREQ, INVERSE_CASCADE_NPORTS, INVERSE_CASCADE_NPORTS),
+        )
+        + 1j
+        * rng.normal(
+            loc=0.0,
+            scale=0.019,
+            size=(INVERSE_CASCADE_NFREQ, INVERSE_CASCADE_NPORTS, INVERSE_CASCADE_NPORTS),
+        ),
+        dtype=np.complex128,
+    )
+    diagonal = np.asarray(
+        [
+            [0.17 - 0.03j, 0.21 + 0.02j, 0.14 - 0.01j, 0.19 + 0.04j],
+            [0.18 - 0.02j, 0.22 + 0.03j, 0.15 + 0.01j, 0.20 + 0.02j],
+            [0.19 - 0.01j, 0.23 + 0.04j, 0.16 + 0.02j, 0.21 + 0.03j],
+        ],
+        dtype=np.complex128,
+    )
+    for frequency in range(INVERSE_CASCADE_NFREQ):
+        source_s[frequency] += np.diag(diagonal[frequency])
+
+    source_z0 = np.asarray(
+        [
+            [41.0, 58.0, 73.0, 91.0],
+            [42.5, 60.0, 75.5, 93.0],
+            [44.0, 62.0, 78.0, 95.0],
+        ],
+        dtype=np.complex128,
+    )
+    if frequency_hz.shape != (INVERSE_CASCADE_NFREQ,):
+        raise ValueError("inverse-cascade frequency shape drifted")
+    if source_s.shape != (
+        INVERSE_CASCADE_NFREQ,
+        INVERSE_CASCADE_NPORTS,
+        INVERSE_CASCADE_NPORTS,
+    ):
+        raise ValueError("inverse-cascade S shape drifted")
+    if source_z0.shape != (INVERSE_CASCADE_NFREQ, INVERSE_CASCADE_NPORTS):
+        raise ValueError("inverse-cascade z0 shape drifted")
+    if not np.isfinite(frequency_hz).all() or not np.isfinite(source_s).all():
+        raise ValueError("inverse-cascade frequency/S inputs must be finite")
+    if not np.isfinite(source_z0).all() or not (source_z0.real > 0.0).all():
+        raise ValueError("inverse-cascade z0 must be finite and real-positive")
+    if np.array_equal(source_z0[0], source_z0[1]) or np.array_equal(
+        source_z0[:, 0], source_z0[:, 1]
+    ):
+        raise ValueError("inverse-cascade z0 must be unequal by frequency and port")
+    full_determinants = np.asarray(
+        [np.linalg.det(source_s[index]) for index in range(INVERSE_CASCADE_NFREQ)],
+        dtype=np.complex128,
+    )
+    forward_determinants = np.asarray(
+        [
+            np.linalg.det(
+                source_s[index,
+                        INVERSE_CASCADE_GROUP_SIZE :,
+                        :INVERSE_CASCADE_GROUP_SIZE]
+            )
+            for index in range(INVERSE_CASCADE_NFREQ)
+        ],
+        dtype=np.complex128,
+    )
+    reverse_determinants = np.asarray(
+        [
+            np.linalg.det(
+                source_s[index,
+                        :INVERSE_CASCADE_GROUP_SIZE,
+                        INVERSE_CASCADE_GROUP_SIZE :]
+            )
+            for index in range(INVERSE_CASCADE_NFREQ)
+        ],
+        dtype=np.complex128,
+    )
+    if not np.isfinite(full_determinants).all() or not np.isfinite(
+        forward_determinants
+    ).all() or not np.isfinite(reverse_determinants).all():
+        raise ValueError("inverse-cascade determinant evidence must be finite")
+    if np.any(np.abs(full_determinants) == 0.0) or np.any(
+        np.abs(forward_determinants) == 0.0
+    ) or np.any(np.abs(reverse_determinants) == 0.0):
+        raise ValueError("inverse-cascade source and transmission systems must be nonsingular")
+    # Determinants are generation-time guards only.  Their floating-point
+    # magnitudes are derived diagnostics, not canonical fixture data: BLAS
+    # reduction order can change their last bits across CPU kernels.
+    return frequency_hz, source_s, source_z0
+
+
+def _inverse_cascade_fixture(np: Any, skrf: Any) -> dict[str, Any]:
+    """Generate the inverse cascade through pinned public ``Network.inv``."""
+
+    frequency_hz, source_s, source_z0 = _inverse_cascade_inputs(np)
+    case_id = INVERSE_CASCADE_CASE_ID
+    network = skrf.Network(
+        f=frequency_hz,
+        s=source_s,
+        z0=source_z0,
+        s_def="power",
+        name=case_id,
+    )
+    inverse = network.inv
+    inverse_s = np.asarray(inverse.s, dtype=np.complex128)
+    inverse_z0 = np.asarray(inverse.z0, dtype=np.complex128)
+    exchange = np.eye(INVERSE_CASCADE_NPORTS, dtype=np.complex128)[
+        [2, 3, 0, 1]
+    ]
+    independently_solved = np.asarray(
+        [
+            exchange
+            @ np.linalg.solve(source_s[index], np.eye(INVERSE_CASCADE_NPORTS))
+            @ exchange
+            for index in range(INVERSE_CASCADE_NFREQ)
+        ],
+        dtype=np.complex128,
+    )
+    solve_difference = float(np.max(np.abs(inverse_s - independently_solved)))
+    if not np.isfinite(inverse_s).all() or not np.isfinite(inverse_z0).all():
+        raise ValueError("inverse-cascade public output must be finite")
+    if solve_difference > 1.0e-12:
+        raise ValueError(
+            "pinned Network.inv differs from P solve(S,I) P beyond the independent "
+            "comparison threshold: "
+            f"{solve_difference:.17g}"
+        )
+    expected_z0 = np.concatenate(
+        (source_z0[:, INVERSE_CASCADE_GROUP_SIZE :], source_z0[:, :INVERSE_CASCADE_GROUP_SIZE]),
+        axis=1,
+    )
+    if not np.array_equal(inverse_z0, expected_z0):
+        raise ValueError("inverse-cascade public references did not swap exactly")
+
+    shape = {
+        "frequency": list(frequency_hz.shape),
+        "input_s": list(source_s.shape),
+        "input_z0": list(source_z0.shape),
+        "output_s": list(inverse_s.shape),
+        "output_z0": list(inverse_z0.shape),
+    }
+    return {
+        "metadata": {
+            "case_id": case_id,
+            "group_convention": {
+                "input": ["left_0", "left_1", "right_0", "right_1"],
+                "output": ["old_right_0", "old_right_1", "old_left_0", "old_left_1"],
+                "description": "P solve(S,I) P with fixed equal ordered groups",
+            },
+            "input_recipe": INVERSE_CASCADE_INPUT_RECIPE,
+            "numpy_version": np.__version__,
+            "operation": "network_inverse_cascade_power",
+            "random_seed": INVERSE_CASCADE_RANDOM_SEED,
+            "reference_impedance": {
+                "complex": False,
+                "frequency_dependent": True,
+                "per_port": True,
+                "real_part": "strictly positive",
+                "swapped_output": True,
+                "unit": "ohm",
+            },
+            "schema": "rfkit-rs.oracle.fixture",
+            "schema_version": SCHEMA_VERSION,
+            "scikit_rf_commit": EXPECTED_SCIKIT_RF_COMMIT,
+            "scikit_rf_version": skrf.__version__,
+            "shape": shape,
+            "tolerance_policy": {
+                "atol": INVERSE_CASCADE_ATOL,
+                "comparison": "only data.s_inverse is numeric output; all input, frequency, references, group-order, and metadata contract fields are exact",
+                "justification": INVERSE_CASCADE_TOLERANCE_JUSTIFICATION,
+                "regeneration": "canonical UTF-8 JSON; expected S comes from pinned public Network.inv and is independently checked against P solve(S,I) P",
+                "rtol": INVERSE_CASCADE_RTOL,
+            },
+            "units": {
+                "frequency": "Hz",
+                "s": "dimensionless",
+                "z0": "ohm",
+            },
+            "wave_definition": "power",
+        },
+        "data": {
+            "frequency_hz": [float(value) for value in frequency_hz],
+            "s_input": _complex_array(source_s),
+            "s_inverse": _complex_array(inverse_s),
+            "z0_input_ohm": _complex_array(source_z0),
+            "z0_inverse_ohm": _complex_array(inverse_z0),
+        },
+    }
+
+
 _CASES = (
     _OracleCase(
         "three_port_complex_z0",
@@ -6394,6 +6620,13 @@ _CASES = (
         _impedance_admittance_y_to_z_near_fixture,
         "numeric_output",
         "z_ohm",
+    ),
+    _OracleCase(
+        INVERSE_CASCADE_CASE_ID,
+        INVERSE_CASCADE_FIXTURE,
+        _inverse_cascade_fixture,
+        "numeric_output",
+        "s_inverse",
     ),
     _OracleCase(
         TWO_PORT_STABILITY_CASE_ID,
