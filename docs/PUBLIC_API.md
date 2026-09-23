@@ -852,6 +852,81 @@ references, independently reconstruct the full physical V/I response, close
 the pair, explicitly restore one writer-compatible positive-real reference,
 and write/read the result.
 
+## Sampled maximum power-wave singular value (Issue #98 Yellow decision)
+
+The provisional public surface adds one borrowing, owned-result diagnostic:
+
+```rust
+impl Network {
+    pub fn max_singular_value_power(&self) -> Result<Vec<f64>>;
+}
+```
+
+For each stored frequency sample, the method returns the dimensionless
+amplitude ratio
+
+```text
+sigma_max(S) = max_{a != 0} ||S a||_2 / ||a||_2
+```
+
+under the network's Kurokawa power-wave coordinates.  The corresponding
+maximum reflected/incident wave-power ratio is `sigma_max(S)^2`; the method
+returns the amplitude value itself, not its square, a dB value, column norm,
+Frobenius norm, spectral radius, elementwise square root, or a passivity
+boolean.  The returned vector has exactly `frequency.len()` entries in source
+order.  The network, frequency axis, S array, and z0 array are borrowed and
+unchanged; no sorting, interpolation, aggregation, hidden renormalization, or
+frequency selection is performed.
+
+The RF basis is the existing power-wave identity for finite references with
+strictly positive real parts:
+
+```text
+Re(V conj(I)) = ||a||_2^2 - ||b||_2^2,  b = S a
+```
+
+so `sigma_max <= 1` is the sampled contractivity condition for all simultaneous
+incident waves.  This operation reports the measured binary64 value and does
+not classify a value near one.  It is not an all-frequency passivity
+certificate, an internal-pole/causality guarantee, a stability assessment,
+noise or fitting operation, gain optimization, or passivity enforcement.
+
+The full dense complex decomposition is private and uses nalgebra `0.33.3`
+with `default-features = false, features = ["std"]`; no nalgebra types or
+BLAS/LAPACK runtime are exposed.  The operation passes a binary64 convergence
+tolerance of `5 * f64::EPSILON` and a finite total budget of 10,000 SVD
+iterations per sample.  These settings govern solver convergence only and
+are not an RF tolerance.  Nalgebra's dense SVD scales the input internally;
+the adapter does not form `SᴴS`, use a random/single-vector power iteration,
+truncate rank, regularize, invert S/Z/Y, clip around one, or fall back to a
+column heuristic.  Exact zero, rank-deficient, repeated-singular-value,
+one-port, unitary/lossless, and active matrices are valid.  A non-convergent
+or non-finite decomposition is an operation-specific structured error rather
+than a panic or NaN/Inf result.
+
+Before indexing, the method validates malformed serde-created values.  The
+frequency axis must be nonempty, have the same length as S's first axis, and
+contain finite labels; negative, duplicate, descending, and signed-zero
+labels remain valid pointwise samples.  S must be finite, square, and have a
+positive port count.  z0 must be finite and have shape `(nfreq, nport)`, with
+strictly positive real parts at every port and sample.  Unequal,
+frequency-dependent, per-port, and complex positive-real references are
+supported.  The numeric result depends on those wave coordinates and is not
+invariant under arbitrary renormalization; port permutations and unitary
+coordinate changes preserve the singular values.
+
+The selected Yellow slice is additive and provisional during `0.x`.  A
+column/Frobenius norm was rejected because coherent excitation can amplify
+power even when every column norm is below one; eigenvalue magnitude was
+rejected because a nonnormal matrix such as `[[0,2],[0,0]]` has zero
+eigenvalues but `sigma_max=2`.  A boolean `is_passive(tol)` was rejected as a
+first API because it hides the measured boundary policy.  A public SVD type,
+handwritten Jacobi/QR implementation, power iteration, or FFI BLAS backend
+would add types, convergence ownership, or deployment burden without helping
+this bounded sampled workflow.  The selected dependency and adapter are
+reversible before stabilization: rollback removes the method, diagnostics,
+tests, fixture, dependency, and documentation without storage migration.
+
 ## Implemented public baseline
 
 The implemented shape is:
@@ -927,6 +1002,8 @@ impl Network {
         load_ohm: &[Complex64],
     ) -> Result<Network>;
     pub fn two_port_stability_power(&self) -> Result<Vec<TwoPortStability>>;
+
+    pub fn max_singular_value_power(&self) -> Result<Vec<f64>>;
 }
 ```
 
@@ -957,6 +1034,11 @@ The exact internal delegation remains an implementation detail. The semantic dis
 - `terminate_port_impedance_power` applies a finite physical impedance boundary directly at one
   selected port, removes that port, and retains the original survivor order and references without
   selecting a new frequency grid or renormalizing the source.
+- `max_singular_value_power` reports the full dense sampled largest singular
+  value of each stored S matrix in the existing power-wave coordinates.  It
+  returns an amplitude diagnostic rather than a passivity verdict and does
+  not imply an all-frequency, internal-pole, stability, or scikit-rf API
+  compatibility promise.
 
 Do not shorten these to broad names such as `connect`, `interpolate`, or `renormalize` until the library has enough supported semantics and evidence to justify what those names mean. Introducing such a default is at least Yellow and becomes Red when reasonable conventions conflict or the choice would freeze hidden policy.
 

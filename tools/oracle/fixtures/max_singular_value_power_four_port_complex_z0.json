@@ -1,0 +1,457 @@
+{
+  "data": {
+    "frequency_hz": [
+      830000000.0,
+      1370000000.0,
+      2610000000.0,
+      5190000000.0
+    ],
+    "is_passive": [
+      true,
+      true,
+      false,
+      false
+    ],
+    "s_input": [
+      [
+        [
+          {
+            "imag": -0.08750150585796031,
+            "real": 0.06083364203371614
+          },
+          {
+            "imag": 0.12018775912075469,
+            "real": 0.2417083276719888
+          },
+          {
+            "imag": 0.05675276175425613,
+            "real": -0.023241304779279565
+          },
+          {
+            "imag": 0.041881319597086915,
+            "real": 0.04160150540333139
+          }
+        ],
+        [
+          {
+            "imag": 0.12049500593191714,
+            "real": -0.041990509224507234
+          },
+          {
+            "imag": -0.006937154096375463,
+            "real": -0.03782150286689745
+          },
+          {
+            "imag": -0.08757084081823827,
+            "real": 0.03449565728497692
+          },
+          {
+            "imag": 0.020408572168066963,
+            "real": 0.0950103780323759
+          }
+        ],
+        [
+          {
+            "imag": 0.03003195545443876,
+            "real": 0.07874339938926103
+          },
+          {
+            "imag": -0.08071900728339122,
+            "real": -0.05938413560939417
+          },
+          {
+            "imag": 0.026413262520835364,
+            "real": 0.0600298606229007
+          },
+          {
+            "imag": 0.06580568973057259,
+            "real": 0.07905305348930587
+          }
+        ],
+        [
+          {
+            "imag": -0.08883764569806371,
+            "real": -0.0863292784854445
+          },
+          {
+            "imag": -0.05561076885055492,
+            "real": 0.029976030103004453
+          },
+          {
+            "imag": 0.02593503910077245,
+            "real": -0.16188236972164244
+          },
+          {
+            "imag": -0.16726533519555462,
+            "real": 0.02593119976155233
+          }
+        ]
+      ],
+      [
+        [
+          {
+            "imag": -0.2566340309753908,
+            "real": 0.1076967050964285
+          },
+          {
+            "imag": 0.12074631529521304,
+            "real": -0.0680715760244905
+          },
+          {
+            "imag": -0.09444999537152526,
+            "real": -0.10396444590639724
+          },
+          {
+            "imag": -0.05574910883930377,
+            "real": -0.10512381597475359
+          }
+        ],
+        [
+          {
+            "imag": 0.16240640187349947,
+            "real": 0.06882888042739846
+          },
+          {
+            "imag": 0.1138553493645105,
+            "real": 0.017026727325071885
+          },
+          {
+            "imag": -0.12483008822479837,
+            "real": 0.07624046655019791
+          },
+          {
+            "imag": -0.011843306775820682,
+            "real": 0.09810939704090128
+          }
+        ],
+        [
+          {
+            "imag": -0.013440068846917098,
+            "real": -0.27751069389589733
+          },
+          {
+            "imag": 0.04526974709455859,
+            "real": -0.1314839346464962
+          },
+          {
+            "imag": 0.0668364388441526,
+            "real": -0.3381458023168842
+          },
+          {
+            "imag": 0.062396711150126835,
+            "real": 0.06863771835053908
+          }
+        ],
+        [
+          {
+            "imag": -0.29136639480781046,
+            "real": 0.07046862267551805
+          },
+          {
+            "imag": 0.1324135565268655,
+            "real": 0.06967381928929134
+          },
+          {
+            "imag": -0.15535383136952455,
+            "real": -0.10406275850115684
+          },
+          {
+            "imag": 0.07704784601863918,
+            "real": 0.10779505337395558
+          }
+        ]
+      ],
+      [
+        [
+          {
+            "imag": 0.10748114905667339,
+            "real": -0.40505391389162415
+          },
+          {
+            "imag": 0.1296408279295067,
+            "real": 0.208841753596841
+          },
+          {
+            "imag": 0.20246349533959226,
+            "real": -0.41466910632707954
+          },
+          {
+            "imag": 0.234808377372818,
+            "real": -0.1537248327017716
+          }
+        ],
+        [
+          {
+            "imag": 0.27125012134471105,
+            "real": -0.1745984453737327
+          },
+          {
+            "imag": -0.17604442419219932,
+            "real": -0.11813992714976594
+          },
+          {
+            "imag": -0.04924985557421666,
+            "real": 0.27121488697595925
+          },
+          {
+            "imag": 0.5021201582447039,
+            "real": 0.00576762660674956
+          }
+        ],
+        [
+          {
+            "imag": -0.041616380493354505,
+            "real": -0.22869755657268367
+          },
+          {
+            "imag": -0.18604899082272966,
+            "real": 0.5508217183452948
+          },
+          {
+            "imag": 0.12829402140037946,
+            "real": -0.3737432306463844
+          },
+          {
+            "imag": 0.24686638041170114,
+            "real": 0.34148081529096647
+          }
+        ],
+        [
+          {
+            "imag": 0.2573624391580059,
+            "real": -0.35730195708355106
+          },
+          {
+            "imag": -0.5613338065774539,
+            "real": 0.6047435641961293
+          },
+          {
+            "imag": 0.0316443306427474,
+            "real": 0.3701398260301638
+          },
+          {
+            "imag": 0.1615891362243869,
+            "real": 0.06485846284738471
+          }
+        ]
+      ],
+      [
+        [
+          {
+            "imag": -0.7775320384039955,
+            "real": -0.9918696253516583
+          },
+          {
+            "imag": 0.08302687346857537,
+            "real": -0.5963150343715446
+          },
+          {
+            "imag": 0.26043014964498556,
+            "real": -0.13747670648993646
+          },
+          {
+            "imag": -0.09343644432023329,
+            "real": 0.717336711746162
+          }
+        ],
+        [
+          {
+            "imag": -0.056297417869192484,
+            "real": 0.812585007714974
+          },
+          {
+            "imag": 0.47212069666510914,
+            "real": 0.13957197567151333
+          },
+          {
+            "imag": 0.21584091784678627,
+            "real": -0.7237205814127879
+          },
+          {
+            "imag": -0.14711051877973186,
+            "real": 0.6115455387242151
+          }
+        ],
+        [
+          {
+            "imag": -0.5063939763762898,
+            "real": -0.11748225468169014
+          },
+          {
+            "imag": -0.2549116417212771,
+            "real": 0.3524649689069889
+          },
+          {
+            "imag": -0.1394668934119379,
+            "real": -0.05343087435954681
+          },
+          {
+            "imag": -0.24741838783618336,
+            "real": 0.042216642623290945
+          }
+        ],
+        [
+          {
+            "imag": 0.7058769138948294,
+            "real": -0.20002186630535007
+          },
+          {
+            "imag": -0.44518893901977075,
+            "real": 0.08902259679136451
+          },
+          {
+            "imag": 0.17667361370714812,
+            "real": -0.265996853666841
+          },
+          {
+            "imag": -0.3928748738739179,
+            "real": -0.017303103495098164
+          }
+        ]
+      ]
+    ],
+    "sigma_max": [
+      0.3500000000000001,
+      0.65,
+      1.3500000000000003,
+      1.8499999999999999
+    ],
+    "z0_input_ohm": [
+      [
+        {
+          "imag": 3.0,
+          "real": 41.0
+        },
+        {
+          "imag": -2.0,
+          "real": 58.0
+        },
+        {
+          "imag": 4.0,
+          "real": 73.0
+        },
+        {
+          "imag": 1.0,
+          "real": 66.0
+        }
+      ],
+      [
+        {
+          "imag": -1.5,
+          "real": 43.5
+        },
+        {
+          "imag": 2.5,
+          "real": 61.0
+        },
+        {
+          "imag": 3.0,
+          "real": 70.0
+        },
+        {
+          "imag": -4.0,
+          "real": 68.0
+        }
+      ],
+      [
+        {
+          "imag": 1.0,
+          "real": 47.0
+        },
+        {
+          "imag": -3.5,
+          "real": 64.0
+        },
+        {
+          "imag": 2.0,
+          "real": 76.0
+        },
+        {
+          "imag": 5.0,
+          "real": 69.0
+        }
+      ],
+      [
+        {
+          "imag": -2.0,
+          "real": 49.5
+        },
+        {
+          "imag": 4.0,
+          "real": 67.0
+        },
+        {
+          "imag": -1.0,
+          "real": 79.0
+        },
+        {
+          "imag": 3.0,
+          "real": 71.0
+        }
+      ]
+    ]
+  },
+  "metadata": {
+    "case_id": "max_singular_value_power_four_port_complex_z0",
+    "input_recipe": "independent four-frequency coupled non-reciprocal four-port S stack from NumPy default_rng seed 20260957; each sample is normalized by its scalar numpy.linalg.svd(..., compute_uv=False) maximum and scaled to the target values [0.35, 0.65, 1.35, 1.85]; unequal complex positive-real frequency-dependent per-port references; no prior fixture values reused",
+    "numpy_version": "2.5.1",
+    "operation": "network_max_singular_value_power",
+    "random_seed": 20260957,
+    "reference_impedance": {
+      "complex": true,
+      "frequency_dependent": true,
+      "per_port": true,
+      "real_part": "strictly positive",
+      "unit": "ohm"
+    },
+    "sample_classes": [
+      "passive",
+      "passive",
+      "active",
+      "active"
+    ],
+    "schema": "rfkit-rs.oracle.fixture",
+    "schema_version": 1,
+    "scikit_rf_commit": "bd651e923cac6020de49a096e1d7e9b5f949f884",
+    "scikit_rf_is_passive_comparison": {
+      "classification_domain": "samples comfortably away from sigma_max=1",
+      "method": "Network.is_passive",
+      "tol": 1e-12
+    },
+    "scikit_rf_version": "2.0.1",
+    "shape": {
+      "frequency": [
+        4
+      ],
+      "input_s": [
+        4,
+        4,
+        4
+      ],
+      "input_z0": [
+        4,
+        4
+      ],
+      "output_is_passive": [
+        4
+      ],
+      "output_sigma_max": [
+        4
+      ]
+    },
+    "tolerance_policy": {
+      "atol": 1e-12,
+      "comparison": "only data.sigma_max is numeric output; data.is_passive is pinned Boolean evidence and all other fields are exact",
+      "justification": "Strict binary64 mixed tolerance for the dimensionless scalar maximum singular value.  Only data.sigma_max is numeric-tolerance output; source frequency/S/z0, sample classes, and the pinned scikit-rf Boolean evidence are exact contract fields.  Every sample is at least 0.28 away from the sigma_max=1 boundary, so Network.is_passive(tol=1e-12) is a limited cross-check rather than a boundary classification oracle.",
+      "regeneration": "NumPy 2.5.1 numpy.linalg.svd(..., compute_uv=False) scalar output; limited pinned scikit-rf Network.is_passive(tol=1e-12) comparison",
+      "rtol": 1e-12
+    },
+    "units": {
+      "frequency": "Hz",
+      "s": "dimensionless",
+      "sigma_max": "dimensionless amplitude ratio",
+      "z0": "ohm"
+    },
+    "wave_definition": "power"
+  }
+}
