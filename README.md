@@ -571,6 +571,64 @@ introducing poles, circles, μ factors, gain optimization, tolerance-based
 classifiers, or a broad analysis hierarchy. Removing the method, tests,
 fixture, and documentation during 0.x requires no data migration.
 
+## Inspect sampled maximum power-wave response
+
+`Network::max_singular_value_power` returns one dimensionless largest singular
+value of the stored S matrix for each source-frequency sample:
+
+```rust
+use rfkit_touchstone::parse_touchstone_v1_0_s;
+
+fn inspect() -> rfkit_touchstone::Result<()> {
+    let network = parse_touchstone_v1_0_s(
+        "# Hz S RI R 50\n\
+         1000000000 0.2 0.0 0.0 0.0 0.0 0.0 0.0 0.0\n\
+         0.0 0.0 0.3 0.0 0.0 0.0 0.0 0.0\n\
+         0.0 0.0 0.0 0.0 0.1 0.0 0.0 0.0\n\
+         0.0 0.0 0.0 0.0 0.0 0.0 0.25 0.0\n",
+        4,
+    )?;
+    let sigma_max = network.max_singular_value_power()?;
+    assert!((sigma_max[0] - 0.3).abs() < 1.0e-14);
+    Ok(())
+}
+```
+
+This is the amplitude ratio
+`max ||S*a||₂/||a||₂` over all simultaneous incident-wave excitations.  Its
+square is the corresponding maximum reflected/incident wave-power ratio.  It
+is not a column norm, Frobenius norm, eigenvalue magnitude, dB value, or
+passivity verdict.  For strictly positive-real Kurokawa references,
+`sigma_max <= 1` is the sampled contractivity condition, but binary64 values
+near one and finite sampled data do not certify all-frequency passivity,
+causality, internal poles, stability, or nonlinear behavior.  The method
+preserves frequency order, borrows without mutation, and does not sort,
+interpolate, renormalize, or choose a default reference.
+
+The operation accepts finite square N-port S data, a matching `(nfreq,nport)`
+reference array with finite complex entries and strictly positive real parts,
+and finite pointwise frequency labels (including negative, duplicate,
+descending, and signed-zero values).  A private full dense complex SVD uses
+nalgebra `0.33.3` with no BLAS/LAPACK runtime; its convergence tolerance is
+`5*f64::EPSILON` and its finite total iteration budget is 10,000 per sample.
+Exact zero, rank-deficient, repeated-singular-value, one-port, unitary, and
+active matrices remain valid.  Invalid input, non-convergence, and non-finite
+arithmetic use operation-specific structured errors.  The focused Touchstone
+load → inspect workflow is executable with:
+
+```text
+cargo run -p rfkit-touchstone --example max_singular_value_touchstone
+```
+
+The canonical four-port, four-frequency fixture uses NumPy `2.5.1`,
+scikit-rf `2.0.1` at commit
+`bd651e923cac6020de49a096e1d7e9b5f949f884`, and seed `20260957`.  Expected
+scalars come from public `numpy.linalg.svd(..., compute_uv=False)`; pinned
+`Network.is_passive(tol=1e-12)` is recorded only as a limited Boolean
+comparison on samples comfortably away from one.  Only scalar SVD outputs use
+the recorded `rtol=1e-12`, `atol=1e-12` tolerance; inputs, references,
+frequency labels, classes, and Boolean evidence are exact contract fields.
+
 ## Connect two networks at a direct physical junction
 
 `Network::connect_direct_power` joins one port from each network with the

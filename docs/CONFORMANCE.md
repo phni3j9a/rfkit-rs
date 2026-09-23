@@ -238,6 +238,50 @@ poles, unsampled frequencies, nonlinear/large-signal behavior, or overall
 circuit stability. No verdict booleans, circles, μ factors, gain optimization,
 or tolerance classifications are part of this slice.
 
+Issue #98 adds the sampled `Network::max_singular_value_power` diagnostic. It
+returns the dimensionless scalar `sigma_max(S)` from a full dense complex SVD
+for every source sample, so its square is the maximum reflected/incident
+power-wave ratio. Core coverage includes analytical one-port magnitude,
+zero/rank-deficient/repeated-singular-value matrices, ideal and scaled
+unitaries, the coherent `[[.6,.6],[.6,.6]]` witness, the nonnormal
+`[[0,2],[0,0]]` witness, coupled non-reciprocal N-port data, larger finite
+scales, exact sample-order/source immutability, port permutation and unitary
+coordinate invariants, unequal complex/frequency-dependent positive-real
+references, and malformed serde-created axes/shapes. Finite frequency labels
+including negative, duplicate, descending, and signed-zero values are valid;
+non-finite labels/data and zero or negative-real references are operation-
+specific errors. The public method never classifies around one, clips, forms
+`SᴴS`, or falls back to a column/Frobenius norm. Its private nalgebra SVD
+adapter uses `5*f64::EPSILON` and a finite 10,000-iteration per-sample budget;
+non-convergence and non-finite solver output are structured failures.
+
+The canonical fixture
+`max_singular_value_power_four_port_complex_z0.json` is independently seeded
+with NumPy `default_rng` seed `20260957`: four coupled, non-reciprocal
+four-port samples use fixed binary-exact sample factors `[1.0, 2.0, 4.5, 5.0]`
+applied to the seeded raw S stack and use unequal complex, frequency-dependent
+positive-real references. Input construction does not call SVD, so exact source
+arrays are independent of platform LAPACK details. Expected `sigma_max` values
+come only from public NumPy `2.5.1`
+`numpy.linalg.svd(..., compute_uv=False)[:,0]`. Pinned scikit-rf `2.0.1` at
+commit `bd651e923cac6020de49a096e1d7e9b5f949f884` is called through public
+`Network.is_passive(tol=1e-12)` on one-sample Networks solely for a limited
+Boolean comparison; all samples are comfortably away from the sigma=1
+boundary. `crates/rfkit-core/tests/oracle_max_singular_value.rs` rechecks
+versions, seed, shapes, input arrays, references, classes, Boolean evidence,
+and source immutability before calling only the public Rust method. Only
+`data.sigma_max` uses output-only `rtol=1e-12`, `atol=1e-12`; metadata, source
+data, and `data.is_passive` remain exact canonical contract fields. Exact
+unitary and one-port semantics are local Rust evidence rather than pinned
+Boolean compatibility claims.
+
+The focused Touchstone workflow in
+`crates/rfkit-touchstone/tests/public_max_singular_value_workflow.rs` and
+`crates/rfkit-touchstone/examples/max_singular_value_touchstone.rs` parses an
+independently authored four-port v1.0 RI/Hz sweep with a passive diagonal
+sample and a coherent amplifying sample, then prints aligned scalar and
+squared-power values without adding a verdict API.
+
 Issue #94 adds the borrowing `Network::inverse_cascade_power` operation for
 ordered even-port power-wave cascades. Core coverage includes analytic and
 non-reciprocal two-port cases, an ideal through, complex/signed-reference V/I

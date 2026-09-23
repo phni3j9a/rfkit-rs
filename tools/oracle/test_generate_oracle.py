@@ -704,6 +704,17 @@ TWO_PORT_STABILITY_CASE_SPECS = {
 }
 
 
+MAX_SINGULAR_VALUE_POWER_CASE_SPECS = {
+    oracle.MAX_SINGULAR_VALUE_POWER_CASE_ID: {
+        "operation": "network_max_singular_value_power",
+        "ports": 4,
+        "frequencies": 4,
+        "seed": oracle.MAX_SINGULAR_VALUE_POWER_RANDOM_SEED,
+        "output": "sigma_max",
+    },
+}
+
+
 INVERSE_CASCADE_CASE_SPECS = {
     oracle.INVERSE_CASCADE_CASE_ID: {
         "operation": "network_inverse_cascade_power",
@@ -1553,6 +1564,7 @@ class MatrixRegistrationAndCheckerTests(unittest.TestCase):
             + len(TOUCHSTONE_CASE_SPECS)
             + len(TERMINATION_CASE_SPECS)
             + len(TWO_PORT_STABILITY_CASE_SPECS)
+            + len(MAX_SINGULAR_VALUE_POWER_CASE_SPECS)
             + len(INVERSE_CASCADE_CASE_SPECS)
             + len(CASCADE_DIRECT_CASE_SPECS)
         )
@@ -1565,6 +1577,7 @@ class MatrixRegistrationAndCheckerTests(unittest.TestCase):
         )
         self.assertTrue(set(TERMINATION_CASE_SPECS).issubset(registered))
         self.assertTrue(set(TWO_PORT_STABILITY_CASE_SPECS).issubset(registered))
+        self.assertTrue(set(MAX_SINGULAR_VALUE_POWER_CASE_SPECS).issubset(registered))
         self.assertTrue(set(INVERSE_CASCADE_CASE_SPECS).issubset(registered))
         self.assertTrue(set(CASCADE_DIRECT_CASE_SPECS).issubset(registered))
         self.assertTrue(set(DIRECT_CONNECTION_CASE_SPECS).issubset(registered))
@@ -4500,6 +4513,107 @@ class TwoPortStabilityRegistrationAndCheckerTests(unittest.TestCase):
 
         metadata_drift = copy.deepcopy(self.fixture)
         metadata_drift["metadata"]["reference_impedance"]["per_port"] = False
+        self.assertEqual(self._check_document(metadata_drift), 1)
+
+
+class MaxSingularValuePowerRegistrationAndCheckerTests(unittest.TestCase):
+    """Protect scalar-SVD registration, passivity evidence, and drift rules."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.np, cls.skrf = oracle._load_dependencies()
+        cls.case_id = oracle.MAX_SINGULAR_VALUE_POWER_CASE_ID
+        cls.case = next(case for case in oracle._CASES if case.case_id == cls.case_id)
+        cls.fixture = oracle._read_canonical_json(cls.case.path)
+
+    def _check_document(self, document: dict[str, object]) -> int:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / self.case.path.name
+            path.write_bytes(oracle._canonical_bytes(document))
+            return oracle._check_numeric_fixture(path, self.fixture, "sigma_max")
+
+    def test_registration_metadata_and_public_output_sources(self) -> None:
+        spec = MAX_SINGULAR_VALUE_POWER_CASE_SPECS[self.case_id]
+        registered = {case.case_id: case for case in oracle._CASES}
+        self.assertIn(self.case_id, registered)
+        self.assertEqual(self.case.path, oracle.MAX_SINGULAR_VALUE_POWER_FIXTURE)
+        self.assertEqual(self.case.path.stem, self.case_id)
+        self.assertEqual(self.case.comparison, "numeric_output")
+        self.assertEqual(self.case.numeric_output_key, spec["output"])
+        metadata = self.fixture["metadata"]
+        self.assertEqual(metadata["case_id"], self.case_id)
+        self.assertEqual(metadata["operation"], spec["operation"])
+        self.assertEqual(metadata["random_seed"], spec["seed"])
+        self.assertIn("default_rng seed 20260957", metadata["input_recipe"])
+        self.assertIn(
+            "fixed binary-exact factors [1.0, 2.0, 4.5, 5.0]",
+            metadata["input_recipe"],
+        )
+        self.assertIn("SVD is not used to construct exact inputs", metadata["input_recipe"])
+        self.assertNotIn("normalized by", metadata["input_recipe"])
+        self.assertEqual(metadata["numpy_version"], oracle.EXPECTED_NUMPY_VERSION)
+        self.assertEqual(metadata["scikit_rf_version"], oracle.EXPECTED_SCIKIT_RF_VERSION)
+        self.assertEqual(metadata["scikit_rf_commit"], oracle.EXPECTED_SCIKIT_RF_COMMIT)
+        self.assertEqual(metadata["wave_definition"], "power")
+        self.assertEqual(metadata["shape"]["frequency"], [4])
+        self.assertEqual(metadata["shape"]["input_s"], [4, 4, 4])
+        self.assertEqual(metadata["shape"]["input_z0"], [4, 4])
+        self.assertEqual(metadata["shape"]["output_sigma_max"], [4])
+        self.assertEqual(metadata["shape"]["output_is_passive"], [4])
+        self.assertEqual(metadata["reference_impedance"]["real_part"], "strictly positive")
+        self.assertEqual(metadata["scikit_rf_is_passive_comparison"]["tol"], 1e-12)
+        self.assertEqual(self.fixture["data"]["is_passive"], [True, True, False, False])
+
+    def test_input_builder_does_not_call_svd(self) -> None:
+        with mock.patch.object(
+            self.np.linalg,
+            "svd",
+            side_effect=AssertionError("input construction must not call SVD"),
+        ) as svd:
+            frequency_hz, source_s, source_z0 = oracle._max_singular_value_power_inputs(
+                self.np
+            )
+
+        svd.assert_not_called()
+        self.assertEqual(frequency_hz.shape, (4,))
+        self.assertEqual(source_s.shape, (4, 4, 4))
+        self.assertEqual(source_z0.shape, (4, 4))
+
+    def test_builder_calls_public_numpy_svd_for_numeric_output(self) -> None:
+        with mock.patch.object(
+            self.np.linalg,
+            "svd",
+            wraps=self.np.linalg.svd,
+        ) as svd:
+            generated = self.case.builder(self.np, self.skrf)
+
+        self.assertGreaterEqual(svd.call_count, 1)
+        self.assertTrue(all(math.isfinite(value) for value in generated["data"]["sigma_max"]))
+
+    def test_builder_matches_contract_and_limited_passive_comparison(self) -> None:
+        generated = self.case.builder(self.np, self.skrf)
+        self.assertEqual(generated["metadata"], self.fixture["metadata"])
+        self.assertEqual(generated["data"]["frequency_hz"], self.fixture["data"]["frequency_hz"])
+        self.assertEqual(generated["data"]["s_input"], self.fixture["data"]["s_input"])
+        self.assertEqual(generated["data"]["z0_input_ohm"], self.fixture["data"]["z0_input_ohm"])
+        self.assertEqual(generated["data"]["is_passive"], self.fixture["data"]["is_passive"])
+        self.assertTrue(all(math.isfinite(value) for value in generated["data"]["sigma_max"]))
+
+    def test_only_scalar_output_is_tolerant(self) -> None:
+        adjusted = copy.deepcopy(self.fixture)
+        adjusted["data"]["sigma_max"][0] += 1e-13
+        self.assertEqual(self._check_document(adjusted), 0)
+
+        output_drift = copy.deepcopy(self.fixture)
+        output_drift["data"]["sigma_max"][0] += 1e-3
+        self.assertEqual(self._check_document(output_drift), 1)
+
+        boolean_drift = copy.deepcopy(self.fixture)
+        boolean_drift["data"]["is_passive"][0] = False
+        self.assertEqual(self._check_document(boolean_drift), 1)
+
+        metadata_drift = copy.deepcopy(self.fixture)
+        metadata_drift["metadata"]["random_seed"] += 1
         self.assertEqual(self._check_document(metadata_drift), 1)
 
 

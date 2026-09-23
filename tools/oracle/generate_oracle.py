@@ -793,6 +793,41 @@ TWO_PORT_STABILITY_TOLERANCE_JUSTIFICATION = (
     "allow rtol=1e-12 and atol=1e-12 cross-language rounding."
 )
 
+# The maximum-singular-value case is an independently seeded four-port,
+# multi-frequency diagnostic.  NumPy's public scalar SVD output is the numeric
+# oracle; pinned scikit-rf ``Network.is_passive(tol=1e-12)`` is recorded only
+# as a limited Boolean comparison for samples deliberately away from the
+# sigma_max=1 boundary.  The Rust API returns sigma_max itself, not that
+# Boolean classification.
+MAX_SINGULAR_VALUE_POWER_FIXTURE = (
+    Path(__file__).resolve().parent
+    / "fixtures"
+    / "max_singular_value_power_four_port_complex_z0.json"
+)
+MAX_SINGULAR_VALUE_POWER_CASE_ID = "max_singular_value_power_four_port_complex_z0"
+MAX_SINGULAR_VALUE_POWER_RANDOM_SEED = 20_260_957
+MAX_SINGULAR_VALUE_POWER_NFREQ = 4
+MAX_SINGULAR_VALUE_POWER_NPORTS = 4
+MAX_SINGULAR_VALUE_POWER_SAMPLE_FACTORS = (1.0, 2.0, 4.5, 5.0)
+MAX_SINGULAR_VALUE_POWER_RTOL = 1e-12
+MAX_SINGULAR_VALUE_POWER_ATOL = 1e-12
+MAX_SINGULAR_VALUE_POWER_IS_PASSIVE_TOL = 1e-12
+MAX_SINGULAR_VALUE_POWER_INPUT_RECIPE = (
+    "independent four-frequency coupled non-reciprocal four-port S stack from "
+    "NumPy default_rng seed 20260957; each sample is multiplied by fixed "
+    "binary-exact factors [1.0, 2.0, 4.5, 5.0] (SVD is not used to construct "
+    "exact inputs); unequal complex positive-real frequency-dependent per-port "
+    "references; no prior fixture values reused"
+)
+MAX_SINGULAR_VALUE_POWER_TOLERANCE_JUSTIFICATION = (
+    "Strict binary64 mixed tolerance for the dimensionless scalar maximum "
+    "singular value.  Only data.sigma_max is numeric-tolerance output; source "
+    "frequency/S/z0, sample classes, and the pinned scikit-rf Boolean evidence "
+    "are exact contract fields.  Every sample is at least 0.28 away from the "
+    "sigma_max=1 boundary, so Network.is_passive(tol=1e-12) is a limited "
+    "cross-check rather than a boundary classification oracle."
+)
+
 # The inverse-cascade fixture is deliberately independent from the stability
 # case above.  It exercises the fixed equal-group convention on a genuine
 # four-port, multi-frequency source with unequal real-positive references.
@@ -6174,6 +6209,165 @@ def _two_port_stability_fixture(np: Any, skrf: Any) -> dict[str, Any]:
     }
 
 
+def _max_singular_value_power_inputs(np: Any) -> tuple[Any, Any, Any]:
+    """Build exact seeded inputs without calling a numerical SVD."""
+
+    frequency_hz = np.asarray([0.83e9, 1.37e9, 2.61e9, 5.19e9], dtype=np.float64)
+    rng = np.random.default_rng(MAX_SINGULAR_VALUE_POWER_RANDOM_SEED)
+    raw_s = (
+        rng.normal(
+            loc=0.0,
+            scale=0.08,
+            size=(MAX_SINGULAR_VALUE_POWER_NFREQ, MAX_SINGULAR_VALUE_POWER_NPORTS, MAX_SINGULAR_VALUE_POWER_NPORTS),
+        )
+        + 1j
+        * rng.normal(
+            loc=0.0,
+            scale=0.08,
+            size=(MAX_SINGULAR_VALUE_POWER_NFREQ, MAX_SINGULAR_VALUE_POWER_NPORTS, MAX_SINGULAR_VALUE_POWER_NPORTS),
+        )
+    ).astype(np.complex128)
+    sample_factors = np.asarray(
+        MAX_SINGULAR_VALUE_POWER_SAMPLE_FACTORS,
+        dtype=np.float64,
+    )
+    if sample_factors.shape != (MAX_SINGULAR_VALUE_POWER_NFREQ,):
+        raise ValueError("maximum singular-value sample-factor shape drifted")
+    if not np.isfinite(sample_factors).all() or np.any(sample_factors <= 0.0):
+        raise ValueError("maximum singular-value sample factors must be finite and positive")
+    source_s = raw_s * sample_factors[:, None, None]
+    source_z0 = np.asarray(
+        [
+            [41.0 + 3.0j, 58.0 - 2.0j, 73.0 + 4.0j, 66.0 + 1.0j],
+            [43.5 - 1.5j, 61.0 + 2.5j, 70.0 + 3.0j, 68.0 - 4.0j],
+            [47.0 + 1.0j, 64.0 - 3.5j, 76.0 + 2.0j, 69.0 + 5.0j],
+            [49.5 - 2.0j, 67.0 + 4.0j, 79.0 - 1.0j, 71.0 + 3.0j],
+        ],
+        dtype=np.complex128,
+    )
+    if frequency_hz.shape != (MAX_SINGULAR_VALUE_POWER_NFREQ,):
+        raise ValueError("maximum singular-value frequency shape drifted")
+    if source_s.shape != (
+        MAX_SINGULAR_VALUE_POWER_NFREQ,
+        MAX_SINGULAR_VALUE_POWER_NPORTS,
+        MAX_SINGULAR_VALUE_POWER_NPORTS,
+    ):
+        raise ValueError("maximum singular-value S shape drifted")
+    if source_z0.shape != (
+        MAX_SINGULAR_VALUE_POWER_NFREQ,
+        MAX_SINGULAR_VALUE_POWER_NPORTS,
+    ):
+        raise ValueError("maximum singular-value z0 shape drifted")
+    if not np.isfinite(frequency_hz).all() or not np.isfinite(source_s).all():
+        raise ValueError("maximum singular-value frequency/S input must be finite")
+    if not np.isfinite(source_z0).all() or not (source_z0.real > 0.0).all():
+        raise ValueError("maximum singular-value z0 input must be positive-real finite")
+    if np.all(source_z0.imag == 0.0) or np.all(source_z0[:, 0] == source_z0[:, 1]):
+        raise ValueError("maximum singular-value z0 input must include unequal complex values")
+    return frequency_hz, source_s, source_z0
+
+
+def _max_singular_value_power_fixture(np: Any, skrf: Any) -> dict[str, Any]:
+    """Generate scalar SVD outputs and limited pinned passivity evidence."""
+
+    frequency_hz, source_s, source_z0 = _max_singular_value_power_inputs(np)
+    case_id = MAX_SINGULAR_VALUE_POWER_CASE_ID
+    network = skrf.Network(
+        f=frequency_hz,
+        s=source_s,
+        z0=source_z0,
+        s_def="power",
+        name=case_id,
+    )
+    network_s = np.asarray(network.s, dtype=np.complex128)
+    network_z0 = np.asarray(network.z0, dtype=np.complex128)
+    if not np.array_equal(network_s, source_s) or not np.array_equal(network_z0, source_z0):
+        raise ValueError("scikit-rf changed maximum singular-value inputs on read-back")
+    sigma_max = np.asarray(np.linalg.svd(network_s, compute_uv=False)[:, 0], dtype=np.float64)
+    if not np.isfinite(sigma_max).all():
+        raise ValueError("maximum singular-value output must be finite")
+    if np.any(np.abs(sigma_max - 1.0) <= 0.28):
+        raise ValueError("maximum singular-value samples must be comfortably away from one")
+    sample_classes = ["passive" if value < 1.0 else "active" for value in sigma_max]
+    # Pinned scikit-rf exposes ``Network.is_passive`` as one Boolean for a
+    # Network sweep.  Construct one-sample public Networks so the comparison
+    # remains aligned with each scalar SVD output without treating a sweep
+    # verdict as a per-frequency oracle.
+    is_passive = [
+        bool(
+            skrf.Network(
+                f=frequency_hz[index : index + 1],
+                s=network_s[index : index + 1],
+                z0=network_z0[index : index + 1],
+                s_def="power",
+                name=f"{case_id}_{index}",
+            ).is_passive(tol=MAX_SINGULAR_VALUE_POWER_IS_PASSIVE_TOL)
+        )
+        for index in range(MAX_SINGULAR_VALUE_POWER_NFREQ)
+    ]
+    expected_passive = [value < 1.0 for value in sigma_max]
+    if is_passive != expected_passive:
+        raise ValueError(
+            "pinned scikit-rf passivity comparison disagrees away from the boundary: "
+            f"sigma={sigma_max.tolist()!r}, is_passive={is_passive!r}"
+        )
+
+    return {
+        "metadata": {
+            "case_id": case_id,
+            "input_recipe": MAX_SINGULAR_VALUE_POWER_INPUT_RECIPE,
+            "numpy_version": np.__version__,
+            "operation": "network_max_singular_value_power",
+            "random_seed": MAX_SINGULAR_VALUE_POWER_RANDOM_SEED,
+            "reference_impedance": {
+                "complex": True,
+                "frequency_dependent": True,
+                "per_port": True,
+                "real_part": "strictly positive",
+                "unit": "ohm",
+            },
+            "sample_classes": sample_classes,
+            "scikit_rf_is_passive_comparison": {
+                "classification_domain": "samples comfortably away from sigma_max=1",
+                "method": "Network.is_passive",
+                "tol": MAX_SINGULAR_VALUE_POWER_IS_PASSIVE_TOL,
+            },
+            "schema": "rfkit-rs.oracle.fixture",
+            "schema_version": SCHEMA_VERSION,
+            "scikit_rf_commit": EXPECTED_SCIKIT_RF_COMMIT,
+            "scikit_rf_version": skrf.__version__,
+            "shape": {
+                "frequency": list(frequency_hz.shape),
+                "input_s": list(network_s.shape),
+                "input_z0": list(network_z0.shape),
+                "output_is_passive": [len(is_passive)],
+                "output_sigma_max": list(sigma_max.shape),
+            },
+            "tolerance_policy": {
+                "atol": MAX_SINGULAR_VALUE_POWER_ATOL,
+                "comparison": "only data.sigma_max is numeric output; data.is_passive is pinned Boolean evidence and all other fields are exact",
+                "justification": MAX_SINGULAR_VALUE_POWER_TOLERANCE_JUSTIFICATION,
+                "regeneration": "NumPy 2.5.1 numpy.linalg.svd(..., compute_uv=False) scalar output; limited pinned scikit-rf Network.is_passive(tol=1e-12) comparison",
+                "rtol": MAX_SINGULAR_VALUE_POWER_RTOL,
+            },
+            "units": {
+                "frequency": "Hz",
+                "s": "dimensionless",
+                "sigma_max": "dimensionless amplitude ratio",
+                "z0": "ohm",
+            },
+            "wave_definition": "power",
+        },
+        "data": {
+            "frequency_hz": [float(value) for value in frequency_hz],
+            "is_passive": is_passive,
+            "s_input": _complex_array(network_s),
+            "sigma_max": [float(value) for value in sigma_max],
+            "z0_input_ohm": _complex_array(network_z0),
+        },
+    }
+
+
 def _inverse_cascade_inputs(np: Any) -> tuple[Any, Any, Any]:
     """Build an independently seeded, usable four-port inverse fixture."""
 
@@ -6992,6 +7186,13 @@ _CASES = (
         _two_port_stability_fixture,
         "numeric_output",
         ("delta", "rollet_k"),
+    ),
+    _OracleCase(
+        MAX_SINGULAR_VALUE_POWER_CASE_ID,
+        MAX_SINGULAR_VALUE_POWER_FIXTURE,
+        _max_singular_value_power_fixture,
+        "numeric_output",
+        "sigma_max",
     ),
 )
 _CASES_BY_ID = {case.case_id: case for case in _CASES}

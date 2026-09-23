@@ -51,6 +51,7 @@ mod impedance_admittance;
 mod interpolation;
 mod inverse_cascade;
 mod linalg;
+mod max_singular_value;
 mod mixed_mode;
 mod power_wave_admittance;
 mod power_waves;
@@ -1055,6 +1056,67 @@ pub enum Error {
         frequency: usize,
         stage: TwoPortStabilityArithmetic,
     },
+
+    #[error("maximum singular-value power frequency axis must not be empty")]
+    EmptyMaxSingularValuePowerFrequency,
+
+    #[error(
+        "maximum singular-value power frequency length does not match the S-parameter frequency dimension: expected {expected}, got {actual}"
+    )]
+    MaxSingularValuePowerFrequencyLengthMismatch { expected: usize, actual: usize },
+
+    #[error(
+        "maximum singular-value power requires a square positive-port S-parameter shape, got {shape:?}"
+    )]
+    InvalidMaxSingularValuePowerSShape { shape: Vec<usize> },
+
+    #[error(
+        "maximum singular-value power reference-impedance shape must be (nfreq, nport), got {shape:?}"
+    )]
+    InvalidMaxSingularValuePowerZ0Shape { shape: Vec<usize> },
+
+    #[error("maximum singular-value power frequency is non-finite at index {index}: {value:?}")]
+    NonFiniteMaxSingularValuePowerFrequency { index: usize, value: f64 },
+
+    #[error(
+        "maximum singular-value power received a non-finite S-parameter at frequency {frequency}, row {row}, column {column}"
+    )]
+    NonFiniteMaxSingularValuePowerS {
+        frequency: usize,
+        row: usize,
+        column: usize,
+    },
+
+    #[error(
+        "maximum singular-value power received a non-finite reference impedance at frequency {frequency}, port {port}"
+    )]
+    NonFiniteMaxSingularValuePowerZ0 { frequency: usize, port: usize },
+
+    #[error(
+        "maximum singular-value power reference impedance must have a strictly positive real part at frequency {frequency}, port {port}: {value:?}"
+    )]
+    NonPositiveRealMaxSingularValuePowerReferenceImpedance {
+        frequency: usize,
+        port: usize,
+        value: Complex64,
+    },
+
+    #[error(
+        "maximum singular-value power SVD did not converge at frequency {frequency} within {max_iterations} iterations (tolerance {tolerance:?})"
+    )]
+    MaxSingularValuePowerNonConvergence {
+        frequency: usize,
+        max_iterations: usize,
+        tolerance: f64,
+    },
+
+    #[error(
+        "maximum singular-value power arithmetic became non-finite at frequency {frequency} while evaluating {stage}"
+    )]
+    NonFiniteMaxSingularValuePowerComputation {
+        frequency: usize,
+        stage: MaxSingularValuePowerArithmetic,
+    },
 }
 
 /// Identifies which input supplied a connection value or triggered a
@@ -1341,6 +1403,29 @@ pub enum TwoPortStabilityArithmetic {
     RolletKDivision,
 }
 
+/// Arithmetic quantity used to identify a non-finite sampled maximum
+/// singular-value calculation.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MaxSingularValuePowerArithmetic {
+    /// Construction/scaling of the dense SVD input matrix.
+    Matrix,
+    /// Singular values returned by the dense SVD solver.
+    SingularValues,
+    /// Conversion of the largest singular value to the public `f64` result.
+    Output,
+}
+
+impl fmt::Display for MaxSingularValuePowerArithmetic {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Matrix => "dense SVD matrix",
+            Self::SingularValues => "SVD singular values",
+            Self::Output => "maximum singular-value output",
+        })
+    }
+}
+
 impl fmt::Display for TwoPortStabilityArithmetic {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let description = match self {
@@ -1504,6 +1589,54 @@ impl Network {
     pub fn two_port_stability_power(&self) -> Result<Vec<TwoPortStability>> {
         stability::two_port_stability_power(&self.frequency.hz, &self.s, &self.z0)
             .map_err(map_two_port_stability_error)
+    }
+
+    /// Computes the sampled maximum singular value of the stored scattering
+    /// matrix under the Kurokawa power-wave coordinates.
+    ///
+    /// For each source-frequency sample this returns
+    /// `sigma_max(S) = max_{a != 0} ||S*a||₂ / ||a||₂`, the dimensionless
+    /// amplitude ratio for the strongest simultaneous incident-wave
+    /// excitation.  The corresponding reflected/incident power ratio is its
+    /// square; this method intentionally returns the amplitude singular value,
+    /// not a square, dB value, column norm, Frobenius norm, or passivity
+    /// verdict.  The result has exactly one value per source sample and keeps
+    /// the original order.  No sorting, interpolation, renormalization, or
+    /// mutation is performed.
+    ///
+    /// The operation validates the entire borrowed network before indexing,
+    /// including malformed serde-created values.  The frequency axis must be
+    /// nonempty and finite, S must be square with a positive port count and
+    /// finite entries, and `z0` must have shape `(nfreq, nport)` with finite
+    /// complex entries whose real parts are strictly positive.  Frequency
+    /// labels are otherwise opaque pointwise samples: duplicates, descending
+    /// and negative values, and signed zero are retained.  Unequal,
+    /// frequency-dependent, per-port, and complex positive-real references
+    /// are supported.  The references define the wave coordinates, so the
+    /// numeric result is not invariant under arbitrary renormalization.
+    ///
+    /// A full dense complex SVD is evaluated privately with nalgebra 0.33.x.
+    /// The solver uses the explicit binary64 convergence tolerance
+    /// `5 * f64::EPSILON` and a finite total iteration budget of 10,000 per
+    /// sample.  These settings govern decomposition convergence only; they
+    /// are not an RF pass/fail tolerance.  Exact zero, rank-deficient,
+    /// repeated-singular-value, one-port, unitary, and active matrices are
+    /// valid.  No inverse, Gram matrix, random vector, rank truncation,
+    /// regularization, clipping, or fallback is used.
+    ///
+    /// This additive operation is provisional during the `0.x` series; its
+    /// name and signature are not a `1.0` stability promise.  It reports the
+    /// measured binary64 value without classifying a boundary near one.
+    ///
+    /// # Errors
+    ///
+    /// Returns operation-specific structured errors for malformed axes or
+    /// shapes, non-finite labels/data, non-positive-real references, SVD
+    /// non-convergence, and non-finite arithmetic/output.  It never returns
+    /// NaN/Inf or panics on malformed serde-created values.
+    pub fn max_singular_value_power(&self) -> Result<Vec<f64>> {
+        max_singular_value::max_singular_value_power(&self.frequency.hz, &self.s, &self.z0)
+            .map_err(map_max_singular_value_error)
     }
 
     /// Returns an owned network with its ports in an explicitly requested
@@ -3570,6 +3703,63 @@ fn map_two_port_stability_error(error: stability::TwoPortStabilityError) -> Erro
     }
 }
 
+fn map_max_singular_value_error(error: max_singular_value::MaxSingularValueError) -> Error {
+    match error {
+        max_singular_value::MaxSingularValueError::EmptyFrequency => {
+            Error::EmptyMaxSingularValuePowerFrequency
+        }
+        max_singular_value::MaxSingularValueError::FrequencyLengthMismatch { expected, actual } => {
+            Error::MaxSingularValuePowerFrequencyLengthMismatch { expected, actual }
+        }
+        max_singular_value::MaxSingularValueError::InvalidSShape { shape } => {
+            Error::InvalidMaxSingularValuePowerSShape {
+                shape: vec![shape.0, shape.1, shape.2],
+            }
+        }
+        max_singular_value::MaxSingularValueError::InvalidZ0Shape { shape } => {
+            Error::InvalidMaxSingularValuePowerZ0Shape {
+                shape: vec![shape.0, shape.1],
+            }
+        }
+        max_singular_value::MaxSingularValueError::NonFiniteFrequency { index, value } => {
+            Error::NonFiniteMaxSingularValuePowerFrequency { index, value }
+        }
+        max_singular_value::MaxSingularValueError::NonFiniteS {
+            frequency,
+            row,
+            column,
+        } => Error::NonFiniteMaxSingularValuePowerS {
+            frequency,
+            row,
+            column,
+        },
+        max_singular_value::MaxSingularValueError::NonFiniteZ0 { frequency, port } => {
+            Error::NonFiniteMaxSingularValuePowerZ0 { frequency, port }
+        }
+        max_singular_value::MaxSingularValueError::NonPositiveRealZ0 {
+            frequency,
+            port,
+            value,
+        } => Error::NonPositiveRealMaxSingularValuePowerReferenceImpedance {
+            frequency,
+            port,
+            value,
+        },
+        max_singular_value::MaxSingularValueError::NonConvergence {
+            frequency,
+            max_iterations,
+            tolerance,
+        } => Error::MaxSingularValuePowerNonConvergence {
+            frequency,
+            max_iterations,
+            tolerance,
+        },
+        max_singular_value::MaxSingularValueError::Arithmetic { frequency, stage } => {
+            Error::NonFiniteMaxSingularValuePowerComputation { frequency, stage }
+        }
+    }
+}
+
 fn map_power_wave_error(stage: ConversionStage, error: power_waves::PowerWaveError) -> Error {
     match error {
         power_waves::PowerWaveError::InvalidSShape { shape } => Error::InvalidShape {
@@ -4079,6 +4269,34 @@ mod tests {
         assert_eq!(
             Network::new(frequency, s, z0).unwrap_err(),
             Error::InvalidSShape
+        );
+    }
+
+    #[test]
+    fn maps_max_singular_value_failures_to_operation_specific_errors() {
+        assert_eq!(
+            map_max_singular_value_error(
+                max_singular_value::MaxSingularValueError::NonConvergence {
+                    frequency: 2,
+                    max_iterations: 10_000,
+                    tolerance: max_singular_value::SVD_TOLERANCE,
+                }
+            ),
+            Error::MaxSingularValuePowerNonConvergence {
+                frequency: 2,
+                max_iterations: 10_000,
+                tolerance: max_singular_value::SVD_TOLERANCE,
+            }
+        );
+        assert_eq!(
+            map_max_singular_value_error(max_singular_value::MaxSingularValueError::Arithmetic {
+                frequency: 3,
+                stage: MaxSingularValuePowerArithmetic::Output,
+            }),
+            Error::NonFiniteMaxSingularValuePowerComputation {
+                frequency: 3,
+                stage: MaxSingularValuePowerArithmetic::Output,
+            }
         );
     }
 

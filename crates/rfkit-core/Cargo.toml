@@ -11,6 +11,7 @@ categories = ["science", "mathematics"]
 
 [dependencies]
 ndarray.workspace = true
+nalgebra.workspace = true
 num-complex.workspace = true
 serde.workspace = true
 thiserror.workspace = true
