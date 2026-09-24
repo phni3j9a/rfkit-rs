@@ -270,11 +270,23 @@ fn scaled_delay(increment: f64, delta_frequency: f64) -> Result<f64, GroupDelayA
     // the overflow branch divide the bounded increment by TAU first, then by
     // the large aperture.  This leaves the only possible subnormal rounding
     // at the final division; dividing by the aperture first and then by TAU
-    // can double-round a representable minimum-subnormal result to zero.  In
-    // the ordinary branch one direct division preserves tiny increments better
-    // than dividing the numerator by TAU first.
+    // can double-round a representable minimum-subnormal result to zero.
+    //
+    // A subnormal aperture has the converse problem: multiplying it by TAU
+    // rounds the denominator in subnormal space before the quotient is taken.
+    // Divide the phase increment by the aperture first when that intermediate
+    // quotient is finite, and only then divide by TAU.  If the intermediate
+    // quotient overflows while the final result is still representable, the
+    // overflow-safe ordering used for a large aperture remains valid.
     let denominator_limit = f64::MAX / TWO_PI;
-    let value = if delta_frequency > denominator_limit {
+    let value = if delta_frequency < f64::MIN_POSITIVE {
+        let increment_over_aperture = increment / delta_frequency;
+        if increment_over_aperture.is_finite() {
+            -(increment_over_aperture / TWO_PI)
+        } else {
+            -(increment / TWO_PI) / delta_frequency
+        }
+    } else if delta_frequency > denominator_limit {
         -(increment / TWO_PI) / delta_frequency
     } else {
         let denominator = TWO_PI * delta_frequency;
@@ -356,6 +368,12 @@ mod tests {
         let boundary_output =
             group_delay_secant_power(&[0.0, f64::MAX], &boundary, &refs(2, 1), 0, 0).unwrap();
         assert_ne!(boundary_output[0], 0.0);
+
+        // The increment/aperture quotient itself can overflow even when the
+        // final seconds-valued delay remains representable.  Keep the
+        // overflow-safe fallback covered independently of the phase extractor.
+        let fallback = scaled_delay(2.0, 1.0e-308).unwrap();
+        assert_eq!(fallback, -(2.0 / TWO_PI) / 1.0e-308);
 
         assert!(matches!(
             group_delay_secant_power(&[0.0, f64::from_bits(1)], &s, &refs(2, 1), 0, 0),

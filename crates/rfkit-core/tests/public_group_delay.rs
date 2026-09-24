@@ -353,6 +353,36 @@ fn signed_zero_phase_axis_huge_subnormal_and_large_aperture_inputs_are_safe() {
 }
 
 #[test]
+fn subnormal_apertures_preserve_finite_signed_one_over_tau_delays() {
+    let minimum_subnormal = f64::from_bits(1);
+    let apertures = [minimum_subnormal, 2.0 * minimum_subnormal];
+    let expected_magnitude = 1.0 / std::f64::consts::TAU;
+
+    for &aperture in &apertures {
+        for &phase_sign in &[-1.0, 1.0] {
+            let source = Network::new(
+                Frequency::from_hz(vec![0.0, aperture]).unwrap(),
+                Array3::from_shape_vec((2, 1, 1), vec![c(1.0, 0.0), c(1.0, phase_sign * aperture)])
+                    .unwrap(),
+                real_z0(2, 1),
+            )
+            .unwrap();
+
+            let actual = source.group_delay_secant_power(0, 0).unwrap()[0];
+            // The phase/aperture ratio is exactly +/-1.  The remaining
+            // division by TAU is one correctly rounded binary64 operation,
+            // so a two-epsilon relative bound is appropriate here.
+            assert_relative_eq!(
+                actual,
+                -phase_sign * expected_magnitude,
+                epsilon = 0.0,
+                max_relative = 2.0 * f64::EPSILON
+            );
+        }
+    }
+}
+
+#[test]
 fn malformed_serde_networks_return_structured_errors_without_panics() {
     fn base() -> Value {
         serde_json::to_value(

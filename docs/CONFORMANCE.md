@@ -490,9 +490,10 @@ frequency-dependent, non-50-ohm, and signed references; source immutability;
 port permutation covariance; singular S; huge/subnormal selected entries;
 signed-zero phase axes; exact +/-pi rejection and nearby acceptance; selected
 versus unselected zeros; all malformed serde shapes, ports, grids, references,
-non-finite values, arithmetic failures, very large apertures, and tiny
-intervals; and an explicit undersampling alias witness.  The shortest-phase
-rule has no magnitude floor, smoothing, fitting, or invented inverse.
+non-finite values, arithmetic failures, very large apertures, subnormal
+apertures with both phase signs, and tiny intervals; and an explicit
+undersampling alias witness.  The shortest-phase rule has no magnitude floor,
+smoothing, fitting, or invented inverse.
 
 The pinned fixture
 `tools/oracle/fixtures/group_delay_secant_power_three_port_branch_crossing.json`

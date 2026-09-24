@@ -972,10 +972,13 @@ frequency-dependent references are accepted algebraically.  An exact-zero
 selected sample returns an undefined-phase error; zero unselected entries and
 singular full S matrices remain valid.  The kernel extracts phase directly
 with `atan2`, avoiding magnitude/product/ratio overflow for finite huge or
-subnormal nonzero selected components, and scales the seconds conversion so a
-large finite aperture does not overflow `2*pi*df` into a false zero.  A
-genuinely unrepresentable result is a structured arithmetic error; no NaN/Inf
-is returned.
+subnormal nonzero selected components.  Seconds conversion retains a
+large-aperture overflow-avoiding order and, for subnormal apertures, divides
+the phase increment by the aperture before dividing by `2*pi` when that
+intermediate quotient is finite; this avoids rounding `2*pi*df` in subnormal
+space while retaining a safe fallback when the intermediate quotient
+overflows.  A genuinely unrepresentable result is a structured arithmetic
+error; no NaN/Inf is returned.
 
 The Yellow alternatives were sample-aligned central/one-sided gradients,
 caller-selected windows, an Option-valued full N-port output, a public phase
