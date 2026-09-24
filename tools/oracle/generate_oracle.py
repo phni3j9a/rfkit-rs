@@ -828,6 +828,39 @@ MAX_SINGULAR_VALUE_POWER_TOLERANCE_JUSTIFICATION = (
     "cross-check rather than a boundary classification oracle."
 )
 
+# The adjacent-interval group-delay fixture deliberately differs from
+# scikit-rf's sample-aligned ``Network.group_delay`` shape.  Its expected
+# seconds are produced from the public ``s_rad_unwrap`` property followed by
+# explicit interval differencing, with the selected S31 trace crossing the
+# principal branch once and carrying a varying positive amplitude.
+GROUP_DELAY_SECANT_FIXTURE = (
+    Path(__file__).resolve().parent
+    / "fixtures"
+    / "group_delay_secant_power_three_port_branch_crossing.json"
+)
+GROUP_DELAY_SECANT_CASE_ID = "group_delay_secant_power_three_port_branch_crossing"
+GROUP_DELAY_SECANT_RANDOM_SEED = 20_260_958
+GROUP_DELAY_SECANT_NFREQ = 7
+GROUP_DELAY_SECANT_NPORTS = 3
+GROUP_DELAY_SECANT_PORT_OUT = 2
+GROUP_DELAY_SECANT_PORT_IN = 0
+GROUP_DELAY_SECANT_RTOL = 1e-12
+GROUP_DELAY_SECANT_ATOL = 1e-21
+GROUP_DELAY_SECANT_FREQUENCY_HZ = (0.0, 31.0e6, 80.0e6, 143.0e6, 225.0e6, 320.0e6, 429.0e6)
+GROUP_DELAY_SECANT_INPUT_RECIPE = (
+    "independent asymmetric three-port input from NumPy default_rng seed "
+    "20260958; nonuniform frequencies [0,31,80,143,225,320,429] MHz; "
+    "selected S31 has positive varying amplitude and phase "
+    "-2.9-2*pi*(1.3e-9*f+0.6e-18*f^2) with one principal-branch crossing; "
+    "complex unequal per-port frequency-dependent references"
+)
+GROUP_DELAY_SECANT_TOLERANCE_JUSTIFICATION = (
+    "Strict seconds-scale binary64 mixed tolerance for a deterministic "
+    "nonuniform seven-sample branch-crossing trace.  Expected values come "
+    "from pinned public Network.s_rad_unwrap followed by explicit adjacent "
+    "interval differencing; input arrays and metadata are exact."
+)
+
 # The inverse-cascade fixture is deliberately independent from the stability
 # case above.  It exercises the fixed equal-group convention on a genuine
 # four-port, multi-frequency source with unequal real-positive references.
@@ -6368,6 +6401,151 @@ def _max_singular_value_power_fixture(np: Any, skrf: Any) -> dict[str, Any]:
     }
 
 
+def _group_delay_secant_inputs(np: Any) -> tuple[Any, Any, Any]:
+    """Build the exact nonuniform branch-crossing S31 input."""
+
+    frequency_hz = np.asarray(GROUP_DELAY_SECANT_FREQUENCY_HZ, dtype=np.float64)
+    rng = np.random.default_rng(GROUP_DELAY_SECANT_RANDOM_SEED)
+    source_s = np.asarray(
+        rng.normal(
+            loc=0.0,
+            scale=0.035,
+            size=(GROUP_DELAY_SECANT_NFREQ, GROUP_DELAY_SECANT_NPORTS, GROUP_DELAY_SECANT_NPORTS),
+        )
+        + 1j
+        * rng.normal(
+            loc=0.0,
+            scale=0.027,
+            size=(GROUP_DELAY_SECANT_NFREQ, GROUP_DELAY_SECANT_NPORTS, GROUP_DELAY_SECANT_NPORTS),
+        ),
+        dtype=np.complex128,
+    )
+    amplitude = 0.17 + 0.021 * np.arange(GROUP_DELAY_SECANT_NFREQ, dtype=np.float64)
+    phase = -2.9 - 2.0 * np.pi * (
+        1.3e-9 * frequency_hz + 0.6e-18 * frequency_hz**2
+    )
+    source_s[:, GROUP_DELAY_SECANT_PORT_OUT, GROUP_DELAY_SECANT_PORT_IN] = amplitude * np.exp(
+        1j * phase
+    )
+    source_z0 = np.asarray(
+        [
+            [41.0 + 3.0j, 58.0 - 2.0j, 73.0 + 4.0j],
+            [42.5 - 1.5j, 60.0 + 2.5j, 70.0 + 3.0j],
+            [44.0 + 1.0j, 62.0 - 3.5j, 76.0 + 2.0j],
+            [45.5 - 2.0j, 64.0 + 4.0j, 79.0 - 1.0j],
+            [47.0 + 2.5j, 66.0 - 4.5j, 81.0 + 1.5j],
+            [48.5 - 1.0j, 68.0 + 3.5j, 83.0 - 2.5j],
+            [50.0 + 1.5j, 70.0 - 2.5j, 85.0 + 3.0j],
+        ],
+        dtype=np.complex128,
+    )
+    if frequency_hz.shape != (GROUP_DELAY_SECANT_NFREQ,):
+        raise ValueError("group-delay frequency shape drifted")
+    if source_s.shape != (
+        GROUP_DELAY_SECANT_NFREQ,
+        GROUP_DELAY_SECANT_NPORTS,
+        GROUP_DELAY_SECANT_NPORTS,
+    ):
+        raise ValueError("group-delay S shape drifted")
+    if source_z0.shape != (GROUP_DELAY_SECANT_NFREQ, GROUP_DELAY_SECANT_NPORTS):
+        raise ValueError("group-delay z0 shape drifted")
+    if not np.isfinite(frequency_hz).all() or np.any(frequency_hz < 0.0):
+        raise ValueError("group-delay frequency input must be finite and nonnegative")
+    if not np.isfinite(source_s).all() or not np.isfinite(source_z0).all():
+        raise ValueError("group-delay S/z0 inputs must be finite")
+    if np.any(source_z0.real == 0.0):
+        raise ValueError("group-delay z0 inputs must have nonzero real parts")
+    if np.any(amplitude <= 0.0):
+        raise ValueError("group-delay selected amplitude must remain positive")
+    return frequency_hz, source_s, source_z0
+
+
+def _group_delay_secant_fixture(np: Any, skrf: Any) -> dict[str, Any]:
+    """Generate adjacent group-delay seconds from public scikit-rf unwrap."""
+
+    frequency_hz, source_s, source_z0 = _group_delay_secant_inputs(np)
+    case_id = GROUP_DELAY_SECANT_CASE_ID
+    network = skrf.Network(
+        f=frequency_hz,
+        s=source_s,
+        z0=source_z0,
+        s_def="power",
+        name=case_id,
+    )
+    network_s = np.asarray(network.s, dtype=np.complex128)
+    network_z0 = np.asarray(network.z0, dtype=np.complex128)
+    if not np.array_equal(network_s, source_s) or not np.array_equal(network_z0, source_z0):
+        raise ValueError("scikit-rf changed group-delay inputs on read-back")
+    selected = network_s[:, GROUP_DELAY_SECANT_PORT_OUT, GROUP_DELAY_SECANT_PORT_IN]
+    if np.any(selected == 0.0):
+        raise ValueError("group-delay selected trace must remain nonzero")
+    unwrapped = np.asarray(network.s_rad_unwrap[:, GROUP_DELAY_SECANT_PORT_OUT, GROUP_DELAY_SECANT_PORT_IN], dtype=np.float64)
+    delay_seconds = -np.diff(unwrapped) / (
+        2.0 * np.pi * np.diff(frequency_hz)
+    )
+    if unwrapped.shape != (GROUP_DELAY_SECANT_NFREQ,) or not np.isfinite(delay_seconds).all():
+        raise ValueError("group-delay public unwrap/output shape or finiteness drifted")
+    if np.max(np.abs(delay_seconds - (
+        1.3e-9 + 0.6e-18 * (frequency_hz[1:] + frequency_hz[:-1])
+    ))) > 1.0e-20:
+        raise ValueError("group-delay public unwrap does not match analytical recipe")
+
+    return {
+        "metadata": {
+            "case_id": case_id,
+            "input_recipe": GROUP_DELAY_SECANT_INPUT_RECIPE,
+            "numpy_version": np.__version__,
+            "operation": "network_group_delay_secant_power",
+            "random_seed": GROUP_DELAY_SECANT_RANDOM_SEED,
+            "reference_impedance": {
+                "complex": True,
+                "frequency_dependent": True,
+                "per_port": True,
+                "real_part": "strictly positive",
+                "unit": "ohm",
+            },
+            "selected_entry": {
+                "label": "S31",
+                "port_in_zero_based": GROUP_DELAY_SECANT_PORT_IN,
+                "port_out_zero_based": GROUP_DELAY_SECANT_PORT_OUT,
+            },
+            "phase_definition": "public Network.s_rad_unwrap then explicit adjacent interval differencing",
+            "sampling_limit": "adjacent phase advances with magnitude >= pi are not generally recoverable; exact half-turn is rejected by Rust",
+            "schema": "rfkit-rs.oracle.fixture",
+            "schema_version": SCHEMA_VERSION,
+            "scikit_rf_commit": EXPECTED_SCIKIT_RF_COMMIT,
+            "scikit_rf_version": skrf.__version__,
+            "shape": {
+                "frequency": list(frequency_hz.shape),
+                "input_s": list(network_s.shape),
+                "input_z0": list(network_z0.shape),
+                "output_delay_seconds": list(delay_seconds.shape),
+            },
+            "tolerance_policy": {
+                "atol_s": GROUP_DELAY_SECANT_ATOL,
+                "comparison": "only data.group_delay_seconds is numeric output; input arrays, frequency, references, selected entry, and metadata are exact",
+                "justification": GROUP_DELAY_SECANT_TOLERANCE_JUSTIFICATION,
+                "regeneration": "canonical UTF-8 JSON; public Network.s_rad_unwrap followed by explicit -diff(phi)/(2*pi*diff(f))",
+                "rtol": GROUP_DELAY_SECANT_RTOL,
+            },
+            "units": {
+                "frequency": "Hz",
+                "group_delay": "s",
+                "phase": "rad",
+                "s": "dimensionless",
+                "z0": "ohm",
+            },
+            "wave_definition": "power",
+        },
+        "data": {
+            "frequency_hz": [float(value) for value in frequency_hz],
+            "group_delay_seconds": [float(value) for value in delay_seconds],
+            "s_input": _complex_array(network_s),
+            "z0_input_ohm": _complex_array(network_z0),
+        },
+    }
+
+
 def _inverse_cascade_inputs(np: Any) -> tuple[Any, Any, Any]:
     """Build an independently seeded, usable four-port inverse fixture."""
 
@@ -7193,6 +7371,13 @@ _CASES = (
         _max_singular_value_power_fixture,
         "numeric_output",
         "sigma_max",
+    ),
+    _OracleCase(
+        GROUP_DELAY_SECANT_CASE_ID,
+        GROUP_DELAY_SECANT_FIXTURE,
+        _group_delay_secant_fixture,
+        "numeric_output",
+        "group_delay_seconds",
     ),
 )
 _CASES_BY_ID = {case.case_id: case for case in _CASES}

@@ -1,0 +1,488 @@
+{
+  "data": {
+    "frequency_hz": [
+      0.0,
+      31000000.0,
+      80000000.0,
+      143000000.0,
+      225000000.0,
+      320000000.0,
+      429000000.0
+    ],
+    "group_delay_seconds": [
+      1.3185999999999921e-09,
+      1.3666000000000008e-09,
+      1.4337999999999983e-09,
+      1.520800000000002e-09,
+      1.6270000000000003e-09,
+      1.7493999999999996e-09
+    ],
+    "s_input": [
+      [
+        [
+          {
+            "imag": -0.013212616940657737,
+            "real": 0.04505027473085177
+          },
+          {
+            "imag": 0.011942667774504813,
+            "real": -0.03266759339108677
+          },
+          {
+            "imag": -0.043187542459431016,
+            "real": -0.023672546405321678
+          }
+        ],
+        [
+          {
+            "imag": -0.042386549191812325,
+            "real": -0.01951263099771432
+          },
+          {
+            "imag": 0.011410622888021851,
+            "real": -0.013501752595159096
+          },
+          {
+            "imag": -0.03483519427990328,
+            "real": -0.06812629619726467
+          }
+        ],
+        [
+          {
+            "imag": -0.04067238596637702,
+            "real": -0.1650628880754304
+          },
+          {
+            "imag": -0.0006898008276359622,
+            "real": 0.007073398930875222
+          },
+          {
+            "imag": 0.010510656626559244,
+            "real": 0.006086361961131673
+          }
+        ]
+      ],
+      [
+        [
+          {
+            "imag": 0.007675088537232113,
+            "real": 0.04671138064958928
+          },
+          {
+            "imag": -0.03404303232942405,
+            "real": -0.01413016192442145
+          },
+          {
+            "imag": -0.03548144927439817,
+            "real": -0.002250509496044153
+          }
+        ],
+        [
+          {
+            "imag": 0.011285146246523062,
+            "real": 0.043478226671878735
+          },
+          {
+            "imag": 0.02456228559415239,
+            "real": 0.0037580627235807218
+          },
+          {
+            "imag": 0.0019517438998335117,
+            "real": 0.07180915266572871
+          }
+        ],
+        [
+          {
+            "imag": 0.002911223663295461,
+            "real": -0.1909778122630539
+          },
+          {
+            "imag": 0.01889740158851269,
+            "real": 0.04127398392658533
+          },
+          {
+            "imag": 0.017318637786282936,
+            "real": -0.043818886571727333
+          }
+        ]
+      ],
+      [
+        [
+          {
+            "imag": 0.01102661974496626,
+            "real": 0.03045569022743261
+          },
+          {
+            "imag": -0.02720891171042887,
+            "real": 0.022812783976748977
+          },
+          {
+            "imag": -0.0798283088479104,
+            "real": -0.00246781050785052
+          }
+        ],
+        [
+          {
+            "imag": -0.0022451457524922435,
+            "real": 0.027104135544390718
+          },
+          {
+            "imag": -0.0521551012568971,
+            "real": 0.029312092027783627
+          },
+          {
+            "imag": 0.015559452248574536,
+            "real": -0.05825952130096871
+          }
+        ],
+        [
+          {
+            "imag": 0.08952853608638901,
+            "real": -0.19216826279650903
+          },
+          {
+            "imag": 0.02005693493343036,
+            "real": -0.024059809510742033
+          },
+          {
+            "imag": 0.0283191983646686,
+            "real": -0.02367045219194529
+          }
+        ]
+      ],
+      [
+        [
+          {
+            "imag": -0.016256014081553867,
+            "real": -0.03630525152720544
+          },
+          {
+            "imag": 0.004551295768857309,
+            "real": -0.00914702894917432
+          },
+          {
+            "imag": -0.00956123843214938,
+            "real": -0.0003628563370056767
+          }
+        ],
+        [
+          {
+            "imag": -0.0024807678756554063,
+            "real": -0.02977569266400652
+          },
+          {
+            "imag": -0.004866683308249914,
+            "real": -0.03823679941877854
+          },
+          {
+            "imag": 0.008326413554894,
+            "real": 0.018697045015451885
+          }
+        ],
+        [
+          {
+            "imag": 0.19650746376216394,
+            "real": -0.1251951144644304
+          },
+          {
+            "imag": 0.06560549520186866,
+            "real": 0.036653684732909156
+          },
+          {
+            "imag": 0.06509769030795722,
+            "real": 0.02859179395498332
+          }
+        ]
+      ],
+      [
+        [
+          {
+            "imag": -0.02037944992662447,
+            "real": -0.0037363884556383163
+          },
+          {
+            "imag": -0.01644832090940506,
+            "real": -0.015926574692507633
+          },
+          {
+            "imag": 0.01975434105378226,
+            "real": 0.010078252064512216
+          }
+        ],
+        [
+          {
+            "imag": 0.0021941355341879554,
+            "real": 0.015053600906583966
+          },
+          {
+            "imag": 0.020737763283860282,
+            "real": -0.0014964649155387603
+          },
+          {
+            "imag": -0.005489749176501392,
+            "real": 0.0037871274691322417
+          }
+        ],
+        [
+          {
+            "imag": 0.24808164828199944,
+            "real": 0.05451142802831645
+          },
+          {
+            "imag": -0.006394504495187935,
+            "real": 0.01219860287004748
+          },
+          {
+            "imag": 0.02516544874273409,
+            "real": 0.02090745082495739
+          }
+        ]
+      ],
+      [
+        [
+          {
+            "imag": -0.008368316375365226,
+            "real": 0.02127127070396739
+          },
+          {
+            "imag": -0.036368889630561806,
+            "real": 0.00776143369217014
+          },
+          {
+            "imag": 0.0007520126286057929,
+            "real": 0.020567092585848847
+          }
+        ],
+        [
+          {
+            "imag": 0.0020475726170151552,
+            "real": 0.00573453198161703
+          },
+          {
+            "imag": -0.012801749696456071,
+            "real": -0.0266490030087803
+          },
+          {
+            "imag": 0.012567743013125457,
+            "real": 0.02137878218906993
+          }
+        ],
+        [
+          {
+            "imag": 0.10285587217179318,
+            "real": 0.2550405253283873
+          },
+          {
+            "imag": 0.003928496394370784,
+            "real": -0.03307286907385677
+          },
+          {
+            "imag": 0.003884807097093911,
+            "real": -0.010584832129211167
+          }
+        ]
+      ],
+      [
+        [
+          {
+            "imag": -0.03243212017424822,
+            "real": 0.02162198614752689
+          },
+          {
+            "imag": 0.008442085821354167,
+            "real": 0.0577971115810637
+          },
+          {
+            "imag": -0.011218821776841368,
+            "real": -0.007399886642742366
+          }
+        ],
+        [
+          {
+            "imag": -0.04330737519986868,
+            "real": 0.07187073255800203
+          },
+          {
+            "imag": -0.0246625566677022,
+            "real": -0.021393337163975623
+          },
+          {
+            "imag": -0.022579806626117117,
+            "real": -0.03958944235014507
+          }
+        ],
+        [
+          {
+            "imag": -0.2153591359269247,
+            "real": 0.20306758129452468
+          },
+          {
+            "imag": -0.0012851701052232968,
+            "real": 0.017925445681536877
+          },
+          {
+            "imag": 0.009084698973485609,
+            "real": 0.034787686875828075
+          }
+        ]
+      ]
+    ],
+    "z0_input_ohm": [
+      [
+        {
+          "imag": 3.0,
+          "real": 41.0
+        },
+        {
+          "imag": -2.0,
+          "real": 58.0
+        },
+        {
+          "imag": 4.0,
+          "real": 73.0
+        }
+      ],
+      [
+        {
+          "imag": -1.5,
+          "real": 42.5
+        },
+        {
+          "imag": 2.5,
+          "real": 60.0
+        },
+        {
+          "imag": 3.0,
+          "real": 70.0
+        }
+      ],
+      [
+        {
+          "imag": 1.0,
+          "real": 44.0
+        },
+        {
+          "imag": -3.5,
+          "real": 62.0
+        },
+        {
+          "imag": 2.0,
+          "real": 76.0
+        }
+      ],
+      [
+        {
+          "imag": -2.0,
+          "real": 45.5
+        },
+        {
+          "imag": 4.0,
+          "real": 64.0
+        },
+        {
+          "imag": -1.0,
+          "real": 79.0
+        }
+      ],
+      [
+        {
+          "imag": 2.5,
+          "real": 47.0
+        },
+        {
+          "imag": -4.5,
+          "real": 66.0
+        },
+        {
+          "imag": 1.5,
+          "real": 81.0
+        }
+      ],
+      [
+        {
+          "imag": -1.0,
+          "real": 48.5
+        },
+        {
+          "imag": 3.5,
+          "real": 68.0
+        },
+        {
+          "imag": -2.5,
+          "real": 83.0
+        }
+      ],
+      [
+        {
+          "imag": 1.5,
+          "real": 50.0
+        },
+        {
+          "imag": -2.5,
+          "real": 70.0
+        },
+        {
+          "imag": 3.0,
+          "real": 85.0
+        }
+      ]
+    ]
+  },
+  "metadata": {
+    "case_id": "group_delay_secant_power_three_port_branch_crossing",
+    "input_recipe": "independent asymmetric three-port input from NumPy default_rng seed 20260958; nonuniform frequencies [0,31,80,143,225,320,429] MHz; selected S31 has positive varying amplitude and phase -2.9-2*pi*(1.3e-9*f+0.6e-18*f^2) with one principal-branch crossing; complex unequal per-port frequency-dependent references",
+    "numpy_version": "2.5.1",
+    "operation": "network_group_delay_secant_power",
+    "phase_definition": "public Network.s_rad_unwrap then explicit adjacent interval differencing",
+    "random_seed": 20260958,
+    "reference_impedance": {
+      "complex": true,
+      "frequency_dependent": true,
+      "per_port": true,
+      "real_part": "strictly positive",
+      "unit": "ohm"
+    },
+    "sampling_limit": "adjacent phase advances with magnitude >= pi are not generally recoverable; exact half-turn is rejected by Rust",
+    "schema": "rfkit-rs.oracle.fixture",
+    "schema_version": 1,
+    "scikit_rf_commit": "bd651e923cac6020de49a096e1d7e9b5f949f884",
+    "scikit_rf_version": "2.0.1",
+    "selected_entry": {
+      "label": "S31",
+      "port_in_zero_based": 0,
+      "port_out_zero_based": 2
+    },
+    "shape": {
+      "frequency": [
+        7
+      ],
+      "input_s": [
+        7,
+        3,
+        3
+      ],
+      "input_z0": [
+        7,
+        3
+      ],
+      "output_delay_seconds": [
+        6
+      ]
+    },
+    "tolerance_policy": {
+      "atol_s": 1e-21,
+      "comparison": "only data.group_delay_seconds is numeric output; input arrays, frequency, references, selected entry, and metadata are exact",
+      "justification": "Strict seconds-scale binary64 mixed tolerance for a deterministic nonuniform seven-sample branch-crossing trace.  Expected values come from pinned public Network.s_rad_unwrap followed by explicit adjacent interval differencing; input arrays and metadata are exact.",
+      "regeneration": "canonical UTF-8 JSON; public Network.s_rad_unwrap followed by explicit -diff(phi)/(2*pi*diff(f))",
+      "rtol": 1e-12
+    },
+    "units": {
+      "frequency": "Hz",
+      "group_delay": "s",
+      "phase": "rad",
+      "s": "dimensionless",
+      "z0": "ohm"
+    },
+    "wave_definition": "power"
+  }
+}

@@ -629,6 +629,59 @@ comparison on samples comfortably away from one.  Only scalar SVD outputs use
 the recorded `rtol=1e-12`, `atol=1e-12` tolerance; inputs, references,
 frequency labels, classes, and Boolean evidence are exact contract fields.
 
+## Inspect adjacent-interval group delay of a selected S entry
+
+`Network::group_delay_secant_power` selects one stored power-wave coordinate
+with zero-based `[port_out, port_in]` indices and returns one seconds value per
+adjacent frequency interval:
+
+```rust
+use rfkit_touchstone::parse_touchstone_v1_0_s;
+
+fn inspect() -> rfkit_touchstone::Result<()> {
+    let network = parse_touchstone_v1_0_s(
+        "# Hz S RI R 50\n\
+         100000000 0.10 0.00 0.247213595499958 -0.760845213036123 0.03 0.00 0.10 0.00\n\
+         130000000 0.10 0.00 -0.050232415623451 -0.798421382742617 0.03 0.00 0.10 0.00\n\
+         180000000 0.10 0.00 -0.509939191798952 -0.616410594220632 0.03 0.00 0.10 0.00\n",
+        2,
+    )?;
+    let delays = network.group_delay_secant_power(1, 0)?; // S21
+    for (interval, delay) in delays.iter().enumerate() {
+        let lower = network.frequency().hz()[interval];
+        let upper = network.frequency().hz()[interval + 1];
+        println!("[{lower:.0}, {upper:.0}] Hz: {delay:.12e} s");
+        assert!((*delay - 2.0e-9).abs() < 5.0e-12);
+    }
+    Ok(())
+}
+```
+
+The method uses principal `atan2` phases, reduces each adjacent difference to
+the shortest branch, and evaluates `-dphase/(2*pi*df)`.  Its `nfreq-1` values
+are interval-aligned rather than sample-aligned; this is intentionally distinct
+from scikit-rf's `Network.group_delay`, which returns `gradient` values at all
+source samples.  No cumulative unwrap, endpoint synthesis, smoothing,
+interpolation, fitting, or automatic undersampling detector is implied.
+Exact selected zeros and exact +/-pi half-turns return structured errors;
+nearby increments, negative/zero delays, singular full S, unselected zeros,
+complex or signed references, and finite huge/subnormal nonzero selected
+components remain in the documented domain.  A physical advance of at least
+pi between samples can alias under any adjacent secant convention and must
+be handled by the caller's sampling plan.
+
+The reproducible Touchstone example is:
+
+```text
+cargo run -p rfkit-touchstone --example group_delay_secant_touchstone
+```
+
+Its canonical pinned differential family is
+`tools/oracle/fixtures/group_delay_secant_power_three_port_branch_crossing.json`
+(seed `20260958`, scikit-rf `2.0.1`, NumPy `2.5.1`), generated from public
+`s_rad_unwrap` plus explicit interval differencing with seconds tolerances
+`rtol=1e-12`, `atol=1e-21`.
+
 ## Connect two networks at a direct physical junction
 
 `Network::connect_direct_power` joins one port from each network with the

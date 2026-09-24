@@ -141,6 +141,17 @@ tolerant; source arrays, frequency/reference metadata, sample classes, and
 public pinned scikit-rf `Network.is_passive(tol=1e-12)` call per sample solely
 as limited Boolean evidence away from sigma=1; it is not the Rust API or a
 broad passivity compatibility claim.
+One adjacent-interval group-delay case is also registered:
+`group_delay_secant_power_three_port_branch_crossing` uses the public pinned
+`Network.s_rad_unwrap` property followed by explicit interval differencing.
+The nonuniform seven-point, asymmetric three-port input uses NumPy
+`default_rng` seed `20260958`, a varying-amplitude selected S31 trace that
+crosses the principal-phase branch, and complex frequency-dependent references
+with nonzero real parts. The fixture records the exact
+frequencies, S/z0 arrays, selected ports, scikit-rf/NumPy lineage, and
+`rtol=1e-12`, `atol=1e-21`; only `group_delay_seconds` is numerically tolerant.
+This is intentionally an interval-aligned secant contract and is not the
+sample-aligned `Network.group_delay` API.
 One inverse-cascade case is also registered: an independently seeded
 three-frequency four-port real-positive unequal-reference input uses fixed
 groups `[left_0,left_1,right_0,right_1]` and expected output groups
