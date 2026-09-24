@@ -2,6 +2,25 @@
 
 scikit-rf is used as a reference oracle, not as the API specification.
 
+Touchstone 2.0 Full-matrix S ingress is a separate format-boundary case. The
+public `parse_touchstone_v2_0_s_full` entrypoint is tested externally with
+asymmetric one-, two-, and larger-port inputs, RI/MA/DB decoding, all frequency
+units, both explicit two-port orders, arbitrary complete-record continuation,
+continued per-port `[Reference]` data and option-line override, later option
+line ignore semantics, exact declared
+frequency counts, `[End]`/trailing-content handling, and recognized semantic
+comments. Structural/order/count, unsupported-subset, numerical, and checked
+size failures are tested independently, including malformed declarations that
+must not allocate from enormous dimensions. The canonical
+`touchstone_v2_0_s_full_three_port` fixture records scikit-rf `2.0.1` at
+commit `bd651e923cac6020de49a096e1d7e9b5f949f884`, NumPy `2.5.1`, independently
+authored source text with a continued heterogeneous `[Reference]` vector, and
+strict `rtol=1e-12`, `atol=1e-12` output-only comparison. Frequency, references,
+source text, shape, and metadata are exact contract fields; the Rust oracle
+calls only the new public API. The focused workflow explicitly inspects the
+loaded network, direct-renormalizes unequal references to a common positive-real
+reference, then crosses the existing v1 writer/readback boundary.
+
 ## Definition of "implemented"
 
 A numerical operation is considered implemented only when:

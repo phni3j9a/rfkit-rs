@@ -231,6 +231,42 @@ definition`, or `S-parameter uses the traveling definition` comments.
 Ordinary comments, including `Port[n] = ...` port-name comments, remain
 ignorable; universal vendor-marker recognition is outside this reader's scope.
 
+Touchstone 2.0 Full-matrix S data has a separate, explicit ingress function:
+
+```rust
+use rfkit_touchstone::parse_touchstone_v2_0_s_full;
+
+fn load_v2(text: &str) -> rfkit_touchstone::Result<rfkit_core::Network> {
+    parse_touchstone_v2_0_s_full(text)
+}
+```
+
+This bounded single-ended subset obtains the port and frequency counts from
+`[Number of Ports]` and `[Number of Frequencies]`, requires `[Version] 2.0`,
+`[Network Data]`, `[End]`, and (for two-port data) an explicit `[Two-Port Data
+Order]`. It accepts Full matrices in RI, MA, or DB form with Hz/kHz/MHz/GHz
+units, arbitrary complete-record continuations, and an optional real-positive
+per-port `[Reference]` vector that overrides the option-line `R` value. Each
+frequency must begin a physical line; values are preserved in frequency-major
+row-major `Network` order without sorting, interpolation, repair, or implicit
+renormalization. The resulting `(nfreq,nport)` references are expanded exactly
+per frequency and port.
+
+Lower/Upper matrices, non-S parameters, mixed-mode, noise, information blocks,
+unknown keywords, other versions, complex/non-positive references, duplicate or
+misplaced bracket directives, incomplete/surplus records, missing `[End]`,
+trailing content, non-finite values, and recognized HFSS/Ansys semantic
+comments are rejected with structured errors. As required by the Touchstone
+option-line rule, later `#` lines are ignored after the first option line. This
+function is pure in-memory; it does not
+inspect filenames or perform filesystem I/O. To use the existing v1 writer,
+explicitly direct-renormalize the parsed network to one common positive-real
+reference first. The focused executable demonstrates that workflow:
+
+```text
+cargo run -p rfkit-touchstone --example touchstone_v2_full_workflow
+```
+
 `renormalize_direct_power` is the explicit direct Kurokawa wave-change path
 for this workflow. It supports singular physical Z/Y cases because it solves
 the direct wave relation between the stored source references and the caller's
@@ -813,7 +849,7 @@ this is not a general scikit-rf compatibility claim.
 
 ```text
 crates/rfkit-core/       Rust RF numerical core
-crates/rfkit-touchstone/ pure Touchstone 1.0 S-parameter text ingress/egress
+crates/rfkit-touchstone/ pure Touchstone v1.0 ingress/egress and bounded v2.0 Full S ingress
 tools/oracle/        scikit-rf reference/differential-test tools
 docs/                architecture, development, conformance and provenance policy
 ```

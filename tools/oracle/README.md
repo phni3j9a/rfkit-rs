@@ -225,7 +225,7 @@ checker.
 
 ## Generate and verify
 
-The harness has forty-six registered canonical cases. The original three cases
+The harness has forty-seven registered canonical cases. The original three cases
 remain unchanged:
 
 - `three_port_complex_z0` — the representative four-frequency, three-port
@@ -247,6 +247,16 @@ The Touchstone v1.0 ingress case is:
   input recipe (no random seed). Expected frequency/S/z0 values are read
   through the pinned public `skrf.io.touchstone.Touchstone` parser; the text
   and explicit port count remain exact contract fields.
+
+The Touchstone v2.0 ingress case is:
+
+- `touchstone_v2_0_s_full_three_port` — independently authored Version 2.0
+  single-ended Full-matrix RI text with two MHz records, arbitrary complete
+  record continuations, and a continued heterogeneous `[Reference]` vector
+  `[37,61,83]` ohm. Its source text, directive/count metadata, shape,
+  frequency axis, and references are exact contract fields; expected S comes
+  only from the pinned public `skrf.io.touchstone.Touchstone` parser and is
+  compared at `rtol=1e-12`, `atol=1e-12`.
 
 The mixed-mode cases are:
 
@@ -859,6 +869,10 @@ The JSON representation is deliberately machine-readable and byte-stable:
 - The Touchstone v1.0 parser case keeps its independently authored text,
   explicit port count, frequency axis, and all metadata exact; only parsed `s`
   and expanded `z0_ohm` are numeric-tolerance outputs.
+- The Touchstone v2.0 parser case keeps its independently authored text,
+  Version 2.0 directives, declared counts, frequency axis, per-port references,
+  and all metadata exact; only parsed `s` is numeric-tolerance output while
+  `z0_ohm` is checked exactly.
 - The checker removes exactly the registered computed output field(s) for the
   contract projection. Existing cases register one output; interpolation
   registers both `s` and `z0_ohm`; termination removes only `s_terminated`.
