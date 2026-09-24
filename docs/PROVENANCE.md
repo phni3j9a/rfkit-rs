@@ -97,6 +97,34 @@ local API policy rather than scikit-rf's infinity behavior; no undefined case
 is serialized in JSON. The public Rust method, result type, arithmetic error
 stages, core tests, oracle test, and Touchstone workflow are reversible during
 0.x without data migration.
+Issue #100's adjacent-interval group-delay operation is an independent REWRITE
+of the phase derivative definition and adjacent shortest-principal-phase
+equations.  The published basis is the [Keysight group-delay
+tutorial](https://helpfiles.keysight.com/csg/m9485a/tutorials/group_delay6_5.htm)
+and its [explicit phase-difference formula](https://helpfiles.keysight.com/csg/89600B/Webhelp/Subsystems/gui/content/trace_format_groupdelay.htm);
+Keysight's group-delay behavior and the pinned scikit-rf
+2.0.1 public `Network.s_rad_unwrap`/`Network.group_delay` behavior were
+inspected as mathematical and behavior references; no source code, instrument
+illustration, or fixture value was copied.  The Rust kernel uses direct
+`atan2` phases and scale-conscious seconds arithmetic, with operation-specific
+structured validation for malformed grids, references, selected zeros, exact
+half-turns, and unrepresentable outputs.  Negative-real references are
+accepted under the repository's algebraic power-wave extension, and all
+source/reference arrays remain borrowed and unchanged.
+
+The canonical fixture
+`tools/oracle/fixtures/group_delay_secant_power_three_port_branch_crossing.json`
+is independently generated with NumPy `2.5.1`, scikit-rf `2.0.1` at commit
+`bd651e923cac6020de49a096e1d7e9b5f949f884`, and seed `20260958`.  It uses an
+asymmetric three-port, seven-point nonuniform `[0,31,80,143,225,320,429]` MHz
+input, a varying-amplitude branch-crossing S31 trace, and complex
+frequency-dependent references.  Expected seconds come only from public
+`Network.s_rad_unwrap` followed by explicit interval differencing; metadata and
+inputs are exact, while output alone uses `rtol=1e-12`, `atol=1e-21`.
+The local public/core and Touchstone tests add analytical, malformed,
+invariance, signed-zero, singular, extreme-scale, and undersampling-alias
+coverage.  This additive provisional 0.x slice is reversible without persisted
+data migration and makes no broad scikit-rf compatibility promise.
 The matched-junction connection case is a separate fixture-generator REWRITE:
 the A/B S and z0 inputs use independent local NumPy generators and the
 expected result is obtained only from public
@@ -294,6 +322,7 @@ material.
 | `tools/oracle/generate_oracle.py`; `tools/oracle/fixtures/power_wave_connect_direct_three_to_four_port_complex_z0.json` | scikit-rf public `Network` constructor and `skrf.network.connect` behavior | `bd651e923cac6020de49a096e1d7e9b5f949f884` (`v2.0.1`); NumPy `2.5.1`; seed `20260951` | Canonical direct physical-junction differential fixture: asymmetric non-reciprocal 3-port A + 4-port B, selected A[1]/B[2], unequal complex frequency-dependent positive-real references | REWRITE | BSD-3-Clause | Inputs are independently generated; expected S uses one public `network.connect` call, while z0/order/metadata are exact contract fields. The 3+4 shape avoids scikit-rf two-port insertion ambiguity; no source code, output values, or fixture values were copied. |
 | `crates/rfkit-touchstone/tests/public_direct_connection_workflow.rs`; `crates/rfkit-touchstone/examples/connect_direct_power_touchstone.rs` | Kurokawa physical V/I equations; IBIS Open Forum Touchstone File Format Specification | Kurokawa DOI `10.1109/TMTT.1965.1125964`; Touchstone Format Specification v2.1 (2024-01-26) | Two v1.0 inputs at different common references → direct connection → independent physical check → explicit writer-compatible renormalization → write/read | REWRITE | Published mathematics; IBIS Open Forum specification | Workflow inputs and physical reduction check are independently authored. The existing writer is called only after explicit direct renormalization to one common positive-real reference; no automatic writer repair, format extension, source copying, or broad compatibility promise is introduced. |
 | `crates/rfkit-touchstone/examples/terminate_port_touchstone.rs`; `crates/rfkit-touchstone/tests/public_termination_workflow.rs` | Kurokawa physical boundary equations; Touchstone v1.0 specification | Kurokawa DOI `10.1109/TMTT.1965.1125964`; IBIS Open Forum Touchstone File Format Specification v2.1 (2024-01-26) | Focused ingress → finite termination → independent reduction check → writer/read workflow with common 50 Ω survivors | REWRITE | Published mathematics; IBIS Open Forum specification | Literal asymmetric five-port text and analytical reduction are independently authored. The existing writer is used with its declared common finite positive-real reference contract; no hidden writer renormalization, mixed-mode extension, source copying, or broader Touchstone promise is introduced. |
+| `crates/rfkit-core/src/group_delay.rs`; `crates/rfkit-core/src/lib.rs`; `crates/rfkit-core/tests/public_group_delay.rs`; `crates/rfkit-core/tests/oracle_group_delay.rs`; `tools/oracle/generate_oracle.py`; `tools/oracle/fixtures/group_delay_secant_power_three_port_branch_crossing.json` | Phase-derivative/group-delay definition; Keysight group-delay tutorial/formula; scikit-rf public `s_rad_unwrap` behavior | Keysight tutorial/formula; scikit-rf `bd651e923cac6020de49a096e1d7e9b5f949f884` (`v2.0.1`); NumPy `2.5.1`; seed `20260958` | Issue #100 selected-coordinate shortest-principal-phase adjacent secants in seconds, with pinned public unwrap+interval-difference oracle | REWRITE | Published/reference behavior; scikit-rf BSD-3-Clause | No third-party code, instrument illustration, expected output, or fixture value was copied. Inputs/metadata are exact; only output uses `rtol=1e-12`, `atol=1e-21`. Rust uses direct `atan2`, no magnitude floor/ratio path, accepts finite complex/signed references with nonzero real parts, and reports exact selected-zero/half-turn/arithmetic boundaries. |
 
 Before adding copied or closely adapted third-party code or fixtures, record an entry here and preserve the applicable license notice under `THIRD_PARTY_LICENSES/`.
 

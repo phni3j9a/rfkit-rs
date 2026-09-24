@@ -469,6 +469,60 @@ for nonzero external excitation, closes the pair, then directly renormalizes
 survivors to one common positive-real writer reference before write/read. The
 writer remains unchanged and never repairs heterogeneous references.
 
+## Adjacent-interval group-delay conformance (Issue #100)
+
+Issue #100 adds `Network::group_delay_secant_power(port_out, port_in)`, a
+selected-coordinate, adjacent-interval seconds estimate.  The Rust kernel
+uses principal `atan2` phases, shortest local increments, and each actual
+`f[k+1]-f[k]` aperture.  Its output length is `nfreq-1` and value `k` is
+attached to `[f[k], f[k+1]]`; this is intentionally different from pinned
+scikit-rf 2.0.1 `Network.group_delay`, which applies `gradient` to
+`s_rad_unwrap` and returns one sample-aligned value per frequency.  The
+canonical differential family therefore calls only public
+`Network.s_rad_unwrap` and explicitly differences adjacent intervals; it does
+not claim the two APIs are shape- or estimator-equivalent.
+
+`crates/rfkit-core/tests/public_group_delay.rs` covers one-, two-, and larger
+N-port traces; uniform and nonuniform grids; constant and quadratic phase;
+positive, negative, and zero delay; both branch directions; selected ports;
+varying amplitudes and constant phase offsets; complex, unequal,
+frequency-dependent, non-50-ohm, and signed references; source immutability;
+port permutation covariance; singular S; huge/subnormal selected entries;
+signed-zero phase axes; exact +/-pi rejection and nearby acceptance; selected
+versus unselected zeros; all malformed serde shapes, ports, grids, references,
+non-finite values, arithmetic failures, very large apertures, subnormal
+apertures with both phase signs, and tiny intervals; and an explicit
+undersampling alias witness.  The shortest-phase rule has no magnitude floor,
+smoothing, fitting, or invented inverse.
+
+The pinned fixture
+`tools/oracle/fixtures/group_delay_secant_power_three_port_branch_crossing.json`
+uses seed `20260958`, frequencies `[0,31,80,143,225,320,429]` MHz, an
+asymmetric varying-amplitude S31 branch crossing, and complex
+frequency-dependent references.  It records scikit-rf `2.0.1` at commit
+`bd651e923cac6020de49a096e1d7e9b5f949f884`, NumPy `2.5.1`, public
+`s_rad_unwrap` plus explicit interval differencing, and output-only
+`rtol=1e-12`, `atol=1e-21`.  Both
+`tools/oracle/test_generate_oracle.py` and
+`crates/rfkit-core/tests/oracle_group_delay.rs` enforce exact metadata/input
+contracts before comparing only seconds output.
+
+The reproducible checks are:
+
+```text
+/home/server/.cache/rfkit-rs-oracle-venv/bin/python tools/oracle/generate_oracle.py check --case group_delay_secant_power_three_port_branch_crossing
+cd tools/oracle && /home/server/.cache/rfkit-rs-oracle-venv/bin/python -m unittest test_generate_oracle.py
+cargo test -p rfkit-core --test public_group_delay --test oracle_group_delay
+cargo test -p rfkit-touchstone --test public_group_delay_workflow
+cargo run -p rfkit-touchstone --example group_delay_secant_touchstone
+```
+
+The focused Touchstone path loads a v1.0 S/RI/Hz two-port, selects S21, and
+checks the displayed interval bounds against an analytical 2 ns line delay.
+Exact half-turns and exact selected zeros are actionable structured failures;
+other phase undersampling remains an explicit sampling limitation rather than
+an automatic detector.
+
 ## Reporting
 
 Eventually CI should publish a machine-generated coverage report such as:

@@ -47,6 +47,7 @@ mod cascade;
 mod composition;
 mod connection;
 mod direct_connection;
+mod group_delay;
 mod impedance_admittance;
 mod interpolation;
 mod inverse_cascade;
@@ -1117,6 +1118,88 @@ pub enum Error {
         frequency: usize,
         stage: MaxSingularValuePowerArithmetic,
     },
+
+    #[error("group-delay frequency axis must contain at least two samples, got {actual}")]
+    GroupDelayTooFewFrequencySamples { actual: usize },
+
+    #[error(
+        "group-delay frequency length does not match the S-parameter frequency dimension: expected {expected}, got {actual}"
+    )]
+    GroupDelayFrequencyLengthMismatch { expected: usize, actual: usize },
+
+    #[error("group-delay requires a square positive-port S-parameter shape, got {shape:?}")]
+    InvalidGroupDelaySShape { shape: Vec<usize> },
+
+    #[error("group-delay reference-impedance shape must be (nfreq, nport), got {shape:?}")]
+    InvalidGroupDelayZ0Shape { shape: Vec<usize> },
+
+    #[error("group-delay output port {port} is out of range for {nports} ports")]
+    InvalidGroupDelayOutputPort { port: usize, nports: usize },
+
+    #[error("group-delay input port {port} is out of range for {nports} ports")]
+    InvalidGroupDelayInputPort { port: usize, nports: usize },
+
+    #[error("group-delay frequency is non-finite at index {index}: {value:?}")]
+    NonFiniteGroupDelayFrequency { index: usize, value: f64 },
+
+    #[error("group-delay frequency is negative at index {index}: {value:?}")]
+    NegativeGroupDelayFrequency { index: usize, value: f64 },
+
+    #[error(
+        "group-delay frequency axis is not strictly increasing at index {index}: previous={previous:?}, current={current:?}"
+    )]
+    GroupDelayFrequencyNotStrictlyIncreasing {
+        index: usize,
+        previous: f64,
+        current: f64,
+    },
+
+    #[error(
+        "group-delay received a non-finite S-parameter at frequency {frequency}, row {row}, column {column}"
+    )]
+    NonFiniteGroupDelayS {
+        frequency: usize,
+        row: usize,
+        column: usize,
+    },
+
+    #[error(
+        "group-delay received a non-finite reference impedance at frequency {frequency}, port {port}"
+    )]
+    NonFiniteGroupDelayZ0 { frequency: usize, port: usize },
+
+    #[error(
+        "group-delay reference impedance has a zero real part at frequency {frequency}, port {port}"
+    )]
+    ZeroRealGroupDelayReferenceImpedance { frequency: usize, port: usize },
+
+    #[error(
+        "group-delay selected S[{port_out},{port_in}] has undefined exact-zero phase at sample {sample}"
+    )]
+    UndefinedGroupDelayPhase {
+        sample: usize,
+        port_out: usize,
+        port_in: usize,
+    },
+
+    #[error(
+        "group-delay selected S[{port_out},{port_in}] has an ambiguous exact half-turn on interval {interval}"
+    )]
+    AmbiguousGroupDelayHalfTurn {
+        interval: usize,
+        port_out: usize,
+        port_in: usize,
+    },
+
+    #[error(
+        "group-delay arithmetic became non-finite or unrepresentable on interval {interval} for S[{port_out},{port_in}] while evaluating {stage}"
+    )]
+    NonFiniteGroupDelayComputation {
+        interval: usize,
+        port_out: usize,
+        port_in: usize,
+        stage: GroupDelayArithmetic,
+    },
 }
 
 /// Identifies which input supplied a connection value or triggered a
@@ -1426,6 +1509,29 @@ impl fmt::Display for MaxSingularValuePowerArithmetic {
     }
 }
 
+/// Arithmetic quantity used to identify an unrepresentable adjacent-interval
+/// group-delay result.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GroupDelayArithmetic {
+    /// The actual frequency-aperture subtraction `f[k+1]-f[k]`.
+    FrequencyDifference,
+    /// The finite scaling by `2*pi` used by the seconds conversion.
+    TwoPiScaling,
+    /// The final seconds-valued interval delay.
+    DelayOutput,
+}
+
+impl fmt::Display for GroupDelayArithmetic {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::FrequencyDifference => "frequency-aperture subtraction",
+            Self::TwoPiScaling => "2*pi seconds scaling",
+            Self::DelayOutput => "seconds delay output",
+        })
+    }
+}
+
 impl fmt::Display for TwoPortStabilityArithmetic {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let description = match self {
@@ -1637,6 +1743,67 @@ impl Network {
     pub fn max_singular_value_power(&self) -> Result<Vec<f64>> {
         max_singular_value::max_singular_value_power(&self.frequency.hz, &self.s, &self.z0)
             .map_err(map_max_singular_value_error)
+    }
+
+    /// Computes adjacent-interval secant group delay for one stored
+    /// power-wave S-parameter entry.
+    ///
+    /// `port_out` and `port_in` select the zero-based coordinate
+    /// `S[port_out, port_in]`.  For every adjacent pair of samples, the
+    /// principal phase is obtained with `atan2(Im, Re)`, the difference is
+    /// reduced to the shortest increment in `[-pi, pi]`, and the returned
+    /// seconds are
+    ///
+    /// ```text
+    /// -dphase / (2*pi*(frequency[k+1] - frequency[k]))
+    /// ```
+    ///
+    /// The result has exactly `frequency.len() - 1` values.  Value `k` belongs
+    /// to the actual interval `[frequency[k], frequency[k+1]]` and uses its
+    /// own aperture, so the result is not sample-aligned and no midpoint or
+    /// extrapolated endpoint is synthesized.  Uniform and nonuniform grids
+    /// are accepted.  The operation is a finite-aperture estimate of
+    /// `-d(arg(S[port_out,port_in]))/d(2*pi*f)`; it is not a cumulative
+    /// unwrapping, fit, smoothing, time-domain transform, propagation-speed
+    /// certificate, or causality/stability certificate.  An adjacent physical
+    /// phase advance of magnitude greater than or equal to `pi` cannot in
+    /// general be recovered from samples; only an exactly observed half-turn
+    /// is rejected here, so adequate sampling remains the caller's
+    /// responsibility.
+    ///
+    /// The phase is taken directly from the stored power-wave S coordinate,
+    /// including its stored (possibly complex, frequency-dependent, unequal,
+    /// non-50-ohm, or negative-real) references.  No magnitude, ratio,
+    /// conversion through Z/Y, renormalization, reference default, or
+    /// condition threshold is applied.  Finite nonzero coordinates remain
+    /// eligible even when their components are huge or subnormal.  Exact
+    /// zero on the selected trace is undefined and fails; exact zero in an
+    /// unselected S entry is harmless.  Negative and zero delay values are
+    /// valid.  A signed zero frequency is nonnegative, but duplicate samples
+    /// (including two zeros) fail the strictly increasing-grid rule.
+    ///
+    /// This additive operation is provisional during the `0.x` series; its
+    /// name and signature are not a `1.0` compatibility promise.  It borrows
+    /// the source and returns an owned result without mutation.
+    ///
+    /// # Errors
+    ///
+    /// Returns structured [`Error`] values for too few samples, malformed
+    /// serde-created S/z0 shapes, invalid ports, non-finite or negative grid
+    /// values, duplicate/descending frequencies, non-finite S/z0 values,
+    /// zero-real references, selected exact-zero phases, exact half-turn
+    /// intervals, and non-finite or unrepresentable arithmetic/output.  All
+    /// shape, grid, reference, and S validation occurs before selected array
+    /// indexing, so malformed deserialized values never panic.
+    pub fn group_delay_secant_power(&self, port_out: usize, port_in: usize) -> Result<Vec<f64>> {
+        group_delay::group_delay_secant_power(
+            &self.frequency.hz,
+            &self.s,
+            &self.z0,
+            port_out,
+            port_in,
+        )
+        .map_err(map_group_delay_error)
     }
 
     /// Returns an owned network with its ports in an explicitly requested
@@ -3757,6 +3924,88 @@ fn map_max_singular_value_error(error: max_singular_value::MaxSingularValueError
         max_singular_value::MaxSingularValueError::Arithmetic { frequency, stage } => {
             Error::NonFiniteMaxSingularValuePowerComputation { frequency, stage }
         }
+    }
+}
+
+fn map_group_delay_error(error: group_delay::GroupDelayError) -> Error {
+    match error {
+        group_delay::GroupDelayError::TooFewFrequencySamples { actual } => {
+            Error::GroupDelayTooFewFrequencySamples { actual }
+        }
+        group_delay::GroupDelayError::FrequencyLengthMismatch { expected, actual } => {
+            Error::GroupDelayFrequencyLengthMismatch { expected, actual }
+        }
+        group_delay::GroupDelayError::InvalidSShape { shape } => Error::InvalidGroupDelaySShape {
+            shape: vec![shape.0, shape.1, shape.2],
+        },
+        group_delay::GroupDelayError::InvalidZ0Shape { shape } => Error::InvalidGroupDelayZ0Shape {
+            shape: vec![shape.0, shape.1],
+        },
+        group_delay::GroupDelayError::InvalidOutputPort { port, nports } => {
+            Error::InvalidGroupDelayOutputPort { port, nports }
+        }
+        group_delay::GroupDelayError::InvalidInputPort { port, nports } => {
+            Error::InvalidGroupDelayInputPort { port, nports }
+        }
+        group_delay::GroupDelayError::NonFiniteFrequency { index, value } => {
+            Error::NonFiniteGroupDelayFrequency { index, value }
+        }
+        group_delay::GroupDelayError::NegativeFrequency { index, value } => {
+            Error::NegativeGroupDelayFrequency { index, value }
+        }
+        group_delay::GroupDelayError::FrequencyNotStrictlyIncreasing {
+            index,
+            previous,
+            current,
+        } => Error::GroupDelayFrequencyNotStrictlyIncreasing {
+            index,
+            previous,
+            current,
+        },
+        group_delay::GroupDelayError::NonFiniteS {
+            frequency,
+            row,
+            column,
+        } => Error::NonFiniteGroupDelayS {
+            frequency,
+            row,
+            column,
+        },
+        group_delay::GroupDelayError::NonFiniteZ0 { frequency, port } => {
+            Error::NonFiniteGroupDelayZ0 { frequency, port }
+        }
+        group_delay::GroupDelayError::ZeroRealZ0 { frequency, port } => {
+            Error::ZeroRealGroupDelayReferenceImpedance { frequency, port }
+        }
+        group_delay::GroupDelayError::UndefinedPhase {
+            sample,
+            port_out,
+            port_in,
+        } => Error::UndefinedGroupDelayPhase {
+            sample,
+            port_out,
+            port_in,
+        },
+        group_delay::GroupDelayError::AmbiguousHalfTurn {
+            interval,
+            port_out,
+            port_in,
+        } => Error::AmbiguousGroupDelayHalfTurn {
+            interval,
+            port_out,
+            port_in,
+        },
+        group_delay::GroupDelayError::Arithmetic {
+            interval,
+            port_out,
+            port_in,
+            stage,
+        } => Error::NonFiniteGroupDelayComputation {
+            interval,
+            port_out,
+            port_in,
+            stage,
+        },
     }
 }
 

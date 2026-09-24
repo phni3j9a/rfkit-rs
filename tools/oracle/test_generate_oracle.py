@@ -99,6 +99,46 @@ class NumericFixtureCheckerTests(unittest.TestCase):
             )
 
 
+class GroupDelaySecantNumericFixtureCheckerTests(unittest.TestCase):
+    """Keep the interval-seconds output and selected-trace contract visible."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.fixture_path = oracle.GROUP_DELAY_SECANT_FIXTURE
+        cls.fixture = oracle._read_canonical_json(cls.fixture_path)
+
+    def _check_document(self, document: dict[str, object]) -> int:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / self.fixture_path.name
+            path.write_bytes(oracle._canonical_bytes(document))
+            return oracle._check_numeric_fixture(
+                path, self.fixture, "group_delay_seconds"
+            )
+
+    def test_output_within_seconds_tolerance_passes(self) -> None:
+        document = copy.deepcopy(self.fixture)
+        document["data"]["group_delay_seconds"][0] += 1e-22
+        self.assertEqual(self._check_document(document), 0)
+
+    def test_output_outside_seconds_tolerance_fails(self) -> None:
+        document = copy.deepcopy(self.fixture)
+        document["data"]["group_delay_seconds"][0] += 1e-6
+        self.assertEqual(self._check_document(document), 1)
+
+    def test_selected_trace_and_metadata_drift_fail(self) -> None:
+        document = copy.deepcopy(self.fixture)
+        document["data"]["frequency_hz"][1] += 1.0
+        self.assertEqual(self._check_document(document), 1)
+
+        document = copy.deepcopy(self.fixture)
+        document["metadata"]["selected_entry"]["port_out_zero_based"] = 1
+        self.assertEqual(self._check_document(document), 1)
+
+        document = copy.deepcopy(self.fixture)
+        document["metadata"]["tolerance_policy"]["atol_s"] = 1e-12
+        self.assertEqual(self._check_document(document), 1)
+
+
 class ZToSNumericFixtureCheckerTests(unittest.TestCase):
     """Exercise the dimensionless ``atol`` policy used by Z-to-S."""
 
@@ -711,6 +751,19 @@ MAX_SINGULAR_VALUE_POWER_CASE_SPECS = {
         "frequencies": 4,
         "seed": oracle.MAX_SINGULAR_VALUE_POWER_RANDOM_SEED,
         "output": "sigma_max",
+    },
+}
+
+
+GROUP_DELAY_SECANT_CASE_SPECS = {
+    oracle.GROUP_DELAY_SECANT_CASE_ID: {
+        "operation": "network_group_delay_secant_power",
+        "ports": 3,
+        "frequencies": 7,
+        "seed": oracle.GROUP_DELAY_SECANT_RANDOM_SEED,
+        "output": "group_delay_seconds",
+        "port_out": 2,
+        "port_in": 0,
     },
 }
 
@@ -1565,6 +1618,7 @@ class MatrixRegistrationAndCheckerTests(unittest.TestCase):
             + len(TERMINATION_CASE_SPECS)
             + len(TWO_PORT_STABILITY_CASE_SPECS)
             + len(MAX_SINGULAR_VALUE_POWER_CASE_SPECS)
+            + len(GROUP_DELAY_SECANT_CASE_SPECS)
             + len(INVERSE_CASCADE_CASE_SPECS)
             + len(CASCADE_DIRECT_CASE_SPECS)
         )
@@ -1578,6 +1632,7 @@ class MatrixRegistrationAndCheckerTests(unittest.TestCase):
         self.assertTrue(set(TERMINATION_CASE_SPECS).issubset(registered))
         self.assertTrue(set(TWO_PORT_STABILITY_CASE_SPECS).issubset(registered))
         self.assertTrue(set(MAX_SINGULAR_VALUE_POWER_CASE_SPECS).issubset(registered))
+        self.assertTrue(set(GROUP_DELAY_SECANT_CASE_SPECS).issubset(registered))
         self.assertTrue(set(INVERSE_CASCADE_CASE_SPECS).issubset(registered))
         self.assertTrue(set(CASCADE_DIRECT_CASE_SPECS).issubset(registered))
         self.assertTrue(set(DIRECT_CONNECTION_CASE_SPECS).issubset(registered))

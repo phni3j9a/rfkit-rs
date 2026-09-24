@@ -927,6 +927,83 @@ this bounded sampled workflow.  The selected dependency and adapter are
 reversible before stabilization: rollback removes the method, diagnostics,
 tests, fixture, dependency, and documentation without storage migration.
 
+## Adjacent-interval power-wave group delay (Issue #100 Yellow decision)
+
+The provisional public surface adds one borrowing, owned-result diagnostic:
+
+```rust
+impl Network {
+    pub fn group_delay_secant_power(
+        &self,
+        port_out: usize,
+        port_in: usize,
+    ) -> Result<Vec<f64>>;
+}
+```
+
+The method selects the zero-based stored coordinate `S[port_out, port_in]` and
+returns exactly `nfreq - 1` seconds values.  Value `k` belongs to the actual
+frequency aperture `[f[k], f[k+1]]`, including on a nonuniform grid.  For the
+principal phases `phi[k] = atan2(Im(S[k]), Re(S[k]))`, it takes the shortest
+adjacent increment and evaluates:
+
+```text
+d = phi[k+1] - phi[k]
+if d > pi:  d -= 2*pi
+if d < -pi: d += 2*pi
+delay[k] = -d / (2*pi*(f[k+1] - f[k]))  // seconds, f in Hz
+```
+
+This is an explicit finite-aperture secant estimate, not scikit-rf's
+sample-aligned `Network.group_delay`, which uses `gradient` on the public
+unwrapped trace and returns one value per source sample.  The Rust operation
+does not synthesize endpoints, midpoint frequencies, cumulative winding
+counts, smoothing, fitting, or time-domain data.  A physical phase advance of
+magnitude `>= pi` is not generally recoverable from adjacent samples; exact
+evaluated half-turns are rejected, while other undersampling aliases remain a
+caller responsibility.
+
+Validation is operation-specific and happens before selected indexing,
+including for malformed serde-created networks: at least two samples, exact
+S/frequency cardinality, square positive-port S, exact `(nfreq,nport)` z0,
+in-range ports, finite nonnegative strictly increasing Hz, finite all S/z0,
+and nonzero z0 real parts.  Negative-real, complex, unequal, and
+frequency-dependent references are accepted algebraically.  An exact-zero
+selected sample returns an undefined-phase error; zero unselected entries and
+singular full S matrices remain valid.  The kernel extracts phase directly
+with `atan2`, avoiding magnitude/product/ratio overflow for finite huge or
+subnormal nonzero selected components.  Seconds conversion retains a
+large-aperture overflow-avoiding order and, for subnormal apertures, divides
+the phase increment by the aperture before dividing by `2*pi` when that
+intermediate quotient is finite; this avoids rounding `2*pi*df` in subnormal
+space while retaining a safe fallback when the intermediate quotient
+overflows.  A genuinely unrepresentable result is a structured arithmetic
+error; no NaN/Inf is returned.
+
+The Yellow alternatives were sample-aligned central/one-sided gradients,
+caller-selected windows, an Option-valued full N-port output, a public phase
+trace hierarchy, or leaving phase handling to callers.  The selected
+per-trace adjacent result keeps alignment and undefined/ambiguous boundaries
+explicit while remaining additive and reversible during 0.x.  It makes no
+new scikit-rf compatibility or stability/causality/propagation certificate.
+Rollback removes this method, diagnostics, tests, fixture, and docs without
+data migration; a future sample-aligned estimator may coexist under a
+separate explicit name.
+
+The canonical differential fixture is
+`tools/oracle/fixtures/group_delay_secant_power_three_port_branch_crossing.json`:
+seed `20260958`, seven nonuniform frequencies `[0,31,80,143,225,320,429]` MHz,
+an asymmetric three-port varying-amplitude S31 branch crossing, and complex
+frequency-dependent references.  Expected seconds come from pinned public
+scikit-rf `2.0.1` `Network.s_rad_unwrap` followed by explicit interval
+differencing; only output uses `rtol=1e-12`, `atol=1e-21`.
+
+The focused Touchstone workflow is
+`crates/rfkit-touchstone/examples/group_delay_secant_touchstone.rs` and
+`crates/rfkit-touchstone/tests/public_group_delay_workflow.rs`; it displays
+each S21 interval with frequency bounds and checks an analytical 2 ns line
+delay.
+
 ## Implemented public baseline
 
 The implemented shape is:
@@ -1004,6 +1081,12 @@ impl Network {
     pub fn two_port_stability_power(&self) -> Result<Vec<TwoPortStability>>;
 
     pub fn max_singular_value_power(&self) -> Result<Vec<f64>>;
+
+    pub fn group_delay_secant_power(
+        &self,
+        port_out: usize,
+        port_in: usize,
+    ) -> Result<Vec<f64>>;
 }
 ```
 
@@ -1039,6 +1122,12 @@ The exact internal delegation remains an implementation detail. The semantic dis
   returns an amplitude diagnostic rather than a passivity verdict and does
   not imply an all-frequency, internal-pole, stability, or scikit-rf API
   compatibility promise.
+- `group_delay_secant_power` reports shortest-principal-phase secants on
+  adjacent source-frequency intervals for one selected stored power-wave S
+  coordinate.  It is explicitly interval-aligned and seconds-valued, unlike
+  scikit-rf's sample-aligned `Network.group_delay`; it does not imply phase
+  unwrapping, undersampling detection, propagation speed, causality,
+  stability, or a broad scikit-rf API compatibility promise.
 
 Do not shorten these to broad names such as `connect`, `interpolate`, or `renormalize` until the library has enough supported semantics and evidence to justify what those names mean. Introducing such a default is at least Yellow and becomes Red when reasonable conventions conflict or the choice would freeze hidden policy.
 
