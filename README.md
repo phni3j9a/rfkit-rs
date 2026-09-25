@@ -864,6 +864,8 @@ Codex Planner → Green/Yellow decision → one loop:ready Issue → Codex Worke
 
 The default autonomous WIP is one implementation at a time. Higher timer frequency is used to reduce idle latency, not to manufacture additional Issues.
 
+To keep the provisional public surface from fragmenting into one method per evaluation strategy, the Planner audits the public surface after every 10 merged autonomous product PRs. It records each audit on the `Public surface audit log` Issue (#107) and ranks consolidation of the overlaps recorded in `docs/PUBLIC_API.md` alongside bounded RF capability.
+
 The loop does not require human pre-approval for every provisional public method. Green work follows established semantics; Yellow work records and independently reviews a bounded reversible design choice. Human approval is reserved for Red decisions such as stabilization, unresolved authoritative RF conflicts, unresolved provenance or licensing obligations, major difficult-to-reverse architecture changes, and release or publication. A blocked decision does not stop unrelated eligible work once the WIP slot is clear.
 
 ChatGPT is intentionally outside the normal scheduled execution path. It can act as a governor/auditor when the human owner asks whether recent autonomous work, including its Green/Yellow classifications, is producing meaningful RF capability, correctness, and leverage rather than activity for its own sake.

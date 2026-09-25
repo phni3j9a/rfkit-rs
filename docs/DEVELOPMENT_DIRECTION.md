@@ -42,6 +42,7 @@ A sequence of autonomous changes should make it possible to answer at least one 
 - What previously unsafe or ambiguous behavior is now objectively characterized or corrected?
 - What foundational primitive now unlocks multiple useful downstream operations?
 - What verified internal capability is now usable through an explicit public `Network` surface?
+- Which RF operation now has fewer public entry points to choose among, with no loss of domain or explicit semantics?
 - What important implementation or API decision can now be made safely because a concrete blocker was retired?
 
 A run may legitimately do nothing when no high-value bounded increment is available.
@@ -69,12 +70,15 @@ Do not autonomously:
 - add tests, fixtures, metadata, abstractions, or refactors mainly because they are easy to name;
 - repeatedly polish already-strong foundations while higher-value capability work is available;
 - continue adding private-only kernels merely to avoid making a justified public workflow usable;
+- add a coexisting public variant of an existing operation, differing only in evaluation strategy or a narrower domain, when generalizing the existing operation is feasible;
 - introduce vague public defaults or abstractions outside the autonomy envelope simply to make the next task convenient;
 - create speculative multi-Issue roadmaps that become stale before implementation.
 
 After two consecutive merged conformance-only increments, another conformance-only increment requires concrete repository evidence that it blocks correctness or safe capability growth.
 
 After several consecutive cleanup/refactor/documentation-only increments, the planner should explicitly ask whether the library's RF capability is actually advancing before selecting more of the same.
+
+The opposite failure also matters. Capability can advance while the public surface fragments into several variants per operation. `docs/LOOP_ENGINEERING.md` therefore makes public-surface consolidation reachable: the Planner audits the surface periodically, and consolidating a recorded overlap ranks with bounded RF capability.
 
 ## Human decision boundary
 

@@ -64,7 +64,7 @@ Read `docs/PUBLIC_API.md` before any work that adds or changes public RF-analysi
 
 That document records the implemented `Network` baseline and the autonomy envelope for extending the provisional public surface. Bounded Green and Yellow changes defined by `docs/LOOP_ENGINEERING.md` are authorized without per-method human approval. Red changes remain escalation boundaries.
 
-Keep wave, frequency-grid, units, tolerance, and other consequential semantics explicit. Do not accumulate private-only RF kernels merely to avoid making a justified public capability usable unless fresh repository evidence shows that a private prerequisite materially blocks correctness.
+Keep wave, frequency-grid, units, tolerance, and other consequential semantics explicit. Keep internal evaluation strategy (direct versus composed, matched-only versus general) out of public names once one verified path covers the domain; see the overlap inventory in `docs/PUBLIC_API.md`. Do not accumulate private-only RF kernels merely to avoid making a justified public capability usable unless fresh repository evidence shows that a private prerequisite materially blocks correctness.
 
 ## Third-party provenance
 
@@ -84,6 +84,7 @@ For the scheduled Codex Planner:
 - choose at most one next Issue by marginal value under `docs/DEVELOPMENT_DIRECTION.md`;
 - classify each newly dispatched Issue as Green or Yellow under `docs/LOOP_ENGINEERING.md`, include the required decision record, and escalate rather than dispatch Red work;
 - prefer bounded increments that close coherent end-to-end usability gaps over additional private-only capability unless a concrete prerequisite blocks them;
+- run the public-surface audit when it is due and apply the overlap rule and consolidation priority in `docs/LOOP_ENGINEERING.md`, so generalizing an existing public operation is not structurally more expensive than adding a variant;
 - treat a Red or otherwise blocked decision as local to its Issue and consider independent Green/Yellow work when the WIP slot is clear;
 - treat no-op as valid when useful bounded work is unavailable;
 - do not turn README scope, scikit-rf surface area, or `docs/CONFORMANCE.md` into a mechanical backlog;
@@ -125,4 +126,5 @@ The `loop:*` labels are dispatch state, not feature taxonomy. Keep design decisi
 - pre-generating a long autonomous roadmap when WIP=1 is configured
 - repeated conformance, cleanup, refactor, or documentation work without concrete marginal value
 - adding private-only RF capabilities primarily to avoid making a justified public workflow usable
+- adding a public variant that differs from an existing operation only by evaluation strategy or a narrower domain, without the overlap record required by `docs/LOOP_ENGINEERING.md`
 - measuring autonomous-development quality by commit, Issue, PR, or test-count velocity alone

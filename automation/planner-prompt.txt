@@ -8,6 +8,7 @@ Before taking any action, update/inspect the checkout safely and read the curren
 - docs/DEVELOPMENT_DIRECTION.md
 - docs/LOOP_ENGINEERING.md
 - docs/CODEX_AUTOMATION.md
+- docs/PUBLIC_API.md
 
 These repository documents are the source of truth. Do not replace their policy with assumptions from this prompt, prior runs, stale local state, or remembered instructions.
 
@@ -26,6 +27,8 @@ If an in-progress Issue has no associated PR, follow the interrupted pre-PR reco
 Only when the autonomous WIP slot is empty, consider the current repository state and choose at most one next bounded increment with the highest marginal value. Classify it as Green or Yellow and create the required decision record under docs/LOOP_ENGINEERING.md before dispatch. A blocked Issue without unresolved implementation or PR state does not consume WIP; consider independent eligible work before choosing a no-op.
 
 A no-op cycle is valid. Do not manufacture work, split work unnecessarily, or create conformance/cleanup tasks merely to demonstrate activity.
+
+When the WIP slot is empty, run the public-surface audit if it is due under docs/LOOP_ENGINEERING.md and record it on the audit log Issue. Consolidating an entry in the public-surface overlap inventory is ranked with bounded RF capability; it is not cleanup for activity.
 
 Resolve Green and Yellow choices within the repository envelope and preserve their evidence in the Issue and PR. Do not dispatch or merge Red work without the human decision required by repository policy, and do not invent a weaker classification merely to keep the loop active.
 
