@@ -21,6 +21,21 @@ calls only the new public API. The focused workflow explicitly inspects the
 loaded network, direct-renormalizes unequal references to a common positive-real
 reference, then crosses the existing v1 writer/readback boundary.
 
+Touchstone 2.0 Full S egress is covered as Issue #104's bounded complementary
+format boundary. Deterministic Rust tests exercise one-, two-, and larger-N
+asymmetric networks, unequal/non-50 real references, more than four ports,
+multiple samples, exact directive/order text, source immutability, malformed
+serde-created shapes, finite binary64 and signed-zero round trips, every
+frequency/S/reference domain rejection, later-sample single-port reference
+changes, and unchanged v1 heterogeneous-reference rejection. The v2 layout is
+one complete row-major record per frequency, with an explicit one-line
+`[Reference]` vector and `[Two-Port Data Order] 12_21` only for two ports.
+The focused `touchstone_v2_writer_workflow` parses unequal-reference v2 data,
+permutes physical ports, writes without renormalization, and independently
+checks reordered S/reference values after readback. The writer is still a
+subset: MA/DB, Lower/Upper, mixed-mode, noise, vendor metadata, complex or
+frequency-varying references, and filesystem I/O remain out of scope.
+
 ## Definition of "implemented"
 
 A numerical operation is considered implemented only when:
@@ -50,9 +65,12 @@ deterministic input text, port count, and mixed relative/absolute tolerance.
 Rust compares parsed frequency, S, and expanded real scalar `z0` values;
 writer tests independently assert option/ordering/continuation layout,
 full-domain validation, unchanged input, and exact writer→reader numeric
-round trips. A CI oracle check invokes the actual public Rust writer for a
-legacy two-port and a multiport continuation case, then feeds those emitted
-texts to scikit-rf and compares frequency, S, and z0. v1.0 record boundaries,
+round trips. A CI oracle check invokes the actual public Rust v1 writer for a
+legacy two-port and a multiport continuation case, and the actual public Rust
+v2 writer for asymmetric unequal-reference two- and five-port cases; it feeds
+all emitted texts to scikit-rf and compares frequency, S, and z0. The Python
+checker independently verifies v2 header/reference/order layout and has tests
+that detect S-pair ordering and reference-vector drift. v1.0 record boundaries,
 unsupported v2/noise/vendor extensions, and deliberate domain rejections are
 specified directly in Rust rather than inferred from permissive oracle
 behavior.

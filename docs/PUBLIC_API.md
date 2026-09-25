@@ -84,6 +84,59 @@ callers, or implementing all v2 sections. The selected separate function
 keeps version/matrix semantics visible, preserves v1 behavior, and completes
 an ingress-to-analysis workflow without a core-model or writer change.
 
+## Touchstone 2.0 Full S egress (Issue #104 Yellow)
+
+The `rfkit-touchstone` crate adds the additive pure in-memory function
+`write_touchstone_v2_0_s_full_ri_hz(network: &Network) -> Result<String>`.
+Its explicit name fixes the output subset: Touchstone 2.0, single-ended Full
+S, RI pairs, and hertz. The function borrows the canonical `Network`, validates
+the complete input before constructing output, and never performs filesystem
+I/O, sorting, interpolation, or implicit renormalization.
+
+The deterministic document order is `[Version] 2.0`, `# Hz S RI R
+<first-port-reference>`, `[Number of Ports]`, `[Two-Port Data Order] 12_21`
+for exactly two ports, `[Number of Frequencies]`, one physical-line
+`[Reference]` vector in physical port order, `[Matrix Format] Full`,
+`[Network Data]`, one complete frequency record per physical line, and
+`[End]`. Each record contains the frequency followed by all complex pairs in
+frequency-major, row-major `S[row,column]` order. Output is ASCII, uses LF
+line endings and one final newline, and uses Rust's shortest round-tripping
+binary64 decimal representation.
+
+The supported input domain is a nonempty, finite, non-negative, strictly
+increasing hertz axis; finite S components in a positive square
+`(nfreq,nport,nport)` array; and a `(nfreq,nport)` reference array. Every
+reference must be finite, strictly positive, and real; `+0.0` and `-0.0`
+imaginary components are both treated as numerically zero. References may be
+unequal between physical ports, but each port's real value must be exactly
+constant across all samples. No tolerance, averaging, first-sample
+substitution, common-50-ohm assumption, sorting, clipping, or implicit
+renormalization is applied. The operation-specific v2 writer errors retain
+sample/port or row/column context, including a later-sample change to one
+port's reference; malformed serde-created shapes are rejected before any
+unchecked indexing or output construction.
+
+This writer intentionally excludes MA/DB, Lower/Upper or mixed-mode matrices,
+noise, vendor extensions, metadata, complex references, and frequency-varying
+references. The existing v1 writer remains unchanged and still requires one
+common finite positive-real reference across every sample and port. Callers
+with unsupported references must choose an explicit core transformation (for
+example direct renormalization) before v1 export, or use this v2 function when
+its bounded contract applies.
+
+The Yellow alternatives were widening or auto-detecting the v1 writer,
+requiring all callers to renormalize before export, adding a universal
+options/metadata abstraction, or emitting vendor-specific complex or
+frequency-varying references. The selected additive API preserves supported
+coordinates, keeps version/matrix/encoding semantics visible, and is
+reversible during the provisional 0.x period by removing only the writer,
+tests, oracle calls, example, and documentation; it changes no core storage or
+existing v1 behavior. The focused executable
+`crates/rfkit-touchstone/examples/touchstone_v2_writer_workflow.rs` parses an
+unequal-reference v2 input, permutes physical ports, writes without
+renormalization, and independently checks the reordered S/reference values on
+readback.
+
 The Yellow parameter-ingress slice adds three associated constructors while
 keeping this owned model:
 
@@ -117,9 +170,11 @@ exactly. The constructors require a nonempty frequency axis and exact
 first-axis length agreement, but treat samples as pointwise labels: they do
 not require finite/nonnegative/sorted/unique frequencies, and do not sort,
 resample, broadcast, default to 50 ohms, regularize, use a pseudoinverse,
-apply a cutoff, fall back, or take an identity shortcut. The Touchstone writer
-retains its separate finite/nonnegative/strictly-increasing/common-positive-
-reference contract.
+apply a cutoff, fall back, or take an identity shortcut. Touchstone export is
+deliberately separate: the v1 writer retains its finite/nonnegative/strictly-
+increasing/common-positive-reference contract, while the additive v2 writer
+allows unequal real references that are exactly constant per port across the
+frequency axis.
 
 `from_z_power` delegates to the existing `Z→S` power-wave kernel. The
 explicitly named `from_y_via_z_power` delegates to the existing composed

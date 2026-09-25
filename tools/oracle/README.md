@@ -214,14 +214,18 @@ python check_touchstone_writer.py
 ```
 
 The script invokes `cargo run --package rfkit-touchstone --example
-touchstone_writer_oracle` for deterministic legacy two-port and five-port
-continuation cases. It writes the emitted ASCII to temporary `.s2p`/`.s5p`
-files, asks scikit-rf 2.0.1 to parse those files, and compares frequency, S,
-and z0 with the independently reproduced construction recipe using
-`rtol=1e-12`, `atol=1e-12`. This deliberately crosses the Rust/Python parser
-boundary; a Rust writer→Rust reader round trip alone is not sufficient
-interoperability evidence. CI runs this check after the canonical fixture
-checker.
+touchstone_writer_oracle` for deterministic common-reference v1 two-/five-port
+cases and unequal-reference v2 two-/five-port cases. It writes the emitted
+ASCII to temporary `.s2p`/`.s5p` files, asks scikit-rf 2.0.1 to parse those
+files, and compares frequency and references exactly for the constructed
+values plus S with `rtol=1e-12`, `atol=1e-12` against the independently
+reproduced asymmetric recipe. The checker also validates v2's explicit
+directive/reference layout, one complete row-major record line per frequency,
+and natural `12_21` two-port order; Python unit tests deliberately mutate S
+pair ordering and the reference vector to prove those drifts fail. This
+deliberately crosses the Rust/Python parser boundary; a Rust writer→Rust
+reader round trip alone is not sufficient interoperability evidence. CI runs
+this check after the canonical fixture checker and runs the checker unit tests.
 
 ## Generate and verify
 
