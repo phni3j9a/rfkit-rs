@@ -24,9 +24,9 @@ This project does **not** aim to blindly transliterate Python into Rust. scikit-
 The first vertical slice should make these excellent before expanding broadly:
 
 - Frequency and Network data model
-- Touchstone ingress (the current public slice is an explicitly limited
-  Touchstone 1.0 single-ended S-parameter reader; broader format support is
-  future work)
+- Touchstone ingress/egress (the current public slice is explicitly limited to
+  Touchstone 1.0 single-ended S ingress plus bounded Touchstone 2.0 Full S
+  ingress/egress; broader format support is future work)
 - S/Z/Y conversions
 - renormalization including complex and per-port Z0
 - interpolation
@@ -132,7 +132,33 @@ four parameter pairs per physical line and continuation lines for wider rows.
 Rust's shortest binary64 representation is used so the existing reader
 reconstructs finite values numerically, including extreme and subnormal
 values. MA/DB, Touchstone v2.x, metadata, noise, mixed-mode, and filesystem
-I/O remain outside this API.
+I/O remain outside this v1 writer API; the bounded v2 writer is documented
+below.
+
+Touchstone 2.0 Full S/RI/Hz export is available through a separate, explicit
+writer when preserving unequal real per-port references matters:
+
+```rust
+use rfkit_touchstone::{
+    parse_touchstone_v2_0_s_full, write_touchstone_v2_0_s_full_ri_hz,
+};
+
+fn write_v2(input: &str) -> rfkit_touchstone::Result<String> {
+    let source = parse_touchstone_v2_0_s_full(input)?;
+    write_touchstone_v2_0_s_full_ri_hz(&source)
+}
+```
+
+The v2 writer emits deterministic ASCII/LF text with `[Version] 2.0`, an
+explicit per-port `[Reference]` vector, `[Matrix Format] Full`, and one
+complete row-major record line per frequency. It accepts only finite,
+strictly positive real references that are exactly constant for each physical
+port across the sweep; different ports may use different values. It does not
+renormalize, sort, interpolate, or infer metadata. MA/DB output, triangular or
+mixed-mode matrices, noise, vendor extensions, complex or frequency-varying
+references, and filesystem I/O remain outside this bounded writer. The v1
+writer above intentionally retains its stricter one-common-reference
+contract.
 
 The ingress, existing public transformation, and egress APIs compose directly:
 
@@ -261,10 +287,19 @@ option-line rule, later `#` lines are ignored after the first option line. This
 function is pure in-memory; it does not
 inspect filenames or perform filesystem I/O. To use the existing v1 writer,
 explicitly direct-renormalize the parsed network to one common positive-real
-reference first. The focused executable demonstrates that workflow:
+reference first. To preserve unequal real references, call the explicit v2
+writer instead. The focused v2 ingress-to-v1 executable demonstrates the
+renormalization workflow:
 
 ```text
 cargo run -p rfkit-touchstone --example touchstone_v2_full_workflow
+```
+
+The direct v2 preservation workflow (parse, permute physical ports, write and
+read without renormalization) is executable with:
+
+```text
+cargo run -p rfkit-touchstone --example touchstone_v2_writer_workflow
 ```
 
 `renormalize_direct_power` is the explicit direct Kurokawa wave-change path
@@ -434,12 +469,13 @@ out-of-range indices, and duplicates return structured errors. This is a
 provisional additive 0.x operation, so its name and signature are not a 1.0
 stability promise.
 
-The Touchstone writer remains a separate format boundary. It accepts only one
-finite, strictly positive, real reference scalar shared by every frequency and
-port. Touchstone v1 ingress therefore starts with a common scalar, as in the
-example above; a network with per-port or complex references must be explicitly
-renormalized to a writer-compatible common reference before export. Port
-permutation itself does not relax or silently satisfy that writer contract.
+The Touchstone writers remain separate format boundaries. The v1 writer accepts
+only one finite, strictly positive, real reference scalar shared by every
+frequency and port. The v2 writer accepts unequal finite positive-real
+references, but requires each physical port's value to remain exactly constant
+across frequency. Complex or frequency-varying references still require an
+explicit caller-selected transformation before either writer; port permutation
+does not silently renormalize or otherwise satisfy a writer contract.
 
 Run the complete deterministic workflow example with:
 
@@ -849,7 +885,7 @@ this is not a general scikit-rf compatibility claim.
 
 ```text
 crates/rfkit-core/       Rust RF numerical core
-crates/rfkit-touchstone/ pure Touchstone v1.0 ingress/egress and bounded v2.0 Full S ingress
+crates/rfkit-touchstone/ pure Touchstone v1.0 ingress/egress and bounded v2.0 Full S ingress/egress
 tools/oracle/        scikit-rf reference/differential-test tools
 docs/                architecture, development, conformance and provenance policy
 ```

@@ -18,6 +18,13 @@
 //! exact common finite positive real reference scalar, and leaves filesystem
 //! and metadata policy to callers.
 //!
+//! [`write_touchstone_v2_0_s_full_ri_hz`] is the additive v2.0 counterpart for
+//! the bounded export subset.  It preserves one finite, strictly positive
+//! real reference per physical port (constant across the frequency axis),
+//! emits a Full matrix in row-major order, and keeps each frequency on one
+//! physical line.  It does not widen the v1 writer's common-reference
+//! contract.
+//!
 //! Comment handling has one deliberate vendor-extension boundary: matching is
 //! case-insensitive; comments beginning with `Gamma` or `Port Impedance` (or
 //! `Port Impedance0`), or containing `Terminal data exported` or `Modal data
@@ -342,6 +349,83 @@ pub enum Error {
         actual: Complex64,
     },
 
+    /// A v2 writer input has a malformed frequency-major square S shape.
+    #[error(
+        "Touchstone 2.0 writer received invalid S-parameter shape {shape:?} for frequency length {frequency_length}"
+    )]
+    WriterV2InvalidSShape {
+        shape: Vec<usize>,
+        frequency_length: usize,
+    },
+
+    /// A v2 writer input has a malformed frequency-major reference shape.
+    #[error(
+        "Touchstone 2.0 writer received invalid reference-impedance shape {shape:?}; expected ({frequency_length}, {nports})"
+    )]
+    WriterV2InvalidZ0Shape {
+        shape: Vec<usize>,
+        frequency_length: usize,
+        nports: usize,
+    },
+
+    /// The v2 writer cannot safely represent the derived matrix/data size.
+    #[error(
+        "Touchstone 2.0 writer size arithmetic overflow for {quantity} with {frequency_length} frequency samples and {nports} ports"
+    )]
+    WriterV2SizeOverflow {
+        frequency_length: usize,
+        nports: usize,
+        quantity: SizeQuantity,
+    },
+
+    /// A v2 writer frequency is outside the finite, non-negative domain.
+    #[error(
+        "Touchstone 2.0 writer frequency at index {index} is not finite and non-negative: {value:?}"
+    )]
+    WriterV2InvalidFrequency { index: usize, value: f64 },
+
+    /// v2 writer frequencies must be strictly increasing.
+    #[error(
+        "Touchstone 2.0 writer frequencies must be strictly increasing at index {index}: previous={previous:?}, current={current:?}"
+    )]
+    WriterV2FrequencyNotStrictlyIncreasing {
+        index: usize,
+        previous: f64,
+        current: f64,
+    },
+
+    /// A v2 scattering component cannot be represented by finite RI text.
+    #[error(
+        "Touchstone 2.0 writer received a non-finite S-parameter at frequency {frequency}, row {row}, column {column}: {value:?}"
+    )]
+    WriterV2NonFiniteS {
+        frequency: usize,
+        row: usize,
+        column: usize,
+        value: Complex64,
+    },
+
+    /// A v2 reference is not finite, strictly positive, and real.
+    #[error(
+        "Touchstone 2.0 writer received an invalid reference impedance at frequency {frequency}, port {port}: {value:?}; expected a finite, strictly positive real value"
+    )]
+    WriterV2InvalidZ0 {
+        frequency: usize,
+        port: usize,
+        value: Complex64,
+    },
+
+    /// A single port's reference changed across frequency samples.
+    #[error(
+        "Touchstone 2.0 writer reference impedance varies across frequency for port {port} at frequency {frequency}: expected {expected:?}, got {actual:?}; each port must be exactly constant across samples"
+    )]
+    WriterV2MismatchedZ0 {
+        frequency: usize,
+        port: usize,
+        expected: f64,
+        actual: Complex64,
+    },
+
     /// A Touchstone 2.0 keyword or feature is outside the deliberately small
     /// single-ended, full-matrix S subset exposed by this crate.
     #[error("unsupported Touchstone 2.0 subset feature on line {line}: {feature}")]
@@ -469,6 +553,29 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// metadata, noise, mixed-mode, or filesystem data.
 pub fn write_touchstone_v1_0_s_ri_hz(network: &Network) -> Result<String> {
     writer::write_touchstone_v1_0_s_ri_hz(network)
+}
+
+/// Serialize a network as deterministic Touchstone 2.0 Full-matrix S/RI/Hz
+/// text for the bounded single-ended export subset.
+///
+/// The output always contains `[Version] 2.0`, `# Hz S RI R <first-port>`
+/// and explicit `[Number of Ports]`, `[Number of Frequencies]`, `[Reference]`,
+/// `[Matrix Format] Full`, `[Network Data]`, and `[End]` directives.  For two
+/// ports it also contains `[Two-Port Data Order] 12_21`.  Every frequency is
+/// emitted on one physical line followed by all S pairs in frequency-major,
+/// row-major order.  The output is ASCII with LF endings and a final newline.
+///
+/// The writer accepts a nonempty, finite, non-negative, strictly increasing
+/// frequency axis; finite S components; and a `(nfreq, nport)` reference
+/// array whose values are finite, strictly positive, real numbers.  Each
+/// physical port may use a different reference, but that port's value must be
+/// exactly constant over all frequency samples.  The function borrows without
+/// mutation and never sorts, interpolates, renormalizes, or performs file I/O.
+/// It intentionally does not emit MA/DB, triangular matrices, mixed-mode or
+/// noise data, vendor extensions, metadata, or complex/frequency-varying
+/// references.
+pub fn write_touchstone_v2_0_s_full_ri_hz(network: &Network) -> Result<String> {
+    writer::write_touchstone_v2_0_s_full_ri_hz(network)
 }
 
 /// Parse the deliberately bounded Touchstone 2.0 single-ended Full-matrix
