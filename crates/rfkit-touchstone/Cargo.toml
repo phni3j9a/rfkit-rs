@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Touchstone 1.0 S-parameter text parser and writer for rfkit-core"
+description = "Touchstone v1.0 and bounded v2.0 S-parameter text parser plus v1 writer for rfkit-core"
 keywords = ["rf", "microwave", "touchstone", "s-parameters"]
 categories = ["science", "parser-implementations"]
 

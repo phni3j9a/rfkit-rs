@@ -718,6 +718,17 @@ TOUCHSTONE_CASE_SPECS = {
     },
 }
 
+TOUCHSTONE_V2_CASE_SPECS = {
+    "touchstone_v2_0_s_full_three_port": {
+        "operation": "touchstone_v2_0_s_full_parse",
+        "ports": 3,
+        "frequencies": 2,
+        "output": "s",
+        "input_recipe": oracle.TOUCHSTONE_V2_INPUT_RECIPE,
+        "references": [37.0, 61.0, 83.0],
+    },
+}
+
 
 TERMINATION_CASE_SPECS = {
     "power_wave_terminate_port_impedance_five_port_complex_z0": {
@@ -1195,6 +1206,93 @@ class TouchstoneRegistrationAndCheckerTests(unittest.TestCase):
             )
 
 
+class TouchstoneV2RegistrationAndCheckerTests(unittest.TestCase):
+    """Protect the public Touchstone 2.0 Full-matrix parser fixture contract."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.np, cls.skrf = oracle._load_dependencies()
+        cls.fixture_path = oracle.TOUCHSTONE_V2_FIXTURE
+        cls.fixture = oracle._read_canonical_json(cls.fixture_path)
+
+    def test_case_is_registered_with_v2_reference_contract(self) -> None:
+        case_id = next(iter(TOUCHSTONE_V2_CASE_SPECS))
+        spec = TOUCHSTONE_V2_CASE_SPECS[case_id]
+        registered = {case.case_id: case for case in oracle._CASES}
+        self.assertIn(case_id, registered)
+        case = registered[case_id]
+        self.assertEqual(case.path, oracle.TOUCHSTONE_V2_FIXTURE)
+        self.assertEqual(case.comparison, "numeric_output")
+        self.assertEqual(case.numeric_output_key, spec["output"])
+        metadata = self.fixture["metadata"]
+        self.assertEqual(metadata["case_id"], case_id)
+        self.assertEqual(metadata["operation"], spec["operation"])
+        self.assertEqual(metadata["port_count"], spec["ports"])
+        self.assertEqual(metadata["input_recipe"], spec["input_recipe"])
+        self.assertEqual(metadata["scikit_rf_version"], oracle.EXPECTED_SCIKIT_RF_VERSION)
+        self.assertEqual(metadata["scikit_rf_commit"], oracle.EXPECTED_SCIKIT_RF_COMMIT)
+        self.assertEqual(metadata["reference_impedance"]["per_port"], True)
+
+    def test_builder_uses_public_v2_touchstone_parser_and_preserves_contract(self) -> None:
+        case_id = next(iter(TOUCHSTONE_V2_CASE_SPECS))
+        case = next(case for case in oracle._CASES if case.case_id == case_id)
+        regenerated = case.builder(self.np, self.skrf)
+        self.assertEqual(
+            regenerated["metadata"]["input_recipe"],
+            self.fixture["metadata"]["input_recipe"],
+        )
+        self.assertEqual(
+            regenerated["data"]["touchstone_text"],
+            self.fixture["data"]["touchstone_text"],
+        )
+        self.assertEqual(regenerated["data"]["nports"], self.fixture["data"]["nports"])
+        self.assertEqual(
+            regenerated["data"]["frequency_hz"],
+            self.fixture["data"]["frequency_hz"],
+        )
+        self.assertEqual(regenerated["data"]["z0_ohm"], self.fixture["data"]["z0_ohm"])
+
+    def test_checker_tolerates_only_v2_parser_outputs(self) -> None:
+        case_id = next(iter(TOUCHSTONE_V2_CASE_SPECS))
+        case = next(case for case in oracle._CASES if case.case_id == case_id)
+        adjusted = copy.deepcopy(self.fixture)
+        adjusted["data"]["s"][0][0][0]["real"] += 1e-13
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / self.fixture_path.name
+            path.write_bytes(oracle._canonical_bytes(adjusted))
+            self.assertEqual(
+                oracle._check_numeric_fixture(path, self.fixture, case.numeric_output_key),
+                0,
+            )
+
+        exact_drift_cases = []
+        drifted_z0 = copy.deepcopy(self.fixture)
+        drifted_z0["data"]["z0_ohm"][0][1]["real"] += 1e-13
+        exact_drift_cases.append(drifted_z0)
+        drifted_frequency = copy.deepcopy(self.fixture)
+        drifted_frequency["data"]["frequency_hz"][0] += 1.0
+        exact_drift_cases.append(drifted_frequency)
+        drifted_text = copy.deepcopy(self.fixture)
+        drifted_text["data"]["touchstone_text"] += "! drift\n"
+        exact_drift_cases.append(drifted_text)
+        drifted_metadata = copy.deepcopy(self.fixture)
+        drifted_metadata["metadata"]["operation"] = "changed"
+        exact_drift_cases.append(drifted_metadata)
+
+        for drifted in exact_drift_cases:
+            with tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / self.fixture_path.name
+                path.write_bytes(oracle._canonical_bytes(drifted))
+                self.assertEqual(
+                    oracle._check_numeric_fixture(
+                        path,
+                        self.fixture,
+                        case.numeric_output_key,
+                    ),
+                    1,
+                )
+
+
 class InterpolationRegistrationAndCheckerTests(unittest.TestCase):
     """Protect the direct interpolation case and both-output checker path."""
 
@@ -1615,6 +1713,7 @@ class MatrixRegistrationAndCheckerTests(unittest.TestCase):
             + len(INNER_CONNECT_CASE_SPECS)
             + len(INNER_CONNECT_DIRECT_CASE_SPECS)
             + len(TOUCHSTONE_CASE_SPECS)
+            + len(TOUCHSTONE_V2_CASE_SPECS)
             + len(TERMINATION_CASE_SPECS)
             + len(TWO_PORT_STABILITY_CASE_SPECS)
             + len(MAX_SINGULAR_VALUE_POWER_CASE_SPECS)

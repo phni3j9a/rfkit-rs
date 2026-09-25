@@ -1,5 +1,5 @@
-//! Pure in-memory parsing and deterministic writing for a deliberately small
-//! Touchstone 1.0 S subset.
+//! Pure in-memory parsing and deterministic writing for deliberately bounded
+//! Touchstone S subsets.
 //!
 //! [`parse_touchstone_v1_0_s`] accepts Touchstone text and an explicit positive
 //! port count.  It returns the canonical frequency-major
@@ -28,6 +28,14 @@
 //! ...` port name comments, remain ignorable. This recognizes the documented
 //! HFSS/Ansys semantic markers only; universal vendor-format recognition is
 //! outside this crate's scope.
+//!
+//! [`parse_touchstone_v2_0_s_full`] is the separate Touchstone 2.0 entrypoint.
+//! It accepts only single-ended Full-matrix S data, obtains the port and
+//! frequency counts from the document, preserves an optional real-positive
+//! per-port `[Reference]` vector, and requires complete records plus `[End]`.
+//! Lower/Upper, mixed-mode, noise, information, non-S, unknown-keyword,
+//! complex-reference, and malformed-count features are rejected explicitly;
+//! no filename inference or filesystem I/O is performed.
 //!
 //! # Example
 //!
@@ -79,10 +87,11 @@ use num_complex::Complex64;
 use rfkit_core::{Frequency, Network};
 use thiserror::Error;
 
+mod v2;
 mod writer;
 
-/// The crate-wide public error boundary for Touchstone v1.0 S parsing and
-/// deterministic S/RI/Hz writing.
+/// The crate-wide public error boundary for bounded Touchstone v1.0/v2.0 S
+/// parsing and deterministic v1 S/RI/Hz writing.
 ///
 /// The enum is non-exhaustive so future format-specific diagnostics can be
 /// added without freezing the provisional 0.x API.  Errors identify the
@@ -332,6 +341,41 @@ pub enum Error {
         expected: f64,
         actual: Complex64,
     },
+
+    /// A Touchstone 2.0 keyword or feature is outside the deliberately small
+    /// single-ended, full-matrix S subset exposed by this crate.
+    #[error("unsupported Touchstone 2.0 subset feature on line {line}: {feature}")]
+    V2Unsupported { line: usize, feature: String },
+
+    /// A Touchstone 2.0 directive, section, or record has an invalid
+    /// placement or shape.  The v2 parser keeps this separate from numeric
+    /// conversion failures so callers can distinguish a bad document from a
+    /// bad value.
+    #[error("malformed Touchstone 2.0 structure on line {line}: {message}")]
+    V2Structural { line: usize, message: String },
+
+    /// A Touchstone 2.0 declared count differs from the number of values or
+    /// records that the document actually contains.
+    #[error(
+        "Touchstone 2.0 count mismatch on line {line} for {what}: expected {expected}, got {actual}"
+    )]
+    V2Count {
+        line: usize,
+        what: String,
+        expected: usize,
+        actual: usize,
+    },
+
+    /// A Touchstone 2.0 declaration or value could not be represented safely
+    /// using the platform's checked dimensions.
+    #[error(
+        "Touchstone 2.0 size arithmetic overflow on line {line} while computing {quantity}: {detail}"
+    )]
+    V2SizeOverflow {
+        line: usize,
+        quantity: SizeQuantity,
+        detail: String,
+    },
 }
 
 /// Quantity used to identify checked port-count arithmetic in [`Error`].
@@ -425,6 +469,25 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// metadata, noise, mixed-mode, or filesystem data.
 pub fn write_touchstone_v1_0_s_ri_hz(network: &Network) -> Result<String> {
     writer::write_touchstone_v1_0_s_ri_hz(network)
+}
+
+/// Parse the deliberately bounded Touchstone 2.0 single-ended Full-matrix
+/// S-parameter subset into the canonical frequency-major [`Network`].
+///
+/// Unlike the v1 entrypoint, the port count and sample count come from the
+/// required v2 directives.  The parser accepts RI, MA, and DB data in the
+/// four standard frequency units, both explicit two-port orders, and an
+/// optional real-positive per-port `[Reference]` vector (including
+/// continuation lines).  It requires complete Full records, `[Network Data]`,
+/// the declared `[Number of Frequencies]`, and a terminating `[End]`.
+///
+/// Lower/Upper matrices, mixed-mode, noise, information blocks, non-S
+/// parameters, unknown keywords, complex references, and vendor semantic
+/// comments are rejected explicitly.  Parsing is pure and in-memory; no file
+/// name, filesystem, automatic version detection, sorting, interpolation,
+/// renormalization, or alternate wave convention is applied.
+pub fn parse_touchstone_v2_0_s_full(input: &str) -> Result<Network> {
+    v2::parse_touchstone_v2_0_s_full(input)
 }
 
 #[derive(Clone, Copy)]

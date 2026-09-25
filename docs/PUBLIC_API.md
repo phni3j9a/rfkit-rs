@@ -35,6 +35,55 @@ Keep the existing owned, frequency-major core model as the current baseline:
 - ports use zero-based `usize` indices initially;
 - `ndarray` remains part of the initial public data boundary because it is already exposed by construction and accessors.
 
+## Touchstone 2.0 ingress boundary (Issue #102 Yellow)
+
+The `rfkit-touchstone` crate exposes the additive pure in-memory function
+`parse_touchstone_v2_0_s_full(input: &str) -> Result<rfkit_core::Network>`.
+Its name is deliberately explicit: it is a Touchstone 2.0, single-ended,
+Full-matrix S subset and does not widen or auto-detect the existing v1 reader.
+The file supplies the positive port count and declared frequency count through
+`[Number of Ports]` and `[Number of Frequencies]`; `[Version] 2.0`, an option
+line, `[Network Data]`, and `[End]` are required. Two-port files must include
+`[Two-Port Data Order]` with either `21_12` or `12_21`.
+
+RI, MA, and DB pairs, the four frequency units, complete arbitrary physical
+line continuations, and a real-positive per-port `[Reference]` vector are
+supported. `[Reference]` may continue over lines and overrides the option-line
+`R` value; absent it, the option-line resistance is expanded over every
+frequency and port. Parsed S is dimensionless, references are stored in ohms,
+and frequency/S/reference coordinate order and values are preserved exactly
+apart from the documented finite scalar decoding. Each frequency starts a
+physical line, and the declared record count must match exactly.
+
+The subset rejects Lower/Upper matrices, non-S parameters, mixed-mode, noise,
+information blocks, unknown/other-version keywords, complex or non-positive
+references, duplicate/misplaced bracket directives, malformed or non-finite
+numbers, incomplete/surplus records, missing `[End]`, trailing content, and
+recognized HFSS/Ansys semantic comments. Later `#` option lines follow the
+Touchstone rule and are ignored after the first option line. Errors distinguish unsupported subset features,
+structural/order/count failures, numerical decoding failures, and checked size
+arithmetic. The parser validates actual document content before constructing
+arrays from declared dimensions and performs no filename inference, I/O,
+sorting, interpolation, repair, or renormalization. The existing v1 writer
+still requires one common finite positive-real reference; callers must invoke
+an explicit core renormalization operation before exporting v2 data through it.
+The additive 0.x boundary is provisional, reversible, and makes no general
+Touchstone or scikit-rf compatibility promise.
+
+The canonical pinned parser fixture is
+`tools/oracle/fixtures/touchstone_v2_0_s_full_three_port.json`, generated from
+an independently authored text through public scikit-rf `2.0.1` at commit
+`bd651e923cac6020de49a096e1d7e9b5f949f884` with NumPy `2.5.1`. Only complex S
+uses the recorded `rtol=1e-12`, `atol=1e-12` policy; frequency, references,
+text, dimensions, and metadata remain exact contract fields. The executable
+workflow is `crates/rfkit-touchstone/examples/touchstone_v2_full_workflow.rs`.
+
+The Yellow alternatives were widening or auto-detecting the v1 entrypoint,
+introducing a universal options/metadata reader, preprocessing files for
+callers, or implementing all v2 sections. The selected separate function
+keeps version/matrix semantics visible, preserves v1 behavior, and completes
+an ingress-to-analysis workflow without a core-model or writer change.
+
 The Yellow parameter-ingress slice adds three associated constructors while
 keeping this owned model:
 

@@ -1,0 +1,169 @@
+{
+  "data": {
+    "frequency_hz": [
+      10000000.0,
+      20000000.0
+    ],
+    "nports": 3,
+    "s": [
+      [
+        [
+          {
+            "imag": 0.2,
+            "real": 0.1
+          },
+          {
+            "imag": -0.4,
+            "real": 0.3
+          },
+          {
+            "imag": 0.6,
+            "real": 0.5
+          }
+        ],
+        [
+          {
+            "imag": -0.8,
+            "real": 0.7
+          },
+          {
+            "imag": 1.0,
+            "real": 0.9
+          },
+          {
+            "imag": -1.2,
+            "real": 1.1
+          }
+        ],
+        [
+          {
+            "imag": 1.4,
+            "real": 1.3
+          },
+          {
+            "imag": -1.6,
+            "real": 1.5
+          },
+          {
+            "imag": 1.8,
+            "real": 1.7
+          }
+        ]
+      ],
+      [
+        [
+          {
+            "imag": 0.21,
+            "real": -0.11
+          },
+          {
+            "imag": -0.41,
+            "real": -0.31
+          },
+          {
+            "imag": 0.61,
+            "real": -0.51
+          }
+        ],
+        [
+          {
+            "imag": 0.81,
+            "real": 0.71
+          },
+          {
+            "imag": 1.01,
+            "real": -0.91
+          },
+          {
+            "imag": -1.21,
+            "real": -1.11
+          }
+        ],
+        [
+          {
+            "imag": -1.41,
+            "real": 1.31
+          },
+          {
+            "imag": 1.61,
+            "real": 1.51
+          },
+          {
+            "imag": 1.81,
+            "real": -1.71
+          }
+        ]
+      ]
+    ],
+    "touchstone_text": "! Independently authored Touchstone v2.0 Full S oracle input\n[Version] 2.0\n# MHz S RI R 17\n[Number of Ports] 3\n[Number of Frequencies] 2\n[Reference] 37 61\n83\n[Matrix Format] Full\n[Network Data]\n10 0.10 0.20 0.30 -0.40 0.50 0.60 0.70 -0.80 0.90 1.00\n1.10 -1.20 1.30 1.40 1.50 -1.60 1.70 1.80\n20 -0.11 0.21 -0.31 -0.41 -0.51 0.61 0.71 0.81 -0.91 1.01 -1.11 -1.21\n1.31 -1.41 1.51 1.61 -1.71 1.81\n[End]\n",
+    "z0_ohm": [
+      [
+        {
+          "imag": 0.0,
+          "real": 37.0
+        },
+        {
+          "imag": 0.0,
+          "real": 61.0
+        },
+        {
+          "imag": 0.0,
+          "real": 83.0
+        }
+      ],
+      [
+        {
+          "imag": 0.0,
+          "real": 37.0
+        },
+        {
+          "imag": 0.0,
+          "real": 61.0
+        },
+        {
+          "imag": 0.0,
+          "real": 83.0
+        }
+      ]
+    ]
+  },
+  "metadata": {
+    "case_id": "touchstone_v2_0_s_full_three_port",
+    "input_recipe": "literal TOUCHSTONE_V2_TEXT below: two MHz Full-matrix RI records, three asymmetric per-port references [37,61,83] ohm, a continued [Reference] vector, a first data line containing five parameter pairs, and arbitrary Full-record continuations",
+    "numpy_version": "2.5.1",
+    "operation": "touchstone_v2_0_s_full_parse",
+    "port_count": 3,
+    "reference_impedance": {
+      "complex": false,
+      "frequency_dependent": false,
+      "per_port": true,
+      "unit": "ohm"
+    },
+    "schema": "rfkit-rs.oracle.fixture",
+    "schema_version": 1,
+    "scikit_rf_commit": "bd651e923cac6020de49a096e1d7e9b5f949f884",
+    "scikit_rf_version": "2.0.1",
+    "shape": {
+      "frequency": [
+        2
+      ],
+      "s": [
+        2,
+        3,
+        3
+      ],
+      "z0": [
+        2,
+        3
+      ]
+    },
+    "tolerance_policy": {
+      "atol": 1e-12,
+      "comparison": "abs(actual-expected) <= atol + rtol*abs(expected)",
+      "justification": "Strict binary64 tolerance for an independently authored Touchstone 2.0 single-ended Full-matrix RI input. The pinned public scikit-rf parser supplies expected frequency/S/z0 values; the version, directive order, text, references, and shape remain exact contract fields.",
+      "regeneration": "canonical UTF-8 JSON serialization; parsed S is checked with the recorded numeric tolerance while frequency and references remain exact",
+      "rtol": 1e-12
+    },
+    "wave_definition": "power"
+  }
+}
