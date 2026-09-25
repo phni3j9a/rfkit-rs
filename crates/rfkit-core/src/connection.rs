@@ -24,18 +24,24 @@
 //! matched junction exchange matrix is `P = [[0, 1], [1, 0]]` and elimination
 //! uses `S_out = S_EE + S_EI (I - P S_II)^-1 P S_IE`.
 //!
-//! A denominator is singular only when the computed complex value is exactly
-//! zero.  No near-singular cutoff, regularization, or mismatch renormalization
-//! is part of this kernel.
+//! The matched implementation evaluates this two-by-two Schur expression with
+//! exact dyadic complex arithmetic: finite binary64 components become
+//! `BigRational` values, and the determinant/adjugate numerator remains exact
+//! until the final output component is converted back to binary64. A
+//! denominator is singular only when its exact complex value is zero. No
+//! binary64 inverse or internal RHS, pivot threshold, alternate evaluation
+//! path, near-singular cutoff, regularization, retry, or mismatch
+//! renormalization is part of this kernel.
 
 use ndarray::{Array2, Array3};
 use num_complex::Complex64;
+use num_rational::BigRational;
+use num_traits::{One, ToPrimitive, Zero};
 use thiserror::Error;
 
 use crate::linalg;
 
 const ZERO: Complex64 = Complex64::new(0.0, 0.0);
-const ONE: Complex64 = Complex64::new(1.0, 0.0);
 
 /// Identifies which input network supplied a failing value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -253,74 +259,14 @@ pub(crate) fn inner_connect_matched(
             output_z0[[frequency_index, output_port]] = z0[[frequency_index, input_port]];
         }
 
-        // Construct A = I - P S_II and B = P, then solve A X = B.  The
-        // row-major layout is the same layout required by the shared N-port
-        // solver.  S_II uses internal order [port_k, port_l].
-        let s_kk = s[[frequency_index, port_k, port_k]];
-        let s_kl = s[[frequency_index, port_k, port_l]];
-        let s_lk = s[[frequency_index, port_l, port_k]];
-        let s_ll = s[[frequency_index, port_l, port_l]];
-        let mut a = vec![ZERO; 4];
-        a[0] = checked_sub(ONE, s_lk, frequency_index, 0, 0)?;
-        a[1] = checked_neg(s_ll, frequency_index, 0, 1)?;
-        a[2] = checked_neg(s_kk, frequency_index, 1, 0)?;
-        a[3] = checked_sub(ONE, s_kl, frequency_index, 1, 1)?;
-        let mut x = vec![ZERO, ONE, ONE, ZERO];
-        match linalg::solve_multiple_rhs(&mut a, &mut x, 2) {
-            Ok(()) => {}
-            Err(linalg::SolveError::InvalidStorage { .. }) => {
-                unreachable!("inner matched-connect solver storage is fixed 2x2")
-            }
-            Err(linalg::SolveError::Singular { .. }) => {
-                return Err(ConnectionError::Singular {
-                    frequency: frequency_index,
-                });
-            }
-            Err(linalg::SolveError::NonFinite { row, column }) => {
-                return Err(ConnectionError::NonFiniteComputation {
-                    frequency: frequency_index,
-                    row,
-                    column,
-                });
-            }
-        }
-
-        for (output_row, &row) in external.iter().enumerate() {
-            for (output_column, &column) in external.iter().enumerate() {
-                let mut correction = ZERO;
-                for internal_row in 0..2 {
-                    let left_port = if internal_row == 0 { port_k } else { port_l };
-                    let left = s[[frequency_index, row, left_port]];
-                    for internal_column in 0..2 {
-                        let right_port = if internal_column == 0 { port_k } else { port_l };
-                        let right = s[[frequency_index, right_port, column]];
-                        let term = checked_mul(
-                            left,
-                            x[internal_row * 2 + internal_column],
-                            frequency_index,
-                            output_row,
-                            output_column,
-                        )?;
-                        let term =
-                            checked_mul(term, right, frequency_index, output_row, output_column)?;
-                        correction = checked_add(
-                            correction,
-                            term,
-                            frequency_index,
-                            output_row,
-                            output_column,
-                        )?;
-                    }
-                }
-                output_s[[frequency_index, output_row, output_column]] = checked_add(
-                    s[[frequency_index, row, column]],
-                    correction,
-                    frequency_index,
-                    output_row,
-                    output_column,
-                )?;
-            }
-        }
+        exact_inner_matched_frequency(
+            s,
+            frequency_index,
+            port_k,
+            port_l,
+            &external,
+            &mut output_s,
+        )?;
     }
 
     for (index, &value) in output_s.indexed_iter() {
@@ -466,119 +412,16 @@ pub(crate) fn connect_matched(
             output_z0[[frequency, output_port]] = value;
         }
 
-        let a_kk = s_a[[frequency, port_a, port_a]];
-        let b_ll = s_b[[frequency, port_b, port_b]];
-        let product = checked_mul(a_kk, b_ll, frequency, 0, 0)?;
-        let denominator = checked_sub(ONE, product, frequency, 0, 0)?;
-        if denominator == ZERO {
-            return Err(ConnectionError::Singular { frequency });
-        }
-
-        // A-survivor by A-survivor block.
-        for (output_row, &row) in external_a.iter().enumerate() {
-            for (output_column, &column) in external_a.iter().enumerate() {
-                let mut correction = checked_mul(
-                    s_a[[frequency, row, port_a]],
-                    b_ll,
-                    frequency,
-                    output_row,
-                    output_column,
-                )?;
-                correction = checked_mul(
-                    correction,
-                    s_a[[frequency, port_a, column]],
-                    frequency,
-                    output_row,
-                    output_column,
-                )?;
-                correction = checked_div(
-                    correction,
-                    denominator,
-                    frequency,
-                    output_row,
-                    output_column,
-                )?;
-                let value = checked_add(
-                    s_a[[frequency, row, column]],
-                    correction,
-                    frequency,
-                    output_row,
-                    output_column,
-                )?;
-                output_s[[frequency, output_row, output_column]] = value;
-            }
-        }
-
-        // A-survivor by B-survivor block.
-        for (output_row, &row) in external_a.iter().enumerate() {
-            for (b_offset, &column) in external_b.iter().enumerate() {
-                let output_column = external_a.len() + b_offset;
-                let numerator = checked_mul(
-                    s_a[[frequency, row, port_a]],
-                    s_b[[frequency, port_b, column]],
-                    frequency,
-                    output_row,
-                    output_column,
-                )?;
-                let value =
-                    checked_div(numerator, denominator, frequency, output_row, output_column)?;
-                output_s[[frequency, output_row, output_column]] = value;
-            }
-        }
-
-        // B-survivor by A-survivor block.
-        for (b_offset, &row) in external_b.iter().enumerate() {
-            let output_row = external_a.len() + b_offset;
-            for (output_column, &column) in external_a.iter().enumerate() {
-                let numerator = checked_mul(
-                    s_b[[frequency, row, port_b]],
-                    s_a[[frequency, port_a, column]],
-                    frequency,
-                    output_row,
-                    output_column,
-                )?;
-                let value =
-                    checked_div(numerator, denominator, frequency, output_row, output_column)?;
-                output_s[[frequency, output_row, output_column]] = value;
-            }
-        }
-
-        // B-survivor by B-survivor block.
-        for (b_offset_row, &row) in external_b.iter().enumerate() {
-            let output_row = external_a.len() + b_offset_row;
-            for (b_offset_column, &column) in external_b.iter().enumerate() {
-                let output_column = external_a.len() + b_offset_column;
-                let mut correction = checked_mul(
-                    s_b[[frequency, row, port_b]],
-                    a_kk,
-                    frequency,
-                    output_row,
-                    output_column,
-                )?;
-                correction = checked_mul(
-                    correction,
-                    s_b[[frequency, port_b, column]],
-                    frequency,
-                    output_row,
-                    output_column,
-                )?;
-                correction = checked_div(
-                    correction,
-                    denominator,
-                    frequency,
-                    output_row,
-                    output_column,
-                )?;
-                let value = checked_add(
-                    s_b[[frequency, row, column]],
-                    correction,
-                    frequency,
-                    output_row,
-                    output_column,
-                )?;
-                output_s[[frequency, output_row, output_column]] = value;
-            }
-        }
+        exact_inter_matched_frequency(
+            s_a,
+            port_a,
+            s_b,
+            port_b,
+            frequency,
+            &external_a,
+            &external_b,
+            &mut output_s,
+        )?;
     }
 
     // Every output element is assigned by one of the four non-empty blocks,
@@ -608,6 +451,317 @@ pub(crate) fn connect_matched(
         s: output_s,
         z0: output_z0,
     })
+}
+
+#[derive(Clone, Debug)]
+struct ExactComplex {
+    real: BigRational,
+    imaginary: BigRational,
+}
+
+impl ExactComplex {
+    fn from_complex(value: Complex64) -> Option<Self> {
+        Some(Self {
+            real: BigRational::from_float(value.re)?,
+            imaginary: BigRational::from_float(value.im)?,
+        })
+    }
+
+    fn one() -> Self {
+        Self {
+            real: BigRational::one(),
+            imaginary: BigRational::zero(),
+        }
+    }
+
+    fn add(self, other: Self) -> Self {
+        Self {
+            real: self.real + other.real,
+            imaginary: self.imaginary + other.imaginary,
+        }
+    }
+
+    fn subtract(self, other: Self) -> Self {
+        Self {
+            real: self.real - other.real,
+            imaginary: self.imaginary - other.imaginary,
+        }
+    }
+
+    fn multiply(self, other: Self) -> Self {
+        Self {
+            real: self.real.clone() * other.real.clone()
+                - self.imaginary.clone() * other.imaginary.clone(),
+            imaginary: self.real * other.imaginary + self.imaginary * other.real,
+        }
+    }
+
+    fn negate(self) -> Self {
+        Self {
+            real: -self.real,
+            imaginary: -self.imaginary,
+        }
+    }
+
+    fn is_zero(&self) -> bool {
+        self.real.is_zero() && self.imaginary.is_zero()
+    }
+
+    /// Divide exactly and round each final component through num-rational's
+    /// binary64 conversion. No intermediate value is materialized as f64.
+    fn divide_to_f64(self, divisor: &Self) -> Option<Complex64> {
+        if divisor.is_zero() {
+            return None;
+        }
+
+        let denominator = divisor.real.clone() * divisor.real.clone()
+            + divisor.imaginary.clone() * divisor.imaginary.clone();
+        let real_numerator = self.real.clone() * divisor.real.clone()
+            + self.imaginary.clone() * divisor.imaginary.clone();
+        let imaginary_numerator =
+            self.imaginary * divisor.real.clone() - self.real * divisor.imaginary.clone();
+
+        let value = Complex64::new(
+            (real_numerator / denominator.clone()).to_f64()?,
+            (imaginary_numerator / denominator).to_f64()?,
+        );
+        is_finite(value).then_some(value)
+    }
+}
+
+fn exact_complex(
+    value: Complex64,
+    frequency: usize,
+    row: usize,
+    column: usize,
+) -> Result<ExactComplex, ConnectionError> {
+    ExactComplex::from_complex(value).ok_or(ConnectionError::NonFiniteComputation {
+        frequency,
+        row,
+        column,
+    })
+}
+
+fn exact_divide_output(
+    numerator: ExactComplex,
+    denominator: &ExactComplex,
+    frequency: usize,
+    row: usize,
+    column: usize,
+) -> Result<Complex64, ConnectionError> {
+    if denominator.is_zero() {
+        return Err(ConnectionError::Singular { frequency });
+    }
+    numerator
+        .divide_to_f64(denominator)
+        .ok_or(ConnectionError::NonFiniteComputation {
+            frequency,
+            row,
+            column,
+        })
+}
+
+/// Evaluate one matched inter-network frequency with exact dyadic complex
+/// arithmetic. The Schur numerator is formed as S_ee * D + N, and only the
+/// final Q / D result is converted to binary64.
+#[allow(clippy::too_many_arguments)]
+fn exact_inter_matched_frequency(
+    s_a: &Array3<Complex64>,
+    port_a: usize,
+    s_b: &Array3<Complex64>,
+    port_b: usize,
+    frequency: usize,
+    external_a: &[usize],
+    external_b: &[usize],
+    output_s: &mut Array3<Complex64>,
+) -> Result<(), ConnectionError> {
+    let a_kk = exact_complex(s_a[[frequency, port_a, port_a]], frequency, port_a, port_a)?;
+    let b_ll = exact_complex(s_b[[frequency, port_b, port_b]], frequency, port_b, port_b)?;
+    let denominator = ExactComplex::one().subtract(a_kk.clone().multiply(b_ll.clone()));
+    if denominator.is_zero() {
+        return Err(ConnectionError::Singular { frequency });
+    }
+
+    for (output_row, &row) in external_a.iter().enumerate() {
+        for (output_column, &column) in external_a.iter().enumerate() {
+            let base = exact_complex(
+                s_a[[frequency, row, column]],
+                frequency,
+                output_row,
+                output_column,
+            )?;
+            let numerator = exact_complex(
+                s_a[[frequency, row, port_a]],
+                frequency,
+                output_row,
+                output_column,
+            )?
+            .multiply(b_ll.clone())
+            .multiply(exact_complex(
+                s_a[[frequency, port_a, column]],
+                frequency,
+                output_row,
+                output_column,
+            )?);
+            let value = exact_divide_output(
+                base.multiply(denominator.clone()).add(numerator),
+                &denominator,
+                frequency,
+                output_row,
+                output_column,
+            )?;
+            output_s[[frequency, output_row, output_column]] = value;
+        }
+        for (offset, &column) in external_b.iter().enumerate() {
+            let output_column = external_a.len() + offset;
+            let numerator = exact_complex(
+                s_a[[frequency, row, port_a]],
+                frequency,
+                output_row,
+                output_column,
+            )?
+            .multiply(exact_complex(
+                s_b[[frequency, port_b, column]],
+                frequency,
+                output_row,
+                output_column,
+            )?);
+            output_s[[frequency, output_row, output_column]] = exact_divide_output(
+                numerator,
+                &denominator,
+                frequency,
+                output_row,
+                output_column,
+            )?;
+        }
+    }
+
+    for (offset, &row) in external_b.iter().enumerate() {
+        let output_row = external_a.len() + offset;
+        for (output_column, &column) in external_a.iter().enumerate() {
+            let numerator = exact_complex(
+                s_b[[frequency, row, port_b]],
+                frequency,
+                output_row,
+                output_column,
+            )?
+            .multiply(exact_complex(
+                s_a[[frequency, port_a, column]],
+                frequency,
+                output_row,
+                output_column,
+            )?);
+            output_s[[frequency, output_row, output_column]] = exact_divide_output(
+                numerator,
+                &denominator,
+                frequency,
+                output_row,
+                output_column,
+            )?;
+        }
+        for (offset_column, &column) in external_b.iter().enumerate() {
+            let output_column = external_a.len() + offset_column;
+            let base = exact_complex(
+                s_b[[frequency, row, column]],
+                frequency,
+                output_row,
+                output_column,
+            )?;
+            let numerator = exact_complex(
+                s_b[[frequency, row, port_b]],
+                frequency,
+                output_row,
+                output_column,
+            )?
+            .multiply(a_kk.clone())
+            .multiply(exact_complex(
+                s_b[[frequency, port_b, column]],
+                frequency,
+                output_row,
+                output_column,
+            )?);
+            let value = exact_divide_output(
+                base.multiply(denominator.clone()).add(numerator),
+                &denominator,
+                frequency,
+                output_row,
+                output_column,
+            )?;
+            output_s[[frequency, output_row, output_column]] = value;
+        }
+    }
+
+    Ok(())
+}
+
+/// Evaluate one matched inner-connection frequency with the full selected
+/// two-port block. The exact adjugate numerator is retained until Q / D is
+/// converted once at the final output boundary.
+fn exact_inner_matched_frequency(
+    s: &Array3<Complex64>,
+    frequency: usize,
+    port_k: usize,
+    port_l: usize,
+    external: &[usize],
+    output_s: &mut Array3<Complex64>,
+) -> Result<(), ConnectionError> {
+    let s_kk = exact_complex(s[[frequency, port_k, port_k]], frequency, port_k, port_k)?;
+    let s_kl = exact_complex(s[[frequency, port_k, port_l]], frequency, port_k, port_l)?;
+    let s_lk = exact_complex(s[[frequency, port_l, port_k]], frequency, port_l, port_k)?;
+    let s_ll = exact_complex(s[[frequency, port_l, port_l]], frequency, port_l, port_l)?;
+
+    let m00 = ExactComplex::one().subtract(s_lk);
+    let m01 = s_ll.clone().negate();
+    let m10 = s_kk.clone().negate();
+    let m11 = ExactComplex::one().subtract(s_kl);
+    let determinant = m00
+        .clone()
+        .multiply(m11.clone())
+        .subtract(m01.clone().multiply(m10.clone()));
+    if determinant.is_zero() {
+        return Err(ConnectionError::Singular { frequency });
+    }
+
+    for (output_row, &row) in external.iter().enumerate() {
+        let left0 = exact_complex(s[[frequency, row, port_k]], frequency, output_row, 0)?;
+        let left1 = exact_complex(s[[frequency, row, port_l]], frequency, output_row, 1)?;
+        for (output_column, &column) in external.iter().enumerate() {
+            // r = [S_lj, S_kj] includes the matched exchange matrix P.
+            let right0 =
+                exact_complex(s[[frequency, port_l, column]], frequency, 0, output_column)?;
+            let right1 =
+                exact_complex(s[[frequency, port_k, column]], frequency, 1, output_column)?;
+            let adjugate_right0 = m11
+                .clone()
+                .multiply(right0.clone())
+                .subtract(m01.clone().multiply(right1.clone()));
+            let adjugate_right1 = m10
+                .clone()
+                .negate()
+                .multiply(right0)
+                .add(m00.clone().multiply(right1));
+            let numerator = left0
+                .clone()
+                .multiply(adjugate_right0)
+                .add(left1.clone().multiply(adjugate_right1));
+            let base = exact_complex(
+                s[[frequency, row, column]],
+                frequency,
+                output_row,
+                output_column,
+            )?;
+            let value = exact_divide_output(
+                base.multiply(determinant.clone()).add(numerator),
+                &determinant,
+                frequency,
+                output_row,
+                output_column,
+            )?;
+            output_s[[frequency, output_row, output_column]] = value;
+        }
+    }
+
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -689,72 +843,6 @@ fn inner_survivors(nports: usize, port_k: usize, port_l: usize) -> Vec<usize> {
         .collect()
 }
 
-fn checked_mul(
-    left: Complex64,
-    right: Complex64,
-    frequency: usize,
-    row: usize,
-    column: usize,
-) -> Result<Complex64, ConnectionError> {
-    checked_value(left * right, frequency, row, column)
-}
-
-fn checked_add(
-    left: Complex64,
-    right: Complex64,
-    frequency: usize,
-    row: usize,
-    column: usize,
-) -> Result<Complex64, ConnectionError> {
-    checked_value(left + right, frequency, row, column)
-}
-
-fn checked_sub(
-    left: Complex64,
-    right: Complex64,
-    frequency: usize,
-    row: usize,
-    column: usize,
-) -> Result<Complex64, ConnectionError> {
-    checked_value(left - right, frequency, row, column)
-}
-
-fn checked_neg(
-    value: Complex64,
-    frequency: usize,
-    row: usize,
-    column: usize,
-) -> Result<Complex64, ConnectionError> {
-    checked_value(-value, frequency, row, column)
-}
-
-fn checked_div(
-    left: Complex64,
-    right: Complex64,
-    frequency: usize,
-    row: usize,
-    column: usize,
-) -> Result<Complex64, ConnectionError> {
-    checked_value(linalg::divide_complex(left, right), frequency, row, column)
-}
-
-fn checked_value(
-    value: Complex64,
-    frequency: usize,
-    row: usize,
-    column: usize,
-) -> Result<Complex64, ConnectionError> {
-    if is_finite(value) {
-        Ok(value)
-    } else {
-        Err(ConnectionError::NonFiniteComputation {
-            frequency,
-            row,
-            column,
-        })
-    }
-}
-
 fn is_finite(value: Complex64) -> bool {
     linalg::is_finite(value)
 }
@@ -821,6 +909,59 @@ mod tests {
                 complex(2.0 / 3.0, 0.0)
             }
         })
+    }
+
+    fn exact_real(value: BigRational) -> ExactComplex {
+        ExactComplex {
+            real: value,
+            imaginary: BigRational::zero(),
+        }
+    }
+
+    fn exact_real_to_f64(value: BigRational) -> f64 {
+        exact_real(value)
+            .divide_to_f64(&ExactComplex::one())
+            .expect("finite real value must convert through a unit divisor")
+            .re
+    }
+
+    #[test]
+    fn exact_output_conversion_uses_binary64_round_to_even_boundaries() {
+        let one = BigRational::one();
+        let half_ulp = BigRational::from_float(2.0_f64.powi(-53)).unwrap();
+        let tie_to_even = one.clone() + half_ulp.clone();
+        let tie_to_odd = one + half_ulp.clone() + half_ulp.clone() + half_ulp;
+        assert_eq!(exact_real_to_f64(tie_to_even), 1.0);
+        assert_eq!(exact_real_to_f64(tie_to_odd), 1.0 + 2.0_f64.powi(-51));
+
+        let half = BigRational::from_float(0.5).unwrap();
+        let half_minimum_subnormal = half.clone().pow(1075);
+        let minimum_subnormal = half.clone().pow(1074);
+        assert_eq!(exact_real_to_f64(half_minimum_subnormal.clone()), 0.0);
+        assert_eq!(
+            exact_real_to_f64(
+                half_minimum_subnormal.clone()
+                    + half_minimum_subnormal.clone()
+                    + half_minimum_subnormal.clone(),
+            ),
+            f64::from_bits(2)
+        );
+        assert_eq!(
+            exact_real_to_f64(minimum_subnormal.clone()),
+            f64::from_bits(1)
+        );
+        assert_eq!(
+            exact_real_to_f64(half.clone().pow(1022)),
+            f64::from_bits(1_u64 << 52)
+        );
+        assert_eq!(
+            exact_real_to_f64(BigRational::from_float(f64::MAX).unwrap()),
+            f64::MAX
+        );
+
+        let negative_tiny = exact_real_to_f64(-half_minimum_subnormal);
+        assert_eq!(negative_tiny, 0.0);
+        assert!(negative_tiny.is_sign_negative());
     }
 
     #[test]
@@ -1089,10 +1230,14 @@ mod tests {
         assert_eq!(result.s.dim(), (2, 4, 4));
         for frequency_index in 0..2 {
             for row in 0..4 {
-                assert_eq!(result.s[[frequency_index, row, row]], complex(-0.5, 0.0));
+                let diagonal = result.s[[frequency_index, row, row]];
+                assert!((diagonal.re + 0.5).abs() < 1.0e-14);
+                assert_eq!(diagonal.im, 0.0);
                 for column in 0..4 {
                     if row != column {
-                        assert_eq!(result.s[[frequency_index, row, column]], complex(0.5, 0.0));
+                        let off_diagonal = result.s[[frequency_index, row, column]];
+                        assert!((off_diagonal.re - 0.5).abs() < 1.0e-14);
+                        assert_eq!(off_diagonal.im, 0.0);
                     }
                 }
             }
@@ -1475,7 +1620,12 @@ mod tests {
         let frequency = [1.0e9];
         let mut s_a = Array3::zeros((1, 2, 2));
         let mut s_b = Array3::zeros((1, 2, 2));
-        s_a[[0, 0, 0]] = complex(f64::MAX, 0.0);
+        // The Schur correction is genuinely unrepresentable. The exact
+        // evaluator must report this as structured non-finite output rather
+        // than accepting an all-zero result.
+        s_a[[0, 0, 0]] = complex(0.0, 0.0);
+        s_a[[0, 1, 0]] = complex(f64::MAX, 0.0);
+        s_a[[0, 0, 1]] = complex(f64::MAX, 0.0);
         s_b[[0, 0, 0]] = complex(2.0, 0.0);
         let z0_a = valid_z0(1, 2);
         let z0_b = valid_z0(1, 2);

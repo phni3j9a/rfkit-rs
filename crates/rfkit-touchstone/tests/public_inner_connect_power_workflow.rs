@@ -1,10 +1,3 @@
-//! Touchstone ingress → direct complex-reference inner junction → writer/read.
-//!
-//! The selected ports are first put into caller-chosen unequal complex
-//! references.  The inner junction is then checked from the full physical
-//! Kurokawa V/I boundary before the reduced network is explicitly restored to
-//! one writer-compatible reference.
-
 use ndarray::{Array2, Array3};
 use num_complex::Complex64;
 use rfkit_touchstone::{parse_touchstone_v1_0_s, write_touchstone_v1_0_s_ri_hz};
@@ -86,8 +79,9 @@ fn solve_two_by_two(matrix: [[Complex64; 2]; 2], rhs: [Complex64; 2]) -> [Comple
     ]
 }
 
-/// Independently derive S_out from the full internal block and physical V/I
-/// continuity/current conservation.  No rfkit connection helper is called.
+/// Reconstruct the reduced scattering response from the full internal block
+/// and the physical Kurokawa V/I boundary.  This deliberately does not call
+/// any rfkit connection or matched-junction helper.
 fn independently_expected(source: &rfkit_core::Network) -> Array3<Complex64> {
     let nfreq = source.frequency().hz().len();
     Array3::from_shape_fn(
@@ -97,6 +91,10 @@ fn independently_expected(source: &rfkit_core::Network) -> Array3<Complex64> {
             let z_b = source.z0()[[frequency, PORT_B]];
             let q_a = z_a.re.abs().sqrt() / z_a.re;
             let q_b = z_b.re.abs().sqrt() / z_b.re;
+
+            // Both off-diagonal entries are intentionally retained.  The source
+            // has a full, non-reciprocal selected block, so a diagonal shortcut
+            // would produce a different physical junction response.
             let s_ii = [
                 [
                     source.s()[[frequency, PORT_A, PORT_A]],
@@ -122,6 +120,7 @@ fn independently_expected(source: &rfkit_core::Network) -> Array3<Complex64> {
                     c_matrix[1][1] + d_matrix[1][0] * s_ii[0][1] + d_matrix[1][1] * s_ii[1][1],
                 ],
             ];
+
             let external_input = SURVIVORS[column];
             let s_ie = [
                 source.s()[[frequency, PORT_A, external_input]],
@@ -136,6 +135,9 @@ fn independently_expected(source: &rfkit_core::Network) -> Array3<Complex64> {
                 s_ie[0] + s_ii[0][0] * internal_incident[0] + s_ii[0][1] * internal_incident[1],
                 s_ie[1] + s_ii[1][0] * internal_incident[0] + s_ii[1][1] * internal_incident[1],
             ];
+
+            // Check the two physical junction equations for this nonzero external
+            // excitation, independently of the returned S matrix.
             let voltage_a = q_a * (z_a.conj() * internal_incident[0] + z_a * internal_reflected[0]);
             let voltage_b = q_b * (z_b.conj() * internal_incident[1] + z_b * internal_reflected[1]);
             let current_a = q_a * (internal_incident[0] - internal_reflected[0]);
@@ -151,18 +153,29 @@ fn independently_expected(source: &rfkit_core::Network) -> Array3<Complex64> {
     )
 }
 
-fn main() -> rfkit_touchstone::Result<()> {
-    let parsed = parse_touchstone_v1_0_s(INPUT, 5)?;
+#[test]
+fn touchstone_inner_connect_power_checks_full_physical_junction_and_writer_roundtrip() {
+    let parsed = parse_touchstone_v1_0_s(INPUT, 5).expect("asymmetric 5-port input parses");
     let source_frequency = parsed.frequency().clone();
     let source_s = parsed.s().clone();
     let source_z0 = parsed.z0().clone();
     let target_z0 = selected_references();
 
-    // Choose unequal complex selected references explicitly before closing the
-    // internal pair.  The operation leaves the parsed Touchstone source alone.
-    let direct = parsed.renormalize_direct_power(target_z0.clone())?;
+    assert_ne!(target_z0[[0, PORT_A]], target_z0[[0, PORT_B]]);
+    assert_ne!(target_z0[[0, PORT_A]].im, 0.0);
+    assert_ne!(target_z0[[0, PORT_B]].im, 0.0);
+
+    let direct = parsed
+        .renormalize_direct_power(target_z0.clone())
+        .expect("selected complex references are valid");
+    assert_eq!(direct.frequency(), &source_frequency);
+    assert_eq!(direct.z0(), &target_z0);
+
     let expected = independently_expected(&direct);
-    let reduced = direct.inner_connect_direct_power(PORT_A, PORT_B)?;
+    let reduced = direct
+        .inner_connect_power(PORT_A, PORT_B)
+        .expect("direct inner physical junction succeeds");
+
     assert_eq!(reduced.frequency(), &source_frequency);
     assert_eq!(
         reduced.z0(),
@@ -170,23 +183,33 @@ fn main() -> rfkit_touchstone::Result<()> {
             target_z0[[frequency, SURVIVORS[port]]]
         })
     );
+    assert_eq!(reduced.s().dim(), (3, SURVIVORS.len(), SURVIVORS.len()));
     for (actual, expected) in reduced.s().iter().zip(expected.iter()) {
-        assert!((*actual - *expected).norm() <= 1.0e-12);
+        assert!(
+            (*actual - *expected).norm() <= 1.0e-12,
+            "full-block physical junction mismatch: actual={actual:?}, expected={expected:?}"
+        );
     }
 
+    // The direct operation borrows its source and retains exact frequency and
+    // survivor coordinates.  The original parsed source must remain untouched.
     assert_eq!(parsed.frequency(), &source_frequency);
     assert_eq!(parsed.s(), &source_s);
     assert_eq!(parsed.z0(), &source_z0);
 
-    // The Touchstone writer accepts only one common positive-real reference,
-    // so restore that contract explicitly after the physical reduction.
+    // Touchstone v1.0 has one common finite positive-real reference.  Choose
+    // that contract explicitly after the physical inner junction; neither
+    // operation nor writer silently repairs the heterogeneous references.
     let writer_z0 = Array2::from_elem((3, SURVIVORS.len()), c(60.0, 0.0));
-    let writer_ready = reduced.renormalize_direct_power(writer_z0.clone())?;
-    let text = write_touchstone_v1_0_s_ri_hz(&writer_ready)?;
-    let reread = parse_touchstone_v1_0_s(&text, SURVIVORS.len())?;
+    assert!(write_touchstone_v1_0_s_ri_hz(&reduced).is_err());
+    let writer_ready = reduced
+        .renormalize_direct_power(writer_z0.clone())
+        .expect("explicit writer-compatible direct renormalization succeeds");
+    assert_eq!(writer_ready.z0(), &writer_z0);
+
+    let text = write_touchstone_v1_0_s_ri_hz(&writer_ready).expect("writer accepts common z0");
+    let reread = parse_touchstone_v1_0_s(&text, SURVIVORS.len()).expect("writer output parses");
     assert_eq!(reread.frequency(), writer_ready.frequency());
     assert_eq!(reread.z0(), writer_ready.z0());
     assert_eq!(reread.s(), writer_ready.s());
-    print!("{text}");
-    Ok(())
 }

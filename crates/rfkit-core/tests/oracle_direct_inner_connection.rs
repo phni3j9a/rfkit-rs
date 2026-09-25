@@ -13,6 +13,8 @@ const EXPECTED_NUMPY_VERSION: &str = "2.5.1";
 const EXPECTED_SCIKIT_RF_VERSION: &str = "2.0.1";
 const EXPECTED_SCIKIT_RF_COMMIT: &str = "bd651e923cac6020de49a096e1d7e9b5f949f884";
 const EXPECTED_CASE_ID: &str = "power_wave_inner_connect_direct_five_port_complex_z0";
+// The fixture metadata records the historical generator operation. The Rust
+// conformance call itself intentionally uses the consolidated public method.
 const EXPECTED_OPERATION: &str = "inner_connect_direct_power";
 const EXPECTED_RANDOM_SEED: u64 = 20_260_952;
 const EXPECTED_INPUT_RECIPE: &str = "one independent NumPy default_rng stream with seed 20260952, an asymmetric non-reciprocal five-port with a full selected 2x2 internal coupling block, three finite frequency samples, and unequal complex frequency-dependent positive-real references on every port";
@@ -353,7 +355,7 @@ fn pinned_scikit_rf_direct_inner_connection_fixture_matches_public_network_metho
     let source_z0_snapshot = source.z0().clone();
 
     let reduced = source
-        .inner_connect_direct_power(EXPECTED_PORT_A, EXPECTED_PORT_B)
+        .inner_connect_power(EXPECTED_PORT_A, EXPECTED_PORT_B)
         .expect("direct inner fixture connection");
 
     assert_eq!(reduced.frequency().hz(), data.frequency_hz.as_slice());

@@ -337,9 +337,7 @@ fn termination_matches_z_schur_and_existing_matched_connection_on_shared_domain(
     let mut load_s = Array3::zeros((1, 1, 1));
     load_s[[0, 0, 0]] = (load - c(60.0, 0.0)) / (load + c(60.0, 0.0));
     let load_network = network(vec![1.0e9], load_s, Array2::from_elem((1, 1), c(60.0, 0.0)));
-    let connected = source
-        .connect_matched_power(selected, &load_network, 0)
-        .unwrap();
+    let connected = source.connect_power(selected, &load_network, 0).unwrap();
     assert_array3_close(reduced.s(), connected.s(), 5.0e-13, 5.0e-13);
     assert_eq!(reduced.z0(), connected.z0());
     Ok(())

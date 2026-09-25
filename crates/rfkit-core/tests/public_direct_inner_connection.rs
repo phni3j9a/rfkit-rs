@@ -195,7 +195,7 @@ fn direct_inner_uses_full_internal_block_and_preserves_source_and_order() {
     let source = structured_network(frequency.clone(), 5);
     let source_s = source.s().clone();
     let source_z0 = source.z0().clone();
-    let reduced = source.inner_connect_direct_power(1, 3).unwrap();
+    let reduced = source.inner_connect_power(1, 3).unwrap();
 
     let expected_s = direct_reference(source.s(), source.z0(), 1, 3);
     assert_array3_close(reduced.s(), &expected_s, 2.0e-12, 2.0e-12);
@@ -245,7 +245,7 @@ fn direct_inner_preserves_asymmetric_real_junction_samples_and_survivor_order() 
 
     let expected_s = direct_reference(source.s(), source.z0(), 1, 3);
     assert_ne!(expected_s[[2, 0, 0]], expected_s[[3, 0, 0]]);
-    let reduced = source.inner_connect_direct_power(1, 3).unwrap();
+    let reduced = source.inner_connect_power(1, 3).unwrap();
 
     assert_eq!(reduced.s().dim(), (frequency.len(), 3, 3));
     assert_array3_close(reduced.s(), &expected_s, 3.0e-12, 3.0e-12);
@@ -269,7 +269,7 @@ fn direct_inner_rejects_empty_serde_frequency_axes_without_panicking() {
     empty_frequency_value["frequency"]["hz"] = json!([]);
     let empty_frequency: Network = serde_json::from_value(empty_frequency_value).unwrap();
     let result = catch_unwind(AssertUnwindSafe(|| {
-        empty_frequency.inner_connect_direct_power(0, 1)
+        empty_frequency.inner_connect_power(0, 1)
     }));
     assert!(result.is_ok());
     assert_eq!(
@@ -284,9 +284,7 @@ fn direct_inner_rejects_empty_serde_frequency_axes_without_panicking() {
     empty_axes_value["z0"]["dim"] = json!([0, 3]);
     empty_axes_value["z0"]["data"] = json!([]);
     let empty_axes: Network = serde_json::from_value(empty_axes_value).unwrap();
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        empty_axes.inner_connect_direct_power(0, 1)
-    }));
+    let result = catch_unwind(AssertUnwindSafe(|| empty_axes.inner_connect_power(0, 1)));
     assert!(result.is_ok());
     assert_eq!(
         result.unwrap().unwrap_err(),
@@ -304,9 +302,7 @@ fn direct_inner_rejects_zero_port_square_serde_shape_before_port_indexing() {
     zero_port_value["z0"]["data"] = json!([]);
     let zero_port: Network = serde_json::from_value(zero_port_value).unwrap();
 
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        zero_port.inner_connect_direct_power(0, 1)
-    }));
+    let result = catch_unwind(AssertUnwindSafe(|| zero_port.inner_connect_power(0, 1)));
     assert!(result.is_ok());
     assert_eq!(
         result.unwrap().unwrap_err(),
@@ -332,7 +328,7 @@ fn direct_inner_matches_independent_z_domain_port_elimination() {
         .to_z_power()
         .expect("the independent Z-domain source must be invertible");
     let expected_z = z_domain_inner_reference(&source_z, 1, 2);
-    let reduced = source.inner_connect_direct_power(1, 2).unwrap();
+    let reduced = source.inner_connect_power(1, 2).unwrap();
     let reduced_z = reduced
         .to_z_power()
         .expect("the reduced Z-domain result must be invertible");
@@ -362,7 +358,7 @@ fn direct_inner_succeeds_when_whole_network_to_z_is_singular() {
         })
     ));
 
-    let reduced = source.inner_connect_direct_power(0, 1).unwrap();
+    let reduced = source.inner_connect_power(0, 1).unwrap();
     assert_eq!(reduced.z0(), &Array2::from_elem((1, 1), c(77.0, 0.0)));
     assert_eq!(reduced.s()[[0, 0, 0]], c(1.0, 0.0));
 }
@@ -383,7 +379,7 @@ fn direct_inner_accepts_equal_complex_first_last_selected_refs_and_preserves_ord
         source.s().clone(),
         z0.clone(),
     );
-    let reduced = source.inner_connect_direct_power(0, 3).unwrap();
+    let reduced = source.inner_connect_power(0, 3).unwrap();
     let expected_s = direct_reference(source.s(), source.z0(), 0, 3);
     assert_array3_close(reduced.s(), &expected_s, 3.0e-12, 3.0e-12);
     assert_eq!(
@@ -396,8 +392,8 @@ fn direct_inner_accepts_equal_complex_first_last_selected_refs_and_preserves_ord
 #[test]
 fn direct_inner_is_invariant_under_selected_exchange_and_port_permutation() {
     let source = structured_network(vec![1.0e9, 1.8e9], 5);
-    let direct = source.inner_connect_direct_power(1, 3).unwrap();
-    let exchanged = source.inner_connect_direct_power(3, 1).unwrap();
+    let direct = source.inner_connect_power(1, 3).unwrap();
+    let exchanged = source.inner_connect_power(3, 1).unwrap();
     assert_eq!(direct.z0(), exchanged.z0());
     assert_array3_close(direct.s(), exchanged.s(), 3.0e-12, 3.0e-12);
 
@@ -406,7 +402,7 @@ fn direct_inner_is_invariant_under_selected_exchange_and_port_permutation() {
     // original survivors [4, 0, 2].
     let order = [4, 1, 0, 3, 2];
     let permuted = source.permute_ports(&order).unwrap();
-    let permuted_reduced = permuted.inner_connect_direct_power(1, 3).unwrap();
+    let permuted_reduced = permuted.inner_connect_power(1, 3).unwrap();
     let survivor_order = [4, 0, 2];
     for f in 0..source.frequency().len() {
         for (row, &old_row) in survivor_order.iter().enumerate() {
@@ -441,7 +437,7 @@ fn direct_inner_satisfies_physical_vi_boundary_and_external_scattering() {
     let z0 =
         Array2::from_shape_vec((1, 3), vec![c(50.0, 4.0), c(-65.0, 3.0), c(72.0, -1.0)]).unwrap();
     let source = network(vec![1.0e9], s, z0);
-    let reduced = source.inner_connect_direct_power(0, 1).unwrap();
+    let reduced = source.inner_connect_power(0, 1).unwrap();
     let external_incident = c(0.27, -0.19);
 
     let za = source.z0()[[0, 0]];
@@ -511,8 +507,8 @@ fn direct_inner_matches_direct_inter_network_on_block_diagonal_models() {
         }),
     );
 
-    let separate = left.connect_direct_power(1, &right, 2).unwrap();
-    let internal = combined.inner_connect_direct_power(1, 3 + 2).unwrap();
+    let separate = left.connect_power(1, &right, 2).unwrap();
+    let internal = combined.inner_connect_power(1, 3 + 2).unwrap();
     assert_eq!(internal.z0(), separate.z0());
     assert_eq!(internal.frequency(), separate.frequency());
     assert_array3_close(internal.s(), separate.s(), 3.0e-12, 3.0e-12);
@@ -528,10 +524,13 @@ fn direct_inner_agrees_with_matched_inner_on_shared_domain() {
         z0[[f, 4]] = c(73.5 + f as f64, 0.0);
     }
     source = network(source.frequency().hz().to_vec(), source.s().clone(), z0);
-    let direct = source.inner_connect_direct_power(1, 4).unwrap();
-    let matched = source.inner_connect_matched_power(1, 4).unwrap();
-    assert_eq!(direct.z0(), matched.z0());
-    assert_array3_close(direct.s(), matched.s(), 4.0e-12, 4.0e-12);
+    // The selected references are exactly equal positive-real values at each
+    // sample, so inner_connect_power selects the matched kernel. Compare it
+    // with the independent full-block physical reconstruction to retain the
+    // old matched/direct common-domain agreement evidence.
+    let reduced = source.inner_connect_power(1, 4).unwrap();
+    let expected = direct_reference(source.s(), source.z0(), 1, 4);
+    assert_array3_close(reduced.s(), &expected, 4.0e-12, 4.0e-12);
 }
 
 #[test]
@@ -551,7 +550,7 @@ fn direct_inner_handles_zero_selected_reference_sum_without_dividing_by_it() {
     let source = network(frequency, s, z0);
     let selected_sum = source.z0()[[0, 1]] + source.z0()[[0, 2]];
     assert_eq!(selected_sum, ZERO);
-    let reduced = source.inner_connect_direct_power(1, 2).unwrap();
+    let reduced = source.inner_connect_power(1, 2).unwrap();
     assert!(reduced.s().iter().all(|value| value.is_finite()));
     assert_eq!(reduced.z0().dim(), (1, 2));
 }
@@ -559,20 +558,23 @@ fn direct_inner_handles_zero_selected_reference_sum_without_dividing_by_it() {
 #[test]
 fn direct_inner_reports_exact_singularity_and_accepts_near_singularity() {
     let frequency = vec![1.0e9];
-    let z0 = Array2::from_elem((1, 3), c(50.0, 0.0));
+    // Unequal/complex selected references force the consolidated public API
+    // through the direct physical-junction kernel for both cases.
+    let z0 =
+        Array2::from_shape_vec((1, 3), vec![c(50.0, 3.0), c(61.0, -2.0), c(50.0, 0.0)]).unwrap();
     let mut exact_s = Array3::zeros((1, 3, 3));
     exact_s[[0, 0, 0]] = c(1.0, 0.0);
     exact_s[[0, 1, 1]] = c(1.0, 0.0);
     let exact = network(frequency.clone(), exact_s, z0.clone());
-    assert!(matches!(
-        exact.inner_connect_direct_power(0, 1),
-        Err(Error::SingularDirectInnerConnection {
+    assert_eq!(
+        exact.inner_connect_power(0, 1).unwrap_err(),
+        Error::SingularDirectInnerConnection {
             frequency: 0,
             port_a: 0,
             port_b: 1,
-            ..
-        })
-    ));
+            pivot: 1,
+        }
+    );
 
     let mut near_s = Array3::zeros((1, 3, 3));
     near_s[[0, 0, 0]] = c(1.0 - 2.0_f64.powi(-40), 0.0);
@@ -580,7 +582,7 @@ fn direct_inner_reports_exact_singularity_and_accepts_near_singularity() {
     near_s[[0, 2, 0]] = c(1.0e-7, 0.0);
     near_s[[0, 2, 1]] = c(-2.0e-7, 0.0);
     let near = network(frequency, near_s, z0);
-    let reduced = near.inner_connect_direct_power(0, 1).unwrap();
+    let reduced = near.inner_connect_power(0, 1).unwrap();
     assert!(reduced.s().iter().all(|value| value.is_finite()));
 }
 
@@ -588,11 +590,11 @@ fn direct_inner_reports_exact_singularity_and_accepts_near_singularity() {
 fn direct_inner_rejects_invalid_inputs_without_panicking() {
     let valid = structured_network(vec![1.0e9], 3);
     assert_eq!(
-        valid.inner_connect_direct_power(3, 1).unwrap_err(),
+        valid.inner_connect_power(3, 1).unwrap_err(),
         Error::InvalidDirectInnerConnectionPort { port: 3, nports: 3 }
     );
     assert_eq!(
-        valid.inner_connect_direct_power(1, 1).unwrap_err(),
+        valid.inner_connect_power(1, 1).unwrap_err(),
         Error::IdenticalDirectInnerConnectionPorts {
             port_a: 1,
             port_b: 1,
@@ -600,7 +602,7 @@ fn direct_inner_rejects_invalid_inputs_without_panicking() {
     );
     let two_port = structured_network(vec![1.0e9], 2);
     assert_eq!(
-        two_port.inner_connect_direct_power(0, 1).unwrap_err(),
+        two_port.inner_connect_power(0, 1).unwrap_err(),
         Error::NoExternalDirectInnerConnectionPorts
     );
 
@@ -609,9 +611,7 @@ fn direct_inner_rejects_invalid_inputs_without_panicking() {
     let data = malformed_s["s"]["data"].as_array().unwrap().clone();
     malformed_s["s"]["data"] = json!(data.into_iter().take(6).collect::<Vec<_>>());
     let malformed_s: Network = serde_json::from_value(malformed_s).unwrap();
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        malformed_s.inner_connect_direct_power(0, 1)
-    }));
+    let result = catch_unwind(AssertUnwindSafe(|| malformed_s.inner_connect_power(0, 1)));
     assert!(result.is_ok());
     assert!(matches!(
         result.unwrap(),
@@ -624,7 +624,7 @@ fn direct_inner_rejects_invalid_inputs_without_panicking() {
     malformed_z0["z0"]["data"] = json!(data.into_iter().take(2).collect::<Vec<_>>());
     let malformed_z0: Network = serde_json::from_value(malformed_z0).unwrap();
     assert_eq!(
-        malformed_z0.inner_connect_direct_power(0, 1).unwrap_err(),
+        malformed_z0.inner_connect_power(0, 1).unwrap_err(),
         Error::InvalidDirectInnerConnectionZ0Shape { shape: vec![1, 2] }
     );
 
@@ -632,9 +632,7 @@ fn direct_inner_rejects_invalid_inputs_without_panicking() {
     malformed_frequency["frequency"]["hz"] = json!([1.0e9, 2.0e9]);
     let malformed_frequency: Network = serde_json::from_value(malformed_frequency).unwrap();
     assert_eq!(
-        malformed_frequency
-            .inner_connect_direct_power(0, 1)
-            .unwrap_err(),
+        malformed_frequency.inner_connect_power(0, 1).unwrap_err(),
         Error::DirectInnerConnectionFrequencyShape {
             expected: 1,
             actual: 2,
@@ -650,7 +648,7 @@ fn direct_inner_rejects_nonfinite_and_zero_real_values_on_any_port() {
     bad_frequency[0] = f64::INFINITY;
     let bad_frequency = network(bad_frequency, source.s().clone(), source.z0().clone());
     assert!(matches!(
-        bad_frequency.inner_connect_direct_power(0, 1),
+        bad_frequency.inner_connect_power(0, 1),
         Err(Error::NonFiniteDirectInnerConnectionFrequency { index: 0, .. })
     ));
 
@@ -658,7 +656,7 @@ fn direct_inner_rejects_nonfinite_and_zero_real_values_on_any_port() {
     bad_s[[0, 2, 0]] = c(f64::NAN, 0.0);
     let bad_s = network(source.frequency().hz().to_vec(), bad_s, source.z0().clone());
     assert_eq!(
-        bad_s.inner_connect_direct_power(0, 1).unwrap_err(),
+        bad_s.inner_connect_power(0, 1).unwrap_err(),
         Error::NonFiniteDirectInnerConnectionS {
             frequency: 0,
             row: 2,
@@ -670,7 +668,7 @@ fn direct_inner_rejects_nonfinite_and_zero_real_values_on_any_port() {
     bad_z0[[0, 2]] = c(f64::INFINITY, 0.0);
     let bad_z0 = network(source.frequency().hz().to_vec(), source.s().clone(), bad_z0);
     assert_eq!(
-        bad_z0.inner_connect_direct_power(0, 1).unwrap_err(),
+        bad_z0.inner_connect_power(0, 1).unwrap_err(),
         Error::NonFiniteDirectInnerConnectionZ0 {
             frequency: 0,
             port: 2,
@@ -685,7 +683,7 @@ fn direct_inner_rejects_nonfinite_and_zero_real_values_on_any_port() {
         zero_real,
     );
     assert_eq!(
-        zero_real.inner_connect_direct_power(0, 1).unwrap_err(),
+        zero_real.inner_connect_power(0, 1).unwrap_err(),
         Error::ZeroRealDirectInnerConnectionReferenceImpedance {
             frequency: 0,
             port: 1,
@@ -700,9 +698,7 @@ fn direct_inner_rejects_nonfinite_and_zero_real_values_on_any_port() {
         zero_real_survivor,
     );
     assert_eq!(
-        zero_real_survivor
-            .inner_connect_direct_power(0, 1)
-            .unwrap_err(),
+        zero_real_survivor.inner_connect_power(0, 1).unwrap_err(),
         Error::ZeroRealDirectInnerConnectionReferenceImpedance {
             frequency: 0,
             port: 2,
@@ -714,14 +710,15 @@ fn direct_inner_rejects_nonfinite_and_zero_real_values_on_any_port() {
 fn direct_inner_reports_checked_overflow_with_selected_port_context() {
     let mut s = Array3::zeros((1, 3, 3));
     s[[0, 0, 2]] = c(f64::MAX, 0.0);
-    let source = network(vec![1.0e9], s, Array2::from_elem((1, 3), c(50.0, 0.0)));
+    // Keep this regression on the direct path explicitly; equal positive
+    // selected references intentionally select the matched kernel now.
+    let source = network(
+        vec![1.0e9],
+        s,
+        Array2::from_shape_vec((1, 3), vec![c(50.0, 1.0), c(50.0, 0.0), c(50.0, 0.0)]).unwrap(),
+    );
     assert!(matches!(
-        source.inner_connect_direct_power(0, 1),
-        Err(Error::NonFiniteDirectInnerConnectionComputation {
-            frequency: 0,
-            port_a: 0,
-            port_b: 1,
-            ..
-        })
+        source.inner_connect_power(0, 1),
+        Err(Error::NonFiniteDirectInnerConnectionComputation { frequency: 0, .. })
     ));
 }

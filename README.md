@@ -341,7 +341,7 @@ references under the repository's algebraic power-wave extension.
 Known-fixture removal is explicit about physical orientation and connection
 ports. For a two-port measured cascade built as `left[1] → dut[0]` followed by
 `[1] → right[0]`, callers can remove either side first with the existing
-`connect_direct_power` method, then explicitly renormalize the recovered DUT to
+`connect_power` method, then explicitly renormalize the recovered DUT to
 the writer's common positive-real reference. Inverse networks can be active or
 noncausal mathematical removal operators; this method is not noise
 de-embedding, automatic calibration, a pole/stability claim, or a general
@@ -754,31 +754,61 @@ Its canonical pinned differential family is
 `s_rad_unwrap` plus explicit interval differencing with seconds tolerances
 `rtol=1e-12`, `atol=1e-21`.
 
-## Connect two networks at a direct physical junction
+## Connect networks at a physical power-wave junction
 
-`Network::connect_direct_power` joins one port from each network with the
-physical conditions `V_A=V_B` and `I_A+I_B=0` (currents into both networks):
+`Network::connect_power` joins one port from each network with the physical
+conditions `V_A=V_B` and `I_A+I_B=0` (currents into both networks):
 
 ```rust
-let connected = a.connect_direct_power(1, &b, 2)?;
+let connected = a.connect_power(1, &b, 2)?;
 ```
 
 The result keeps A's unconnected ports in original order, followed by B's
-unconnected ports in original order. The method solves the two-coordinate
-junction directly under the repository's Kurokawa power-wave equations. It
-accepts finite complex references with nonzero real parts, including unequal,
-frequency-dependent and negative-real references; the sign of `Re(z)` is
-preserved in the wave equations. It does not insert a mismatch network,
-convert through S/Z/Y, renormalize implicitly, or choose a frequency grid.
+unconnected ports in original order. The operation uses Kurokawa power-wave
+coordinates and makes one evaluation choice before doing arithmetic. When the
+inputs have exact compatible grids and all basic shapes/values are valid, the
+selected junction references are finite, exactly real, strictly positive, and
+exactly equal under Rust's `f64` value equality at every frequency, the
+existing matched kernel is used (`-0.0` and `+0.0` therefore compare equal).
+Otherwise the direct physical V/I kernel is used. The selector never retries
+after a numerical failure. Thus finite complex external survivor references
+remain accepted and copied on the matched path, while unequal, complex, and
+negative-real selected references are handled by the direct path whenever
+their real parts are nonzero.
+
+For a matched selection, every frequency uses one exact dyadic complex Schur
+evaluation. Each finite binary64 real/imaginary component is converted to
+`num_rational::BigRational`; `1-S`, the determinant/adjugate, the bilinear
+Schur numerator, and the final `Q = S_ee*D + N` remain rational until `Q/D`
+is converted once at the output boundary. `num-rational` supplies binary64
+round-to-nearest-even behavior, including subnormals and overflow. The matched
+path has one exact evaluator: it does not materialize a binary64
+inverse or internal RHS, use a pivot threshold, or retry through the direct
+kernel. Exact zero determinant and genuinely unrepresentable final output
+remain structured errors.
 
 Both inputs must have matching finite frequency axes with exact pointwise
 labels, valid selected ports, finite square S data and finite references, and
 at least one surviving port. Frequencies are copied from A without sorting,
-intersection, interpolation, or broadcasting. Exact singularity of the
-two-coordinate junction system is reported; finite nonsingular near-singular
-systems remain valid without an arbitrary condition cutoff, while non-finite
-arithmetic is an explicit error. Inputs and surviving references are unchanged
-and copied exactly.
+intersection, interpolation, or broadcasting. The selected path solves the
+physical two-coordinate junction without inserting a mismatch network,
+converting through S/Z/Y, or renormalizing implicitly. Exact singularity and
+non-finite arithmetic are structured errors; finite nonsingular near-singular
+systems remain valid without an arbitrary condition cutoff. Inputs and
+surviving references are unchanged and copied exactly.
+
+If callers need a target grid, they compose the public interpolation operation
+explicitly. The interpolation kind and both stages remain visible, and each
+stage keeps its own diagnostics:
+
+```rust
+let a_on_grid = a.interpolate_cartesian_linear(&grid)?;
+let b_on_grid = b.interpolate_cartesian_linear(&grid)?;
+let connected = a_on_grid.connect_power(1, &b_on_grid, 2)?;
+```
+
+There is no hidden interpolation, grid inference, or renormalization in
+`connect_power`.
 
 The end-to-end Touchstone workflow uses two separate v1.0 S/RI/Hz inputs with
 different common positive-real references, connects them without
@@ -791,13 +821,13 @@ use ndarray::Array2;
 use num_complex::Complex64;
 use rfkit_touchstone::{parse_touchstone_v1_0_s, write_touchstone_v1_0_s_ri_hz};
 
-fn direct_touchstone_workflow(
+fn connect_touchstone_workflow(
     a_text: &str,
     b_text: &str,
 ) -> rfkit_touchstone::Result<String> {
     let a = parse_touchstone_v1_0_s(a_text, 3)?; // e.g. R 50
     let b = parse_touchstone_v1_0_s(b_text, 4)?; // e.g. R 75
-    let joined = a.connect_direct_power(1, &b, 2)?;
+    let joined = a.connect_power(1, &b, 2)?;
     let common = Array2::from_elem(
         joined.z0().dim(),
         Complex64::new(60.0, 0.0),
@@ -809,30 +839,29 @@ fn direct_touchstone_workflow(
 
 The Touchstone writer retains its own v1.0 contract: one finite common
 positive-real reference, finite S values, and a finite non-negative strictly
-increasing frequency axis. It never repairs or silently renormalizes a direct
-connection. This additive Yellow API has no broad scikit-rf compatibility or
-`1.0` stability promise; alternatives such as widening the matched method,
-mandatory renormalization, an inserted mismatch Network, or a broad topology
-type were rejected. Rollback removes the method, tests, fixture, and docs with
-no persisted-data migration. Run the focused executable workflow with:
+increasing frequency axis. It never repairs or silently renormalizes a
+connection. Run the focused executable workflow with:
 
 ```text
-cargo run -p rfkit-touchstone --example connect_direct_power_touchstone
+cargo run -p rfkit-touchstone --example connect_power_touchstone
 ```
 
-## Close two ports of one network at a direct physical junction
+## Close two ports of one network at a physical power-wave junction
 
-`Network::inner_connect_direct_power` closes two distinct ports of one
-network with the physical conditions `V_a = V_b` and `I_a + I_b = 0` (both
-currents point into the source network):
+`Network::inner_connect_power` closes two distinct ports of one network with
+the physical conditions `V_a = V_b` and `I_a + I_b = 0` (both currents point
+into the source network):
 
 ```rust
-let reduced = direct.inner_connect_direct_power(1, 3)?;
+let reduced = network.inner_connect_power(1, 3)?;
 ```
 
-The operation is the same explicit Kurokawa power-wave boundary used by
-`connect_direct_power`, but its internal scattering block is the full
-two-by-two block for the selected coordinates:
+The same pre-computation selector is used: exactly compatible valid input and
+finite, exactly real, strictly positive, exactly equal selected references use
+the matched inner kernel; every other valid nonzero-real reference domain uses
+the direct full physical V/I solve. There is no retry, hidden interpolation,
+or renormalization. Its internal scattering block is the full two-by-two block
+for the selected coordinates:
 
 ```text
 C = [[ q_a,             q_b            ],
@@ -844,14 +873,22 @@ D = [[-q_a,            -q_b           ],
 S_out = S_ee + S_ei*T
 ```
 
+The matched path evaluates its full 2x2 determinant/adjugate and
+`S_EI*adjugate*P*S_IE` correction exactly with dyadic complex rationals, then
+converts only the final `Q/D` output. It does not materialize a binary64
+inverse or internal RHS and does not retry through the direct path. Exact zero
+determinants and genuinely unrepresentable final outputs remain structured
+errors.
+
 Both `S_ab` and `S_ba` are retained; treating the selected ports as two
 independent one-port networks is not equivalent for a coupled multiport.
-Each reference must be finite with a nonzero real part. Unequal or equal
-complex, per-port, frequency-dependent, and negative-real references are
-therefore in-domain, with the signed `Re(z)` retained in
-`q = sqrt(abs(Re(z)))/Re(z)`. The frequency axis is copied bit-for-bit and
-survivor ports remain in their original order with exact references. The
-source is borrowed and unchanged.
+On the direct path every reference must be finite with a nonzero real part.
+Unequal or equal complex, per-port, frequency-dependent, and negative-real
+references are therefore in that path's domain, with the signed `Re(z)`
+retained in `q = sqrt(abs(Re(z)))/Re(z)`. On the matched path, finite complex
+survivor references—including zero-real values—remain accepted and are copied
+exactly. The frequency axis is copied bit-for-bit and survivor ports remain in
+their original order. The source is borrowed and unchanged.
 
 The source must have a nonempty frequency axis, a positive square S matrix,
 matching frequency/S and `(nfreq,nport)` z0 shapes, finite S/z0/frequency
@@ -860,8 +897,8 @@ two-coordinate direct system is solved. An exactly zero evaluated pivot is a
 structured singular-junction error; finite nonsingular near-singular systems
 remain valid without a condition or rank cutoff. No S/Z/Y conversion,
 pseudoinverse, regularization, hidden wave conversion, fixed reference, or
-writer repair is introduced. This additive 0.x API is Green, reversible, and
-provisional; it makes no broad scikit-rf compatibility or `1.0` promise.
+writer repair is introduced. This consolidated 0.x API is Yellow, reversible,
+and provisional; it makes no broad scikit-rf compatibility or `1.0` promise.
 
 The focused Touchstone workflow parses a five-port v1.0 input, explicitly
 renormalizes it to unequal complex selected references, checks the full
@@ -870,7 +907,7 @@ renormalizes the survivors to one common positive-real writer reference and
 performs a write/read round trip:
 
 ```text
-cargo run -p rfkit-touchstone --example inner_connect_direct_power_touchstone
+cargo run -p rfkit-touchstone --example inner_connect_power_touchstone
 ```
 
 The pinned differential fixture is
@@ -880,6 +917,27 @@ pseudo-wave result for this complex-reference case, so the oracle explicitly
 calls `result.renormalize(result.z0, s_def="power")` before reading expected S.
 The raw pseudo result is deliberately not treated as a power-wave oracle, and
 this is not a general scikit-rf compatibility claim.
+
+### Migrating from the pre-1.0 connection names
+
+The crate is unpublished 0.x software, so the five strategy-qualified public
+names were removed without deprecated aliases. Migrate as follows:
+
+- `connect_matched_power` and `connect_direct_power` become `connect_power`.
+- `inner_connect_matched_power` and `inner_connect_direct_power` become
+  `inner_connect_power`.
+- `connect_matched_power_on_grid` becomes two explicit
+  `interpolate_cartesian_linear(&grid)?` calls (one for each input), followed
+  by `connect_power`.
+
+The consolidated methods preserve the union of the old physical domains
+through their single pre-computation selector. One retired matched-domain
+success was a numerical defect: the old binary64 inner solver could report a
+finite second pivot for the exact-singular block `[[3,15],[11,55]]`. The new
+exact evaluator correctly reports singularity for that input, rather than
+preserving the false success. The methods still require exact compatible
+grids and do not infer a grid, interpolate, or renormalize behind the caller's
+back.
 
 ## Repository layout
 

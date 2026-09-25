@@ -178,6 +178,8 @@ dependencies = [
  "nalgebra",
  "ndarray",
  "num-complex",
+ "num-rational",
+ "num-traits",
  "serde",
  "serde_json",
  "thiserror",
