@@ -13,6 +13,7 @@ Scheduled Codex must read and follow the current repository state, especially:
 - `AGENTS.md` — engineering and numerical correctness contract;
 - `docs/DEVELOPMENT_DIRECTION.md` — project direction and meaningful-progress criteria;
 - `docs/LOOP_ENGINEERING.md` — Planner/Worker state machine, WIP, merge, prioritization, and escalation policy;
+- `docs/PUBLIC_API.md` — public API envelope, semantic-qualifier rules, and the public-surface overlap inventory used by the Planner audit;
 - this document — host/execution contract;
 - `automation/planner-prompt.txt` and `automation/worker-prompt.txt` — canonical runtime role-entry prompts.
 

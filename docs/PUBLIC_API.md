@@ -12,6 +12,7 @@ The public surface should:
 - be Rust-native rather than mimic the scikit-rf object model mechanically;
 - keep numerical and wave semantics explicit at the call site;
 - avoid implicit frequency-grid selection, hidden renormalization, or convenience defaults that would freeze policy accidentally;
+- give each RF operation one public entry point per distinct semantic choice, rather than one per internal evaluation strategy;
 - stay small enough to evolve before a deliberate stabilization milestone.
 
 ## Stability policy
@@ -22,7 +23,9 @@ That does not make churn free. Public changes still need concrete user or correc
 
 Until an explicit stabilization milestone, autonomous work may add or evolve bounded provisional APIs under the autonomy classes below. A Yellow change may revise provisional behavior when the Issue and PR record compatibility impact, migration or rollback, alternatives considered, and why the result remains preferable and reversible.
 
-Declaring stability, making a new compatibility guarantee, or breaking a guarantee already made is Red. Replacing explicit behavior with a vague or hidden default is also Red; an explicitly named additional behavior can usually be evaluated as Green or Yellow instead.
+Declaring stability, making a new compatibility guarantee, or breaking a guarantee already made is Red. Replacing an explicit semantic choice with a vague or hidden default is also Red; an explicitly named additional semantic choice can usually be evaluated as Green or Yellow instead.
+
+Selecting the internal evaluation strategy for one explicitly specified operation is not a semantic default. When a verified path already covers an existing operation's domain, generalizing that operation is preferred over adding a coexisting variant. See "Semantic qualifiers and evaluation strategy" and the overlap inventory below.
 
 ## Core model
 
@@ -205,6 +208,40 @@ The public API should not expose a parallel free-function surface that duplicate
 
 Use `Frequency` rather than raw frequency slices at public operation boundaries.
 
+## Semantic qualifiers and evaluation strategy
+
+Public names and required arguments must carry **semantic qualifiers**: choices that change which RF quantity is computed or which caller-visible policy applies. Examples are the wave convention (`_power`), the frequency-grid policy (an explicit target grid), interpolation coordinates and kind (`cartesian_linear`), pairing and modal layout (`equal_pair`), sample alignment (`secant`, interval-aligned), and survivor ordering.
+
+An **evaluation strategy** is how one semantically fixed quantity is computed: direct versus composed through Z or Y, a matched-only kernel versus a general junction solve, or which linear system is factorized. The strategy is an implementation detail. It should not become a public axis once one verified path covers the domain of the others.
+
+A consolidated public operation must:
+
+- keep every semantic qualifier explicit and drop strategy-only qualifiers such as `direct`, `via_z`, or `matched` when they no longer distinguish semantics;
+- accept the union of the retired entry points' documented domains, so no input that succeeded through a retired entry point starts failing, unless that success is documented as a defect;
+- agree with each retired entry point on their common domain within the recorded tolerance, demonstrated by running the retired entry points' existing conformance fixtures through the consolidated operation;
+- use one documented evaluation per input, chosen only from properties that are checked before computing; it must never retry a different path after a numerical failure;
+- keep failures structured and document any change in stage diagnostics;
+- record migration from each retired name in this document and update README and examples in the same change.
+
+`rfkit-rs` has not been published, so a consolidation may remove retired names in the same change instead of keeping deprecated aliases, unless a staged in-repository migration needs them. Historical decision records below stay as history; add a `Superseded by #N` line to the affected record rather than rewriting it.
+
+## Public surface overlap inventory
+
+This inventory lists public operations that currently expose the same RF quantity through more than one entry point. It is the current consolidation direction. Where it differs from the "explicit coexistence" wording in older decision records, the older records describe the decision taken at that time.
+
+A change that adds a public operation overlapping an existing one must either consolidate them under the rules above or add an entry here stating why callers, not the implementation, need both entry points and what condition will retire the overlap. A change that consolidates an entry removes it from this list.
+
+| Operation | Entry points | Relationship | Consolidation direction |
+|---|---|---|---|
+| S→Y extraction | `to_y_power`, `to_y_direct_power` | Same Y. The composed path needs invertible `I-S` and Z; the direct path needs only its `A` system, so its domain is expected to contain the composed domain. | One `to_y_power` using the direct path. |
+| Y ingress | `from_y_via_z_power`, `from_y_direct_power` | Same S. The composed path fails on singular Y, which the direct path accepts. | One `from_y_power` using the direct path. |
+| Power-wave renormalization | `renormalize_power`, `renormalize_direct_power` | Same S. The composed path fails at singular Z; the direct path does not need Z. | One `renormalize_power` using the direct path. First confirm whether any composed-only validation is a semantic contract rather than a domain limitation. |
+| Two-network connection | `connect_matched_power`, `connect_direct_power` | Same physical junction. The matched path accepts only exactly matched real-positive junction references; the direct path accepts unequal finite nonzero-real references. | One `connect_power` using the direct junction solve. |
+| Inner connection | `inner_connect_matched_power`, `inner_connect_direct_power` | Same physical junction on two ports of one network, with the same domain relationship as above. | One `inner_connect_power` using the direct solve. |
+| Connection on an explicit grid | `connect_matched_power_on_grid` | Equivalent to interpolating both inputs onto the target grid and then connecting them. Its name does not state the interpolation kind. | Resolve together with two-network connection: retire in favor of explicit `interpolate_cartesian_linear` plus connection, or rename so that the interpolation kind is explicit. |
+
+The following are **not** overlaps, because their qualifiers are semantic: `cascade_direct_power`, which keeps within-group coupling in one simultaneous solve and differs from repeated connection; `inverse_cascade_power`; the `equal_pair` mixed-mode pair; and the `_power` wave suffix itself.
+
 ## Wave semantics
 
 The current verified conversion, renormalization, and matched-connection kernels use Kurokawa power-wave semantics. The `Network` model does not yet carry a wave-definition field.
@@ -212,6 +249,8 @@ The current verified conversion, renormalization, and matched-connection kernels
 Keep that fact explicit in **wave-sensitive public method names** rather than adding a speculative `WaveDefinition` field before a second convention is actually supported.
 
 An additional convention with authoritative mathematics, explicit naming, and conformance evidence may proceed as Yellow. Selecting a broad implicit wave default, or resolving an authoritative disagreement that cannot be represented through explicit side-by-side APIs, is Red.
+
+When a second convention is actually added, prefer an explicit required wave-definition argument or type on wave-sensitive operations over duplicating every wave-sensitive method name. The `_power` names would then migrate under the consolidation rules above. Making that wave argument optional, or giving it a default, is still an implicit wave default.
 
 ## Direct S→Y extraction (Issue #78 Yellow decision)
 
@@ -1235,6 +1274,8 @@ The exact internal delegation remains an implementation detail. The semantic dis
 
 Do not shorten these to broad names such as `connect`, `interpolate`, or `renormalize` until the library has enough supported semantics and evidence to justify what those names mean. Introducing such a default is at least Yellow and becomes Red when reasonable conventions conflict or the choice would freeze hidden policy.
 
+This does not prevent consolidating strategy-only variants. For example, `connect_power` still names the wave convention; dropping `matched` or `direct` removes only an evaluation-strategy qualifier. Such consolidations follow the overlap inventory and the rules in "Semantic qualifiers and evaluation strategy".
+
 ## Frequency policy
 
 Public connection APIs must not silently choose a frequency grid.
@@ -1272,6 +1313,7 @@ The Planner may dispatch a public API increment as **Green** when all of these a
 - wave convention, units, frequency behavior, tolerances, and other consequential choices are explicit;
 - it follows the current core model, operation style, and error boundary;
 - it is additive or a correctness-preserving implementation change and carries proportionate deterministic, invariant, and differential evidence;
+- it does not add an unrecorded overlap with an existing public operation (see the overlap inventory);
 - no new compatibility promise, irreversible action, or uncertain provenance is involved.
 
 The Planner may dispatch a public API increment as **Yellow** when a material choice remains but all of these are true:
@@ -1282,7 +1324,7 @@ The Planner may dispatch a public API increment as **Yellow** when a material ch
 - the PR preserves that decision record and the independent reviewer explicitly evaluates the RF/API choice, evidence, and reversibility;
 - the change does not cross a Red boundary.
 
-Examples of Yellow work include an explicitly named additional wave convention, a justified supporting public type, a bounded dependency or crate-boundary adjustment, and a provisional API revision with a documented migration. Yellow is not a license for speculative abstraction or weakly sourced RF behavior.
+Examples of Yellow work include an explicitly named additional wave convention, a justified supporting public type, a bounded dependency or crate-boundary adjustment, a provisional API revision with a documented migration, and consolidating an overlap-inventory entry into one entry point under the rules above. Yellow is not a license for speculative abstraction or weakly sourced RF behavior.
 
 The following remain **Red** and require human approval:
 

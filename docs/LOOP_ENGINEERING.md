@@ -86,7 +86,7 @@ Yellow work contains a bounded design choice, but may still proceed autonomously
 - the independent review explicitly evaluates the decision, evidence, scope, and reversibility;
 - no Red condition applies.
 
-Examples include a justified supporting public type, an explicitly named additional convention, a bounded dependency or crate-boundary adjustment, and a provisional API revision with migration notes. The Planner may define, dispatch, and later merge Yellow work without human confirmation when every Yellow record and merge gate is satisfied.
+Examples include a justified supporting public type, an explicitly named additional convention, a bounded dependency or crate-boundary adjustment, a provisional API revision with migration notes, and consolidating a recorded public-surface overlap under `docs/PUBLIC_API.md`. The Planner may define, dispatch, and later merge Yellow work without human confirmation when every Yellow record and merge gate is satisfied.
 
 ### Red
 
@@ -101,7 +101,7 @@ Red work requires a human decision before dispatch or merge:
 - security or safety policy beyond a bounded defect fix;
 - relaxation of WIP=1, independent review, autonomous merge gates, or these decision classes.
 
-Uncertainty alone does not make work Red. The Planner should first narrow the decision, seek authoritative evidence, prefer explicit coexistence over an implicit default, and determine whether a reversible Yellow choice is available. It must not relabel a genuinely Red decision merely to keep the loop active.
+Uncertainty alone does not make work Red. The Planner should first narrow the decision, seek authoritative evidence, prefer explicit semantics over an implicit default, and determine whether a reversible Yellow choice is available. It must not relabel a genuinely Red decision merely to keep the loop active.
 
 The classification and its evidence belong in the Issue and PR, not in additional GitHub labels. This keeps `loop:*` labels reserved for dispatch state.
 
@@ -168,7 +168,7 @@ Every scheduled planner run must use fresh GitHub state and process work in this
 5. if implementation-ready changes are needed, keep the correction bounded to the existing work and re-dispatch its linked Issue under the correction-loop rules below rather than generating a replacement task;
 6. inspect blocked work and relevant open Issues, including interrupted pre-PR claims under the recovery rules below;
 7. check `loop:ready` / `loop:in-progress` state and unresolved autonomous PRs;
-8. only when WIP is clear, compare a small set of plausible next directions internally;
+8. only when WIP is clear, run the public-surface audit if it is due (see "Public surface growth and consolidation"), then compare a small set of plausible next directions internally;
 9. classify the best bounded increment as Green or Yellow, create **one** implementation-ready Issue containing the required decision record, and apply `loop:ready`;
 10. report mutations or escalation concisely.
 
@@ -238,7 +238,7 @@ Prefer work in roughly this order:
 1. broken main / correctness regressions;
 2. concrete blocking conformance or numerical risk;
 3. foundational capability with substantial downstream leverage;
-4. high-value bounded RF capability;
+4. high-value bounded RF capability, or consolidation of a public-surface overlap recorded in `docs/PUBLIC_API.md` that reduces how many entry points callers must choose among for one RF operation;
 5. non-blocking characterization/conformance when justified;
 6. ergonomics, optimization, cleanup, refactor, or documentation when they unlock or protect higher-value work.
 
@@ -269,6 +269,34 @@ Prefer proportionate conformance coverage inside capability work when independen
 After two consecutive merged conformance-only increments, if `main` is healthy and no concrete blocker or newly exposed risk exists, the next autonomous Issue should normally advance capability.
 
 Likewise, repeated cleanup/refactor/documentation-only increments require concrete justification that they unlock, simplify, or protect meaningful RF development. Repository motion is not itself progress.
+
+Consolidating an entry in the public-surface overlap inventory is not cleanup-only work. It changes what callers must understand to perform an RF operation, and it is ranked with bounded RF capability. Internal refactors that leave the public surface unchanged remain under the cleanup rule.
+
+## Public surface growth and consolidation
+
+Adding a named public variant must not be cheaper by policy than generalizing an existing operation. Otherwise the provisional surface grows until a human intervenes.
+
+### Overlap rule for new work
+
+When a proposed public operation would compute the same RF quantity as an existing public operation on a common domain, the Issue must choose one of these and record the choice:
+
+1. generalize or replace the existing operation under the consolidation rules in `docs/PUBLIC_API.md` (normally Yellow); or
+2. add the variant and add an overlap-inventory entry stating why callers, not the implementation, need both entry points and what condition will retire the overlap.
+
+Explicit coexistence is not a default tie-breaker. Choose it only when the recorded caller-facing reason holds. The independent review must check that the overlap choice is recorded and justified.
+
+### Planner public-surface audit
+
+The Planner owns a periodic audit of the public surface so that correcting drift does not depend on an ad hoc human request.
+
+- The audit log is the long-lived GitHub Issue titled `Public surface audit log` (#107). It never carries `loop:*` labels and does not consume WIP.
+- An autonomous product PR is a merged PR for a loop-dispatched Issue that changes code under `crates/`.
+- An audit is due when at least 10 autonomous product PRs have merged after the last PR covered by the latest audit comment, or when no audit comment exists.
+- When an audit is due and WIP is clear, the Planner performs it in the same run, before comparing next directions. It compares the current public entry points of each crate with the overlap inventory in `docs/PUBLIC_API.md`, looks for unrecorded overlaps and strategy-only qualifiers, and appends one audit comment in the format described on the log Issue.
+- Findings feed ordinary selection: an unrecorded overlap, or an inventory entry whose consolidation now has the highest marginal value, may become the next dispatched Issue. The audit does not by itself authorize more than one dispatch or relax WIP.
+- When WIP is not clear, the audit waits until the next run in which WIP is clear.
+
+The ChatGPT governor/auditor and the human owner may still audit at any time. The Planner audit is the default feedback path, not a replacement for them.
 
 ## Definition of merge-ready for numerical work
 

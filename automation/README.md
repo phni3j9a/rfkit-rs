@@ -2,7 +2,7 @@
 
 This directory contains the **version-controlled runtime prompts** for the autonomous `rfkit-rs` Planner and Worker.
 
-The prompts are intentionally thin. Repository policy lives in `AGENTS.md`, `docs/DEVELOPMENT_DIRECTION.md`, `docs/LOOP_ENGINEERING.md`, and `docs/CODEX_AUTOMATION.md`. Systemd is only the scheduler/execution layer and must not duplicate or override that policy.
+The prompts are intentionally thin. Repository policy lives in `AGENTS.md`, `docs/DEVELOPMENT_DIRECTION.md`, `docs/LOOP_ENGINEERING.md`, `docs/PUBLIC_API.md`, and `docs/CODEX_AUTOMATION.md`. Systemd is only the scheduler/execution layer and must not duplicate or override that policy.
 
 ## Runtime prompts
 
