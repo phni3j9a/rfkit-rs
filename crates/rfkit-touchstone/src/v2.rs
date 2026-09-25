@@ -77,6 +77,15 @@ pub(crate) fn parse_touchstone_v2_0_s_full(input: &str) -> Result<Network> {
             });
         }
 
+        // Once the first option line has been accepted, all later `#` lines
+        // are non-authoritative.  Check this before consuming a continued
+        // [Reference] vector so that an ignored option line cannot be
+        // mistaken for a reference value.
+        if reference_pending && raw.text.trim_start().starts_with('#') {
+            index += 1;
+            continue;
+        }
+
         if reference_pending {
             consume_reference_line(
                 raw,
@@ -475,7 +484,11 @@ fn parse_keyword_line<'a>(raw: RawLine<'a>) -> Result<Option<KeywordLine<'a>>> {
     // in `[Two-Port Data Order]` instead of normalizing it to a space; the
     // specification permits case variation, not alternate keyword spellings.
     let name = keyword_text.to_ascii_lowercase();
-    let args = tokenize(&raw.text[closing + 1..]);
+    let argument_offset = closing + 1;
+    let mut args = tokenize(&raw.text[argument_offset..]);
+    for token in &mut args {
+        token.column += argument_offset;
+    }
     Ok(Some(KeywordLine {
         number: raw.number,
         name,

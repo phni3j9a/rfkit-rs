@@ -178,6 +178,64 @@ fn ignores_later_option_lines_even_when_they_are_malformed() {
 }
 
 #[test]
+fn ignores_later_options_while_reference_vector_is_pending() {
+    for later_option in ["# GHz S DB R 999", "# Hz S XY R nope"] {
+        let before_first = format!(
+            "[Version] 2.0\n# MHz S MA R 61\n[Number of Ports] 2\n[Two-Port Data Order] 12_21\n[Reference]\n{later_option}\n61 73\n[Number of Frequencies] 1\n[Network Data]\n1 0.5 90 0 0 0 0 0 0\n[End]\n"
+        );
+        let network = parse_touchstone_v2_0_s_full(&before_first).unwrap();
+        assert_eq!(network.frequency().hz(), &[1.0e6]);
+        assert_eq!(network.z0()[[0, 0]], Complex64::new(61.0, 0.0));
+        assert_eq!(network.z0()[[0, 1]], Complex64::new(73.0, 0.0));
+        assert!(network.s()[[0, 0, 0]].re.abs() < 1.0e-15);
+        assert!((network.s()[[0, 0, 0]].im - 0.5).abs() < 1.0e-15);
+
+        let between = format!(
+            "[Version] 2.0\n# MHz S MA R 61\n[Number of Ports] 2\n[Two-Port Data Order] 12_21\n[Reference] 61\n{later_option}\n73\n[Number of Frequencies] 1\n[Network Data]\n1 0.5 90 0 0 0 0 0 0\n[End]\n"
+        );
+        let network = parse_touchstone_v2_0_s_full(&between).unwrap();
+        assert_eq!(network.frequency().hz(), &[1.0e6]);
+        assert_eq!(network.z0()[[0, 0]], Complex64::new(61.0, 0.0));
+        assert_eq!(network.z0()[[0, 1]], Complex64::new(73.0, 0.0));
+        assert!(network.s()[[0, 0, 0]].re.abs() < 1.0e-15);
+        assert!((network.s()[[0, 0, 0]].im - 0.5).abs() < 1.0e-15);
+    }
+}
+
+#[test]
+fn reports_source_columns_for_inline_and_continued_reference_arguments() {
+    let malformed = "[Version] 2.0\n# Hz S RI\n[Number of Ports] 1\n[Reference]   50+j\n[Number of Frequencies] 1\n[Network Data]\n1 0 0\n[End]\n";
+    assert!(matches!(
+        parse_touchstone_v2_0_s_full(malformed),
+        Err(Error::MalformedNumber {
+            line: 4,
+            column: 15,
+            ref token,
+        }) if token == "50+j"
+    ));
+
+    let nonfinite = "[Version] 2.0\n# Hz S RI\n[Number of Ports] 1\n[Reference] \t NaN\n[Number of Frequencies] 1\n[Network Data]\n1 0 0\n[End]\n";
+    assert!(matches!(
+        parse_touchstone_v2_0_s_full(nonfinite),
+        Err(Error::NonFiniteNumber {
+            line: 4,
+            column: 15,
+            ref token,
+        }) if token == "NaN"
+    ));
+
+    let continuation = "[Version] 2.0\n# Hz S RI\n[Number of Ports] 2\n[Reference] 37\n   NaN\n[Number of Frequencies] 1\n[Two-Port Data Order] 12_21\n[Network Data]\n1 0 0 0 0 0 0 0 0\n[End]\n";
+    assert!(matches!(
+        parse_touchstone_v2_0_s_full(continuation),
+        Err(Error::NonFiniteNumber {
+            line: 5,
+            column: 4,
+            ref token,
+        }) if token == "NaN"
+    ));
+}
+
+#[test]
 fn rejects_invalid_option_lines_and_reference_vectors() {
     let non_s = one_port_document("# Hz Z RI R 50", "", "1 0 0", "[End]");
     assert!(matches!(
