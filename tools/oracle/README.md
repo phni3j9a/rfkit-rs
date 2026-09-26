@@ -114,6 +114,20 @@ the one-port physical load with public `skrf.network.z2s(..., s_def="power")`
 and `Network` APIs. Its survivor order `[0,1,3,4]`, frequency/reference/load
 inputs, seed, pinned dependency lineage, and finite-only/no-excitation load
 contract are exact fields; only `s_terminated` uses strict numeric tolerance.
+
+One explicit-open mixed-load termination case is also registered:
+`power_wave_terminate_port_mixed_open_five_port_complex_z0` uses an
+independently authored asymmetric five-port, four-frequency source with the
+middle port `2`, unequal complex frequency-dependent positive-real references,
+and one tagged load profile containing both `Open` and finite impedance
+samples. Open is represented as the physical one-port power-wave reflection
+`S=+1`, never as an infinity or large finite impedance. Finite samples use the
+public `skrf.network.z2s` conversion, and one public `skrf.network.connect`
+call supplies the expected reduction. The result is explicitly restored and
+checked as power waves with `result.renormalize(result.z0, s_def="power")`
+before S extraction. Tagged loads, source inputs, survivor references,
+ordering, versions/commit, wave definitions, and metadata are exact; only
+`s_terminated` uses strict numeric tolerance.
 One sampled two-port stability case is also registered: four deterministic
 frequency samples use an independent base S stack plus a seeded NumPy
 `default_rng` complex perturbation (seed `20260954`, scale `1e-3`). True
@@ -324,6 +338,19 @@ The finite physical-load termination case is:
   comes from one public `skrf.network.connect` call. The output has four
   survivors in original order `[0,1,3,4]`; source inputs, load values,
   survivor z0, frequency labels, and metadata are exact, while only
+  `s_terminated` is numeric-tolerance checked.
+
+The explicit-open mixed-load termination case is:
+
+- `power_wave_terminate_port_mixed_open_five_port_complex_z0` — independent
+  asymmetric five-port source S, four frequency samples, unequal complex
+  frequency-dependent positive-real z0, selected middle port `2`, and tagged
+  loads `[Open, 31+7j, Open, -17+4j]` ohm. Open is the exact physical
+  power-wave boundary (`S=+1`), while finite samples use public `z2s`; one
+  public `connect` call supplies the expected reduced network. The connected
+  result is explicitly restored and checked as power waves before expected S
+  extraction. Source inputs, tagged loads, survivor z0, wave-definition
+  metadata, ordering, and dependency metadata are exact; only
   `s_terminated` is numeric-tolerance checked.
 
 The sampled two-port stability case is:
@@ -876,9 +903,10 @@ The JSON representation is deliberately machine-readable and byte-stable:
   `s_renormalized` for S renormalization, `s_inner_connected` for inner
   connection (including the direct complex-reference case), `s_cascaded` for
   simultaneous direct cascade, or `s_terminated`
-  for finite physical-load termination;
+  for both finite and explicit-open physical-load termination cases;
   direct physical connection removes only `s_connected`;
-  interpolation removes both `s` and `z0_ohm`. The output's
+  interpolation removes both `s` and `z0_ohm`; both termination fixtures
+  remove only `s_terminated`. The output's
   recursively validated complex array is
   compared with the recorded
   `abs(actual-expected) <= atol + rtol*abs(expected)` policy. S→Z uses
@@ -888,7 +916,7 @@ The JSON representation is deliberately machine-readable and byte-stable:
   `atol_s=1e-12`, Y→S uses `rtol=1e-12` and `atol=1e-12`, and both matched
   and direct inner-connect cases use `rtol=1e-12` and `atol=1e-12`; interpolation uses `rtol=1e-12` and
   `atol=1e-12` for both outputs; matched and direct physical connections and
-  finite physical-load termination use `rtol=1e-12` and `atol=1e-12`. These are strict binary64 tolerances for
+  both physical-load termination fixtures use `rtol=1e-12` and `atol=1e-12`. These are strict binary64 tolerances for
   the well-conditioned, modest-magnitude deterministic cases: they allow
   normal cross-language linear-algebra rounding while catching material
   disagreement.

@@ -759,6 +759,16 @@ TERMINATION_CASE_SPECS = {
         "seed": 20_260_950,
         "output": "s_terminated",
     },
+    "power_wave_terminate_port_mixed_open_five_port_complex_z0": {
+        "operation": "terminate_port_power",
+        "ports": 5,
+        "frequencies": 4,
+        "port": 2,
+        "survivors": [0, 1, 3, 4],
+        "loads": ["open", 31.0 + 7.0j, "open", -17.0 + 4.0j],
+        "seed": 20_260_963,
+        "output": "s_terminated",
+    },
 }
 
 
@@ -4532,6 +4542,198 @@ class TerminationRegistrationAndCheckerTests(unittest.TestCase):
                     path.write_bytes(oracle._canonical_bytes(drifted))
                     self.assertEqual(
                         oracle._check_numeric_fixture(path, self.fixture, "s_terminated"),
+                        1,
+                    )
+
+
+class MixedOpenTerminationRegistrationAndCheckerTests(unittest.TestCase):
+    """Protect the explicit-open/mixed-load termination oracle contract."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.np, cls.skrf = oracle._load_dependencies()
+        cls.case_id = oracle.TERMINATE_MIXED_OPEN_CASE_ID
+        cls.case = {case.case_id: case for case in oracle._CASES}[cls.case_id]
+        cls.fixture = oracle._read_canonical_json(cls.case.path)
+
+    @staticmethod
+    def _complex(value: dict[str, float]) -> complex:
+        return complex(value["real"], value["imag"])
+
+    def _complex_array(self, values: object) -> object:
+        if isinstance(values, list):
+            return [self._complex_array(item) for item in values]
+        if not isinstance(values, dict):
+            raise AssertionError("serialized complex leaf has an unexpected shape")
+        return self._complex(values)
+
+    def test_case_is_registered_with_explicit_open_contract(self) -> None:
+        self.assertEqual(self.case.path, oracle.TERMINATE_MIXED_OPEN_FIXTURE)
+        self.assertEqual(self.case.path.stem, self.case_id)
+        self.assertEqual(self.case.comparison, "numeric_output")
+        self.assertEqual(self.case.numeric_output_key, "s_terminated")
+
+        metadata = self.fixture["metadata"]
+        data = self.fixture["data"]
+        self.assertEqual(metadata["case_id"], self.case_id)
+        self.assertEqual(metadata["operation"], "terminate_port_power")
+        self.assertEqual(metadata["numpy_version"], oracle.EXPECTED_NUMPY_VERSION)
+        self.assertEqual(metadata["scikit_rf_version"], oracle.EXPECTED_SCIKIT_RF_VERSION)
+        self.assertEqual(metadata["scikit_rf_commit"], oracle.EXPECTED_SCIKIT_RF_COMMIT)
+        self.assertEqual(metadata["random_seed"], 20_260_963)
+        self.assertEqual(metadata["wave_definition"], "power")
+        self.assertEqual(metadata["port"], 2)
+        self.assertEqual(metadata["port_order"]["input"], [0, 1, 2, 3, 4])
+        self.assertEqual(metadata["port_order"]["output"], [0, 1, 3, 4])
+        self.assertEqual(
+            metadata["reference_impedance"],
+            {
+                "complex": True,
+                "frequency_dependent": True,
+                "per_port": True,
+                "positive_real": True,
+                "source_field": "z0_ohm",
+                "survivor_field": "z0_survivor_ohm",
+                "unit": "ohm",
+            },
+        )
+        self.assertEqual(
+            metadata["load_boundary"],
+            {
+                "finite_only": False,
+                "includes_ideal_open": True,
+                "includes_ideal_short": False,
+                "load_excitation": "none",
+                "open_sentinel": "explicit PortLoad::Open variant",
+                "unit": "ohm",
+            },
+        )
+        self.assertEqual(
+            metadata["shape"],
+            {
+                "frequency": [4],
+                "input_s": [4, 5, 5],
+                "input_z0": [4, 5],
+                "loads": [4],
+                "output_s": [4, 4, 4],
+                "output_z0": [4, 4],
+            },
+        )
+        self.assertEqual(
+            data["loads"],
+            [
+                {"kind": "open"},
+                {
+                    "kind": "impedance_ohm",
+                    "value": {"imag": 7.0, "real": 31.0},
+                },
+                {"kind": "open"},
+                {
+                    "kind": "impedance_ohm",
+                    "value": {"imag": 4.0, "real": -17.0},
+                },
+            ],
+        )
+        self.assertEqual(metadata["wave_definitions"]["input"], "power")
+        self.assertEqual(metadata["wave_definitions"]["load"], "power")
+        self.assertEqual(metadata["wave_definitions"]["output"], "power")
+        self.assertIn("renormalize", metadata["wave_definitions"]["restoration"])
+        self.assertIn("Open", metadata["tolerance_policy"]["justification"])
+        self.assertIn("only data.s_terminated", metadata["tolerance_policy"]["comparison"])
+
+    def test_public_builder_uses_z2s_for_finite_loads_and_restores_power_output(self) -> None:
+        with mock.patch.object(
+            self.skrf.network,
+            "z2s",
+            wraps=self.skrf.network.z2s,
+        ) as conversion, mock.patch.object(
+            self.skrf.network,
+            "connect",
+            wraps=self.skrf.network.connect,
+        ) as connect:
+            document = self.case.builder(self.np, self.skrf)
+
+        self.assertEqual(conversion.call_count, 2)
+        for call in conversion.call_args_list:
+            args, kwargs = call
+            self.assertEqual(len(args), 1)
+            self.assertEqual(args[0].shape, (1, 1, 1))
+            self.assertEqual(kwargs["z0"].shape, (1, 1))
+            self.assertEqual(kwargs["s_def"], "power")
+
+        self.assertEqual(connect.call_count, 1)
+        connect_args, connect_kwargs = connect.call_args
+        self.assertEqual(connect_kwargs, {})
+        self.assertEqual(connect_args[1], 2)
+        self.assertIsInstance(connect_args[0], self.skrf.Network)
+        self.assertIsInstance(connect_args[2], self.skrf.Network)
+        self.assertEqual(connect_args[3], 0)
+        self.assertEqual(connect_args[0].s_def, "power")
+        self.assertEqual(connect_args[2].s_def, "power")
+        load_network = connect_args[2]
+        self.np.testing.assert_array_equal(
+            load_network.s[[0, 2], 0, 0],
+            self.np.ones(2, dtype=self.np.complex128),
+        )
+
+        raw_expected = self.skrf.network.connect(*connect_args)
+        restored_expected = raw_expected.copy()
+        restored_expected.renormalize(raw_expected.z0, s_def="power")
+        self.assertEqual(restored_expected.s_def, "power")
+        actual = self.np.asarray(
+            self._complex_array(document["data"]["s_terminated"]),
+            dtype=self.np.complex128,
+        )
+        self.np.testing.assert_allclose(
+            actual,
+            restored_expected.s,
+            rtol=1e-12,
+            atol=1e-12,
+        )
+        self.np.testing.assert_array_equal(
+            self.np.asarray(
+                self._complex_array(document["data"]["z0_survivor_ohm"])
+            ),
+            restored_expected.z0,
+        )
+        self.assertEqual(document["metadata"]["wave_definitions"]["output"], "power")
+
+    def test_checker_tolerates_only_mixed_terminated_s_output(self) -> None:
+        adjusted = copy.deepcopy(self.fixture)
+        adjusted["data"]["s_terminated"][0][0][0]["real"] += 1e-13
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / self.case.path.name
+            path.write_bytes(oracle._canonical_bytes(adjusted))
+            self.assertEqual(
+                oracle._check_numeric_fixture(path, self.fixture, "s_terminated"),
+                0,
+            )
+
+        for field in ("s", "z0_ohm", "loads", "z0_survivor_ohm", "metadata"):
+            with self.subTest(field=field):
+                drifted = copy.deepcopy(self.fixture)
+                if field == "s":
+                    drifted["data"]["s"][0][0][0]["real"] += 1e-3
+                elif field == "z0_ohm":
+                    drifted["data"]["z0_ohm"][0][0]["real"] += 1.0
+                elif field == "loads":
+                    drifted["data"]["loads"][0] = {
+                        "kind": "impedance_ohm",
+                        "value": {"imag": 0.0, "real": 1.0},
+                    }
+                elif field == "z0_survivor_ohm":
+                    drifted["data"]["z0_survivor_ohm"][0][0]["real"] += 1.0
+                else:
+                    drifted["metadata"]["port"] = 1
+                with tempfile.TemporaryDirectory() as directory:
+                    path = Path(directory) / self.case.path.name
+                    path.write_bytes(oracle._canonical_bytes(drifted))
+                    self.assertEqual(
+                        oracle._check_numeric_fixture(
+                            path,
+                            self.fixture,
+                            "s_terminated",
+                        ),
                         1,
                     )
 
