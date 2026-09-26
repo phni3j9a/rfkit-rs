@@ -236,11 +236,117 @@ A change that adds a public operation overlapping an existing one must either co
 | S→Y extraction | `to_y_power`, `to_y_direct_power` | Same Y. The composed path needs invertible `I-S` and Z; the direct path needs only its `A` system, so its domain is expected to contain the composed domain. | One `to_y_power` using the direct path. |
 | Y ingress | `from_y_via_z_power`, `from_y_direct_power` | Same S. The composed path fails on singular Y, which the direct path accepts. | One `from_y_power` using the direct path. |
 | Power-wave renormalization | `renormalize_power`, `renormalize_direct_power` | Same S. The composed path fails at singular Z; the direct path does not need Z. | One `renormalize_power` using the direct path. First confirm whether any composed-only validation is a semantic contract rather than a domain limitation. |
-| Two-network connection | `connect_matched_power`, `connect_direct_power` | Same physical junction. The matched path accepts only exactly matched real-positive junction references; the direct path accepts unequal finite nonzero-real references. | One `connect_power` using the direct junction solve. |
-| Inner connection | `inner_connect_matched_power`, `inner_connect_direct_power` | Same physical junction on two ports of one network, with the same domain relationship as above. | One `inner_connect_power` using the direct solve. |
-| Connection on an explicit grid | `connect_matched_power_on_grid` | Equivalent to interpolating both inputs onto the target grid and then connecting them. Its name does not state the interpolation kind. | Resolve together with two-network connection: retire in favor of explicit `interpolate_cartesian_linear` plus connection, or rename so that the interpolation kind is explicit. |
-
 The following are **not** overlaps, because their qualifiers are semantic: `cascade_direct_power`, which keeps within-group coupling in one simultaneous solve and differs from repeated connection; `inverse_cascade_power`; the `equal_pair` mixed-mode pair; and the `_power` wave suffix itself.
+
+## Consolidated physical power-wave connection (Issue #109 Yellow decision)
+
+Issue #109 consolidates the matched/direct two-network and same-network
+physical-junction entry points into exactly these two public methods:
+
+```rust
+impl Network {
+    pub fn connect_power(
+        &self,
+        port_a: usize,
+        other: &Network,
+        port_b: usize,
+    ) -> Result<Network>;
+
+    pub fn inner_connect_power(
+        &self,
+        port_a: usize,
+        port_b: usize,
+    ) -> Result<Network>;
+}
+```
+
+The operation is one Kurokawa power-wave physical V/I junction. `connect_power`
+returns A survivors followed by B survivors, preserving each source order and
+reference exactly. `inner_connect_power` removes two selected ports and
+preserves the original survivor order. Neither method changes the wave
+convention, inserts a mismatch network, renormalizes, or chooses a frequency
+grid.
+
+The selector performs one pre-computation decision. It first requires the
+existing exact-grid, shape, axis, finite-value, port, and survivor validity
+conditions. If the selected junction references are finite, exactly real,
+strictly positive, and exactly equal under Rust's `f64` value equality at
+every frequency, it uses the existing matched kernel (`-0.0` and `+0.0`
+therefore compare equal). Otherwise it uses the existing direct physical V/I
+kernel.
+The direct domain therefore retains unequal, complex, and negative-real
+nonzero-real junction references, while the matched path still accepts finite
+complex or zero-real *external survivor* references and copies them. A failed
+matched or direct computation is never retried through the other kernel.
+
+For the matched choice, each frequency is evaluated exactly once by a private
+dyadic complex Schur evaluator. Every finite binary64 real and imaginary
+component is converted to `num_rational::BigRational`; `1-S`, the matched 2x2
+determinant/adjugate, the bilinear `S_EI * adjugate * P * S_IE` term, and the
+final `Q = S_EE * D + N` numerator remain rational until `Q / D` is converted
+at the output boundary. `num-rational` performs the final binary64
+round-to-nearest-even conversion, including subnormal and overflow behavior.
+The matched path has one exact evaluator: it does not materialize a binary64
+inverse or internal RHS, use a pivot threshold, or retry through the direct
+kernel. An exact zero determinant is a structured singularity; if the final
+rational output is outside finite binary64 range, the result is a structured
+non-finite computation.
+
+Both methods require exact pointwise-compatible frequency labels and do not
+sort, intersect, extrapolate, interpolate, or broadcast. Callers that need a
+target grid compose the policy explicitly:
+
+```rust
+let a_on_grid = a.interpolate_cartesian_linear(&grid)?;
+let b_on_grid = b.interpolate_cartesian_linear(&grid)?;
+let joined = a_on_grid.connect_power(port_a, &b_on_grid, port_b)?;
+```
+
+Interpolation errors remain interpolation errors and connection errors remain
+connection errors; the deleted convenience adapter and its `GridConnection`
+wrapper are not part of the public boundary. Exact singularities and checked
+non-finite arithmetic retain structured diagnostics. Because the selector can
+change which private kernel supplies a failure, the diagnostic family may now
+be matched-junction or direct-junction; the input location, selected ports,
+frequency, and arithmetic context remain structured where available.
+
+The consolidation accepts the union of the retired *physical* domains and
+agrees with the matched and direct fixtures on their common domains within
+their recorded tolerances. One documented compatibility exception is a
+numerical defect in the retired matched Gaussian solver: for
+`S_ii=[[-11,-54],[-2,-15]]`, its rounded second pivot can be `2^-49` even
+though the exact determinant is zero. The consolidated exact evaluator reports
+that physical singularity instead of preserving the false old success; this
+is not a new semantic restriction. Evidence includes the matched and direct
+public/oracle fixture suites, independent common-domain physical
+reconstructions, A-then-B and original-survivor mapping tests, the explicit
+interpolation-composition fixtures, the Touchstone workflows, Issue #44
+bit-exact arithmetic, exact-dyadic A/B/C/D and huge-internal-block cases,
+minimum-subnormal and final-rounding conversion tests, final-Q cancellation,
+genuinely unrepresentable-output diagnostics, and exact/near-singular
+selector tests. The singular matched-junction case is required to report its
+exact singularity rather than succeeding via an alternate path.
+
+Alternatives rejected were retaining strategy-qualified public names, exposing
+a public strategy switch, using direct-only evaluation, silently interpolating
+or selecting a default grid, pre-renormalizing mismatched references, or
+retrying after arithmetic failure. The crate is unpublished 0.x software, so
+the five retired names are removed without deprecated aliases; the migration
+is:
+
+- `connect_matched_power` and `connect_direct_power` → `connect_power`;
+- `inner_connect_matched_power` and `inner_connect_direct_power` →
+  `inner_connect_power`;
+- `connect_matched_power_on_grid` → explicit interpolation of both inputs
+  with `interpolate_cartesian_linear`, followed by `connect_power`.
+
+Rollback is reversible by reverting the Issue #109 change, which restores the
+five former public methods and the explicit-grid adapter and removes the two
+consolidated methods, selector, exact matched-evaluation adaptation, and
+migrated tests/docs. No serialized data, frequency grid, wave convention, or
+storage representation migration is required. The canonical fixture values
+remain available as conformance lineage, and no data migration is needed to
+undo the API change.
 
 ## Wave semantics
 
@@ -800,6 +906,8 @@ also uses unequal real/complex positive-real references and strict
 
 ## Direct physical power-wave connection (Issue #88 Yellow decision)
 
+Superseded by #109
+
 The provisional public surface adds one borrowing, owned-result operation:
 
 ```rust
@@ -889,15 +997,19 @@ references, shapes, and order are exact; only S uses `rtol=1e-12`,
 references without adding a second canonical fixture. The implementation is a
 REWRITE from the Kurokawa equations plus the physical junction conditions.
 
-The corresponding Touchstone workflow parses two separate v1.0 inputs with
-different common positive-real references, calls `connect_direct_power`
-without pre-renormalizing either source, checks the response through the
-physical V/I boundary independently, then explicitly calls
+The corresponding current Touchstone workflow is
+`crates/rfkit-touchstone/tests/public_connect_power_workflow.rs` with
+`crates/rfkit-touchstone/examples/connect_power_touchstone.rs`. It parses two
+separate v1.0 inputs with different common positive-real references, calls
+`connect_power` without pre-renormalizing either source, checks the response
+through the physical V/I boundary independently, then explicitly calls
 `renormalize_direct_power` to a caller-selected common writer-compatible
 reference before writing and reading. The writer does not repair or
 renormalize a direct-connection result automatically.
 
 ## Direct physical power-wave inner connection (Issue #90 Green decision)
+
+Superseded by #109
 
 The provisional public surface adds one borrowing, owned-result operation:
 
@@ -962,8 +1074,10 @@ including when external coupling is zero. A finite nonsingular near-singular
 system remains in-domain without an arbitrary condition, rank, or tolerance
 cutoff. Non-finite intermediate or output arithmetic is reported with
 operation, frequency, selected-port, and row/column/pivot context where
-available. Existing matched, direct inter-network, explicit-grid,
-termination, and writer semantics remain unchanged.
+available. The consolidated connection methods and their explicit
+interpolation-then-connection grid workflow now provide the union of the
+former matched/direct domains. Termination and writer semantics remain
+unchanged.
 
 This additive operation is Green, reversible, and provisional for the `0.x`
 series. It introduces no new wave convention, storage or topology model,
@@ -987,9 +1101,9 @@ survivor mapping, wave-definition metadata, and tolerance policy are exact;
 only output S uses `rtol=1e-12`, `atol=1e-12`.
 
 The executable and external workflow test are
-`crates/rfkit-touchstone/examples/inner_connect_direct_power_touchstone.rs`
+`crates/rfkit-touchstone/examples/inner_connect_power_touchstone.rs`
 and
-`crates/rfkit-touchstone/tests/public_direct_inner_connection_workflow.rs`.
+`crates/rfkit-touchstone/tests/public_inner_connect_power_workflow.rs`.
 They parse the multiport input, explicitly direct-renormalize selected
 references, independently reconstruct the full physical V/I response, close
 the pair, explicitly restore one writer-compatible positive-real reference,
@@ -1182,35 +1296,14 @@ impl Network {
         target: &Frequency,
     ) -> Result<Network>;
 
-    pub fn connect_matched_power(
-        &self,
-        port: usize,
-        other: &Network,
-        other_port: usize,
-    ) -> Result<Network>;
-
-    pub fn connect_direct_power(
+    pub fn connect_power(
         &self,
         port_a: usize,
         other: &Network,
         port_b: usize,
     ) -> Result<Network>;
 
-    pub fn connect_matched_power_on_grid(
-        &self,
-        port: usize,
-        other: &Network,
-        other_port: usize,
-        target: &Frequency,
-    ) -> Result<Network>;
-
-    pub fn inner_connect_matched_power(
-        &self,
-        port_a: usize,
-        port_b: usize,
-    ) -> Result<Network>;
-
-    pub fn inner_connect_direct_power(
+    pub fn inner_connect_power(
         &self,
         port_a: usize,
         port_b: usize,
@@ -1246,17 +1339,17 @@ The exact internal delegation remains an implementation detail. The semantic dis
 - `permute_ports` explicitly selects a complete new-to-old physical-port reindexing and carries S rows, S columns, and z0 together without wave arithmetic;
 - `to_mixed_mode_equal_pair_power` and `to_single_ended_equal_pair_power` explicitly select the equal single-ended-reference adjacent-pair power-wave transform and its inverse, with modal layout `[d...,c...,unpaired...]`; they do not infer physical pairing or store mode metadata;
 - `interpolate_cartesian_linear` does not establish a vague interpolation default that would later need reinterpretation;
-- `connect_matched_power` requires the existing exactly matched real-positive junction contract and exact compatible frequency grids;
-- `connect_matched_power_on_grid` requires an explicit caller-provided grid and performs interpolation-before-connection under the existing verified composition semantics;
-- `inner_connect_matched_power` exposes the existing matched same-network elimination semantics.
-- `connect_direct_power` exposes one direct physical V/I junction solve for
-  unequal finite nonzero-real references and retains A-then-B survivor order;
-  it does not silently change the exact-grid or matched-junction contracts of
-  the other connection methods.
-- `inner_connect_direct_power` exposes the same direct physical V/I boundary
-  for two ports of one network, retaining the full internal 2×2 S block and
-  original survivor order; it does not widen the matched inner-connect
-  reference contract or make a broad scikit-rf compatibility promise.
+- `connect_power` exposes one physical Kurokawa junction for the union of the
+  matched and direct domains. Its pre-computation selector chooses the
+  existing matched kernel only for finite, exactly real, strictly positive,
+  exactly `f64`-equal selected references on an exact valid grid; otherwise
+  it chooses the direct V/I solve. A's survivors precede B's survivors.
+- `inner_connect_power` exposes the same physical junction inside one network,
+  retaining the full selected 2×2 S block and original survivor order. It uses
+  the same one-time selector and never retries through the other kernel.
+- Explicit target-grid connection is caller composition:
+  `interpolate_cartesian_linear` on both inputs, then `connect_power`; there is
+  no hidden interpolation or renormalization.
 - `terminate_port_impedance_power` applies a finite physical impedance boundary directly at one
   selected port, removes that port, and retains the original survivor order and references without
   selecting a new frequency grid or renormalizing the source.
@@ -1280,9 +1373,13 @@ This does not prevent consolidating strategy-only variants. For example, `connec
 
 Public connection APIs must not silently choose a frequency grid.
 
-- `connect_matched_power` requires the inputs to satisfy the existing exact-grid contract.
-- `connect_matched_power_on_grid` uses only the caller-provided `Frequency` target.
-- No implicit intersection, subset selection, nearest-grid match, extrapolation, or automatic interpolation is part of the first public API.
+- `connect_power` and `inner_connect_power` use the stored exact pointwise
+  labels; they do not sort, intersect, subset, extrapolate, interpolate, or
+  infer a target grid.
+- A caller-selected grid is explicit composition: interpolate each input with
+  `interpolate_cartesian_linear(&grid)?`, then call `connect_power`.
+- Errors remain staged as interpolation or connection errors; there is no
+  `GridConnection` convenience wrapper at the public boundary.
 
 A future convenience API may proceed as Green or Yellow when its frequency-selection policy is explicit in its name or required arguments and is independently verified. An unqualified API that silently chooses intersection, extrapolation, sorting, tolerance, or another grid policy is outside the envelope.
 

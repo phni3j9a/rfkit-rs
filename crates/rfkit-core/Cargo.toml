@@ -13,6 +13,8 @@ categories = ["science", "mathematics"]
 ndarray.workspace = true
 nalgebra.workspace = true
 num-complex.workspace = true
+num-rational = "0.4.2"
+num-traits = "0.2.19"
 serde.workspace = true
 thiserror.workspace = true
 

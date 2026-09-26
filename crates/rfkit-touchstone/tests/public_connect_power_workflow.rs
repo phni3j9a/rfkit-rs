@@ -1,9 +1,3 @@
-//! Touchstone ingress -> direct physical connection -> explicit renormalization.
-//!
-//! The two inputs intentionally use different common references.  The writer
-//! is called only after the caller explicitly chooses one common reference;
-//! it never repairs the heterogeneous direct-connection result.
-
 use ndarray::{Array2, Array3};
 use num_complex::Complex64;
 use rfkit_touchstone::{parse_touchstone_v1_0_s, write_touchstone_v1_0_s_ri_hz};
@@ -46,13 +40,19 @@ fn c(real: f64, imag: f64) -> Complex64 {
 
 fn solve_two_by_two(matrix: [[Complex64; 2]; 2], rhs: [Complex64; 2]) -> [Complex64; 2] {
     let determinant = matrix[0][0] * matrix[1][1] - matrix[0][1] * matrix[1][0];
-    assert!(determinant != c(0.0, 0.0));
+    assert!(
+        determinant != c(0.0, 0.0),
+        "physical junction must be nonsingular"
+    );
     [
         (rhs[0] * matrix[1][1] - matrix[0][1] * rhs[1]) / determinant,
         (matrix[0][0] * rhs[1] - rhs[0] * matrix[1][0]) / determinant,
     ]
 }
 
+/// Independently derive S_out from the Kurokawa V/I equations and the
+/// physical conditions V_A=V_B and I_A+I_B=0.  This is intentionally local to
+/// the workflow test; it does not call a core connection or matched helper.
 fn independently_expected(a: &rfkit_core::Network, b: &rfkit_core::Network) -> Array3<Complex64> {
     let nfreq = a.frequency().hz().len();
     Array3::from_shape_fn((nfreq, 5, 5), |(frequency, output, input)| {
@@ -79,6 +79,7 @@ fn independently_expected(a: &rfkit_core::Network, b: &rfkit_core::Network) -> A
                 c_matrix[1][1] + d_matrix[1][1] * s_ii[1][1],
             ],
         ];
+
         let s_ie = [
             if input < SURVIVORS_A.len() {
                 a.s()[[frequency, SELECTED_A, SURVIVORS_A[input]]]
@@ -100,6 +101,7 @@ fn independently_expected(a: &rfkit_core::Network, b: &rfkit_core::Network) -> A
             -(d_matrix[1][0] * s_ie[0] + d_matrix[1][1] * s_ie[1]),
         ];
         let internal = solve_two_by_two(system, rhs);
+
         let s_ee = if output < SURVIVORS_A.len() {
             if input < SURVIVORS_A.len() {
                 a.s()[[frequency, SURVIVORS_A[output], SURVIVORS_A[input]]]
@@ -134,33 +136,64 @@ fn independently_expected(a: &rfkit_core::Network, b: &rfkit_core::Network) -> A
     })
 }
 
-fn main() -> rfkit_touchstone::Result<()> {
-    let a = parse_touchstone_v1_0_s(INPUT_A, 3)?;
-    let b = parse_touchstone_v1_0_s(INPUT_B, 4)?;
-    let a_snapshot = (a.frequency().clone(), a.s().clone(), a.z0().clone());
-    let b_snapshot = (b.frequency().clone(), b.s().clone(), b.z0().clone());
+#[test]
+fn touchstone_connect_power_checks_physical_junction_and_explicit_writer_renormalization() {
+    let a = parse_touchstone_v1_0_s(INPUT_A, 3).expect("A Touchstone input parses");
+    let b = parse_touchstone_v1_0_s(INPUT_B, 4).expect("B Touchstone input parses");
+    assert_eq!(a.z0(), &Array2::from_elem((3, 3), c(50.0, 0.0)));
+    assert_eq!(b.z0(), &Array2::from_elem((3, 4), c(75.0, 0.0)));
+
+    let a_frequency = a.frequency().clone();
+    let a_s = a.s().clone();
+    let a_z0 = a.z0().clone();
+    let b_frequency = b.frequency().clone();
+    let b_s = b.s().clone();
+    let b_z0 = b.z0().clone();
     let expected = independently_expected(&a, &b);
 
-    let joined = a.connect_direct_power(SELECTED_A, &b, SELECTED_B)?;
+    let joined = a
+        .connect_power(SELECTED_A, &b, SELECTED_B)
+        .expect("unequal real references connect directly");
+    assert_eq!(joined.frequency(), &a_frequency);
+    assert_eq!(
+        joined.z0(),
+        &Array2::from_shape_fn((3, 5), |(frequency, port)| {
+            if port < SURVIVORS_A.len() {
+                a_z0[[frequency, SURVIVORS_A[port]]]
+            } else {
+                b_z0[[frequency, SURVIVORS_B[port - SURVIVORS_A.len()]]]
+            }
+        })
+    );
+    assert_eq!(joined.s().dim(), (3, 5, 5));
     for (actual, expected) in joined.s().iter().zip(expected.iter()) {
-        assert!((*actual - *expected).norm() <= 1.0e-12);
+        assert!(
+            (*actual - *expected).norm() <= 1.0e-12,
+            "physical junction mismatch: actual={actual:?}, expected={expected:?}"
+        );
     }
-    assert_eq!(joined.z0().dim(), (3, 5));
-    assert!(write_touchstone_v1_0_s_ri_hz(&joined).is_err());
 
-    let writer_ready = joined.renormalize_direct_power(Array2::from_elem((3, 5), c(60.0, 0.0)))?;
-    let text = write_touchstone_v1_0_s_ri_hz(&writer_ready)?;
-    let reread = parse_touchstone_v1_0_s(&text, 5)?;
+    // The writer must reject the direct result's heterogeneous references; it
+    // must not silently repair them.  Renormalization is an explicit caller
+    // operation and chooses the common writer reference deliberately.
+    assert!(write_touchstone_v1_0_s_ri_hz(&joined).is_err());
+    let common_z0 = Array2::from_elem((3, 5), c(60.0, 0.0));
+    let writer_ready = joined
+        .renormalize_direct_power(common_z0.clone())
+        .expect("explicit writer-compatible direct renormalization");
+    assert_eq!(writer_ready.z0(), &common_z0);
+    let text = write_touchstone_v1_0_s_ri_hz(&writer_ready).expect("writer accepts common z0");
+    let reread = parse_touchstone_v1_0_s(&text, 5).expect("writer output parses");
     assert_eq!(reread.frequency(), writer_ready.frequency());
     assert_eq!(reread.z0(), writer_ready.z0());
     assert_eq!(reread.s(), writer_ready.s());
 
-    assert_eq!(a.frequency(), &a_snapshot.0);
-    assert_eq!(a.s(), &a_snapshot.1);
-    assert_eq!(a.z0(), &a_snapshot.2);
-    assert_eq!(b.frequency(), &b_snapshot.0);
-    assert_eq!(b.s(), &b_snapshot.1);
-    assert_eq!(b.z0(), &b_snapshot.2);
-    print!("{text}");
-    Ok(())
+    // Both parsed inputs are borrowed and remain byte-for-byte equivalent in
+    // their owned arrays after direct connection and export.
+    assert_eq!(a.frequency(), &a_frequency);
+    assert_eq!(a.s(), &a_s);
+    assert_eq!(a.z0(), &a_z0);
+    assert_eq!(b.frequency(), &b_frequency);
+    assert_eq!(b.s(), &b_s);
+    assert_eq!(b.z0(), &b_z0);
 }

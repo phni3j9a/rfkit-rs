@@ -146,7 +146,7 @@ fn public_inner_connection_matches_analytic_block_diagonal_tees_and_two_network_
     let source_s = source.s().clone();
     let source_z0 = source.z0().clone();
 
-    let reduced = source.inner_connect_matched_power(1, 4).unwrap();
+    let reduced = source.inner_connect_power(1, 4).unwrap();
 
     assert_eq!(reduced.frequency().hz(), frequency_hz.as_slice());
     assert_eq!(reduced.s().dim(), (2, 4, 4));
@@ -154,7 +154,9 @@ fn public_inner_connection_matches_analytic_block_diagonal_tees_and_two_network_
         for row in 0..4 {
             for column in 0..4 {
                 let expected = if row == column { -0.5 } else { 0.5 };
-                assert_eq!(reduced.s()[[frequency, row, column]], c(expected, 0.0));
+                let actual = reduced.s()[[frequency, row, column]];
+                assert!((actual.re - expected).abs() < 1.0e-13);
+                assert_eq!(actual.im, 0.0);
             }
         }
     }
@@ -186,7 +188,7 @@ fn public_inner_connection_matches_analytic_block_diagonal_tees_and_two_network_
         s.slice(ndarray::s![.., 3..6, 3..6]).to_owned(),
         z0.slice(ndarray::s![.., 3..6]).to_owned(),
     );
-    let two_network = left.connect_matched_power(1, &right, 1).unwrap();
+    let two_network = left.connect_power(1, &right, 1).unwrap();
     assert_eq!(reduced.z0(), two_network.z0());
     assert_eq!(reduced.frequency(), two_network.frequency());
     assert_array3_close(reduced.s(), two_network.s(), 1.0e-14, 1.0e-14);
@@ -220,7 +222,7 @@ fn public_inner_connection_matches_recorded_fixture_and_survivor_order() {
     let expected_s = array3(&fixture.data.s_inner_connected);
     let expected_z0 = array2(&fixture.data.z0_inner_connected_ohm);
     let reduced = source
-        .inner_connect_matched_power(
+        .inner_connect_power(
             fixture.metadata.junction_ports.k,
             fixture.metadata.junction_ports.l,
         )
@@ -249,12 +251,126 @@ fn public_inner_connection_supports_single_survivor_non50_junction_and_complex_e
     let z0 =
         Array2::from_shape_vec((1, 3), vec![c(61.25, 0.0), c(41.0, -3.0), c(61.25, 0.0)]).unwrap();
     let source = network(frequency_hz.clone(), s, z0);
-    let reduced = source.inner_connect_matched_power(0, 2).unwrap();
+    let reduced = source.inner_connect_power(0, 2).unwrap();
 
     assert_eq!(reduced.frequency().hz(), frequency_hz.as_slice());
     assert_eq!(reduced.s().dim(), (1, 1, 1));
     assert_eq!(reduced.s()[[0, 0, 0]], c(0.16, -0.02));
     assert_eq!(reduced.z0(), &Array2::from_elem((1, 1), c(41.0, -3.0)));
+}
+
+#[test]
+fn public_inner_connect_power_extreme_schur_correction_stays_finite() {
+    let frequency_hz = vec![1.0e9];
+    let delta = 2.0_f64.powi(-50);
+    let radius = 2.0_f64.powi(974);
+    let mut s = Array3::zeros((1, 3, 3));
+    s[[0, 0, 0]] = c(-1.0, 0.0);
+    s[[0, 0, 1]] = c(-delta, 0.0);
+    s[[0, 1, 1]] = c(-1.0, 0.0);
+    s[[0, 0, 2]] = c((2.0 + delta) * radius, 0.0);
+    s[[0, 1, 2]] = c(2.0 * radius, 0.0);
+    s[[0, 2, 0]] = c(1.0, 0.0);
+    s[[0, 2, 1]] = c(1.0, 0.0);
+    let source = network(frequency_hz, s, Array2::from_elem((1, 3), c(1.0, 0.0)));
+
+    // The correction is exactly 2*radius = 2^975.  A binary64 inverse
+    // materialized before the bilinear product would overflow its terms.
+    let reduced = source
+        .inner_connect_power(0, 1)
+        .expect("exact matched inner correction must remain finite");
+    assert_eq!(reduced.s()[[0, 0, 0]], c(2.0_f64.powi(975), 0.0));
+}
+
+#[test]
+fn public_inner_connect_power_exact_determinant_survives_rounding_pivot() {
+    let frequency_hz = vec![1.0e9];
+    let a = f64::from_bits(0x3ff4df3d3d5daf12);
+    let b = f64::from_bits(0x3fe887cace17428e);
+    assert_eq!(
+        (1.0 - a * b).to_bits(),
+        2.0_f64.powi(-53).to_bits(),
+        "Astra near-pivot fixture must have a binary64 determinant of 2^-53"
+    );
+    let mut s = Array3::zeros((1, 3, 3));
+    // Put the larger selected diagonal first.  The matched inner matrix is
+    // [[1, -S_ll], [-S_kk, 1]], so this ordering exercises the pivot swap and
+    // the rounded-to-zero second pivot from the Astra regression.
+    s[[0, 0, 0]] = c(a, 0.0);
+    s[[0, 1, 1]] = c(b, 0.0);
+    let source = network(frequency_hz, s, Array2::from_elem((1, 3), c(1.0, 0.0)));
+
+    // Binary64 elimination rounds the second pivot to zero even though the
+    // exact determinant is 2^-53. The exact determinant/adjugate evaluator is
+    // finite and the external coupling is zero, so the survivor remains zero.
+    let reduced = source
+        .inner_connect_power(0, 1)
+        .expect("exact non-zero determinant must not be singular");
+    assert_eq!(reduced.s()[[0, 0, 0]], c(0.0, 0.0));
+}
+
+#[test]
+fn public_inner_connect_power_exact_dyadic_schur_handles_huge_internal_block() {
+    let frequency_hz = vec![1.0e9];
+    let h = 2.0_f64.powi(600);
+    let mut s = Array3::zeros((1, 3, 3));
+    s[[0, 0, 0]] = c(h, 0.0);
+    s[[0, 0, 1]] = c(-h, 0.0);
+    s[[0, 1, 0]] = c(-h, 0.0);
+    s[[0, 1, 1]] = c(h, 0.0);
+    s[[0, 2, 0]] = c(1.0, 0.0);
+    s[[0, 2, 1]] = c(0.0, 0.0);
+    s[[0, 0, 2]] = c(-1.0, 0.0);
+    s[[0, 1, 2]] = c(1.0, 0.0);
+    let source = network(frequency_hz, s, Array2::from_elem((1, 3), c(1.0, 0.0)));
+
+    // Exact Schur arithmetic forms Q/D before the final conversion.  The
+    // exact result is 1/(1+2H), which rounds to 2^-601 in binary64.
+    let reduced = source
+        .inner_connect_power(0, 1)
+        .expect("exact matched Schur evaluator must retain the tiny result");
+    assert_eq!(reduced.s()[[0, 0, 0]], c(2.0_f64.powi(-601), 0.0));
+}
+
+#[test]
+fn public_inner_connect_power_reports_exact_matched_singularity_despite_native_pivot_rounding() {
+    let frequency_hz = vec![1.0e9];
+    let mut s = Array3::zeros((1, 3, 3));
+    s[[0, 0, 0]] = c(-11.0, 0.0);
+    s[[0, 0, 1]] = c(-54.0, 0.0);
+    s[[0, 1, 0]] = c(-2.0, 0.0);
+    s[[0, 1, 1]] = c(-15.0, 0.0);
+    s[[0, 2, 2]] = c(0.0, 0.0);
+    let source = network(frequency_hz, s, Array2::from_elem((1, 3), c(1.0, 0.0)));
+
+    // The old native pivot sequence computes 3/11*55 with enough rounding
+    // error to leave a 2^-49 second pivot, although the exact determinant of
+    // [[3, 15], [11, 55]] is zero.  Exact matched arithmetic must diagnose
+    // the physical singularity instead of preserving that numerical defect.
+    let native_second_pivot = 15.0 - (3.0 / 11.0) * 55.0;
+    assert_eq!(native_second_pivot, 2.0_f64.powi(-49));
+    assert_eq!(
+        source.inner_connect_power(0, 1).unwrap_err(),
+        Error::SingularInnerConnection { frequency: 0 }
+    );
+}
+
+#[test]
+fn public_inner_connect_power_forms_final_q_before_rounding() {
+    let frequency_hz = vec![1.0e9];
+    let maximum = f64::MAX;
+    let mut s = Array3::zeros((1, 3, 3));
+    s[[0, 2, 0]] = c(maximum, 0.0);
+    s[[0, 1, 2]] = c(2.0, 0.0);
+    s[[0, 2, 2]] = c(-maximum, 0.0);
+    let source = network(frequency_hz, s, Array2::from_elem((1, 3), c(1.0, 0.0)));
+
+    // S_ee=-MAX and N=MAX*2 are combined exactly before conversion, leaving
+    // the representable final result MAX instead of an intermediate overflow.
+    let reduced = source
+        .inner_connect_power(0, 1)
+        .expect("exact Q/D evaluation must preserve the finite final result");
+    assert_eq!(reduced.s()[[0, 0, 0]], c(maximum, 0.0));
 }
 
 #[test]
@@ -283,7 +399,7 @@ fn public_inner_connection_preserves_irregular_frequency_and_survivor_z0_bits() 
     )
     .unwrap();
     let source = network(frequency_hz.clone(), s.clone(), z0.clone());
-    let reduced = source.inner_connect_matched_power(0, 2).unwrap();
+    let reduced = source.inner_connect_power(0, 2).unwrap();
 
     assert_eq!(reduced.frequency().len(), frequency_hz.len());
     for (actual, expected) in reduced.frequency().hz().iter().zip(&frequency_hz) {
@@ -308,16 +424,16 @@ fn public_inner_connection_preserves_irregular_frequency_and_survivor_z0_bits() 
 fn public_inner_connection_reports_port_selection_and_survivor_errors() {
     let source = zero_network(vec![1.0e9], 3, c(50.0, 0.0));
     assert_eq!(
-        source.inner_connect_matched_power(3, 1).unwrap_err(),
-        Error::InvalidInnerConnectionPort { port: 3, nports: 3 }
+        source.inner_connect_power(3, 1).unwrap_err(),
+        Error::InvalidDirectInnerConnectionPort { port: 3, nports: 3 }
     );
     assert_eq!(
-        source.inner_connect_matched_power(1, 3).unwrap_err(),
-        Error::InvalidInnerConnectionPort { port: 3, nports: 3 }
+        source.inner_connect_power(1, 3).unwrap_err(),
+        Error::InvalidDirectInnerConnectionPort { port: 3, nports: 3 }
     );
     assert_eq!(
-        source.inner_connect_matched_power(1, 1).unwrap_err(),
-        Error::IdenticalInnerConnectionPorts {
+        source.inner_connect_power(1, 1).unwrap_err(),
+        Error::IdenticalDirectInnerConnectionPorts {
             port_a: 1,
             port_b: 1,
         }
@@ -325,8 +441,8 @@ fn public_inner_connection_reports_port_selection_and_survivor_errors() {
 
     let two_port = zero_network(vec![1.0e9], 2, c(50.0, 0.0));
     assert_eq!(
-        two_port.inner_connect_matched_power(0, 1).unwrap_err(),
-        Error::NoExternalInnerConnectionPorts
+        two_port.inner_connect_power(0, 1).unwrap_err(),
+        Error::NoExternalDirectInnerConnectionPorts
     );
 }
 
@@ -338,8 +454,8 @@ fn public_inner_connection_reports_nonfinite_source_data() {
     bad_frequency[1] = f64::NAN;
     let bad_frequency = network(bad_frequency, source.s().clone(), source.z0().clone());
     assert!(matches!(
-        bad_frequency.inner_connect_matched_power(0, 2),
-        Err(Error::NonFiniteInnerConnectionFrequency {
+        bad_frequency.inner_connect_power(0, 2),
+        Err(Error::NonFiniteDirectInnerConnectionFrequency {
             index: 1,
             value,
         }) if value.is_nan()
@@ -349,8 +465,8 @@ fn public_inner_connection_reports_nonfinite_source_data() {
     bad_s[[1, 1, 0]] = c(f64::INFINITY, 0.0);
     let bad_s = network(source.frequency().hz().to_vec(), bad_s, source.z0().clone());
     assert_eq!(
-        bad_s.inner_connect_matched_power(0, 2).unwrap_err(),
-        Error::NonFiniteInnerConnectionS {
+        bad_s.inner_connect_power(0, 2).unwrap_err(),
+        Error::NonFiniteDirectInnerConnectionS {
             frequency: 1,
             row: 1,
             column: 0,
@@ -361,8 +477,8 @@ fn public_inner_connection_reports_nonfinite_source_data() {
     bad_z0[[1, 1]] = c(50.0, f64::NAN);
     let bad_z0 = network(source.frequency().hz().to_vec(), source.s().clone(), bad_z0);
     assert_eq!(
-        bad_z0.inner_connect_matched_power(0, 2).unwrap_err(),
-        Error::NonFiniteInnerConnectionZ0 {
+        bad_z0.inner_connect_power(0, 2).unwrap_err(),
+        Error::NonFiniteDirectInnerConnectionZ0 {
             frequency: 1,
             port: 1,
         }
@@ -380,16 +496,8 @@ fn public_inner_connection_reports_both_selected_junction_ports_and_values() {
         source.s().clone(),
         invalid_second,
     );
-    assert_eq!(
-        invalid_second
-            .inner_connect_matched_power(0, 2)
-            .unwrap_err(),
-        Error::InvalidInnerConnectionJunctionZ0 {
-            frequency: 0,
-            port: 2,
-            value: c(61.25, 1.0),
-        }
-    );
+    let reduced = invalid_second.inner_connect_power(0, 2).unwrap();
+    assert!(reduced.s().iter().all(|value| value.is_finite()));
 
     let mut mismatched = source.z0().clone();
     mismatched[[1, 2]] = c(62.0, 0.0);
@@ -398,16 +506,8 @@ fn public_inner_connection_reports_both_selected_junction_ports_and_values() {
         source.s().clone(),
         mismatched,
     );
-    assert_eq!(
-        mismatched.inner_connect_matched_power(2, 0).unwrap_err(),
-        Error::MismatchedInnerConnectionJunctionZ0 {
-            frequency: 1,
-            port_a: 2,
-            z0_a: c(62.0, 0.0),
-            port_b: 0,
-            z0_b: c(61.25, 0.0),
-        }
-    );
+    let reduced = mismatched.inner_connect_power(2, 0).unwrap();
+    assert!(reduced.s().iter().all(|value| value.is_finite()));
 }
 
 #[test]
@@ -418,7 +518,7 @@ fn public_inner_connection_distinguishes_exact_singularity_from_nonzero_near_sin
     singular_s[[0, 2, 0]] = c(1.0, 0.0);
     let singular = network(frequency.clone(), singular_s, z0.clone());
     assert_eq!(
-        singular.inner_connect_matched_power(0, 2).unwrap_err(),
+        singular.inner_connect_power(0, 2).unwrap_err(),
         Error::SingularInnerConnection { frequency: 0 }
     );
 
@@ -427,7 +527,7 @@ fn public_inner_connection_distinguishes_exact_singularity_from_nonzero_near_sin
     near_singular_s[[0, 1, 0]] = c(1.0e-6, 0.0);
     near_singular_s[[0, 2, 1]] = c(1.0e-6, 0.0);
     let near_singular = network(frequency, near_singular_s, z0);
-    let reduced = near_singular.inner_connect_matched_power(0, 2).unwrap();
+    let reduced = near_singular.inner_connect_power(0, 2).unwrap();
     assert!(
         reduced
             .s()
@@ -445,7 +545,7 @@ fn public_inner_connection_maps_checked_arithmetic_overflow() {
     s[[0, 2, 1]] = c(2.0, 0.0);
     let source = network(frequency, s, Array2::from_elem((1, 3), c(50.0, 0.0)));
     assert_eq!(
-        source.inner_connect_matched_power(0, 2).unwrap_err(),
+        source.inner_connect_power(0, 2).unwrap_err(),
         Error::NonFiniteInnerConnectionComputation {
             frequency: 0,
             row: 0,

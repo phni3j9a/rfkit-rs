@@ -35,8 +35,8 @@ fn load_fixture(text: &str) -> rfkit_touchstone::Result<Network> {
 }
 
 fn cascade(left: &Network, dut: &Network, right: &Network) -> rfkit_core::Result<Network> {
-    let left_dut = left.connect_direct_power(1, dut, 0)?;
-    left_dut.connect_direct_power(1, right, 0)
+    let left_dut = left.connect_power(1, dut, 0)?;
+    left_dut.connect_power(1, right, 0)
 }
 
 fn remove_left_then_right(
@@ -46,8 +46,8 @@ fn remove_left_then_right(
 ) -> rfkit_core::Result<Network> {
     let left_inverse = left.inverse_cascade_power()?;
     let right_inverse = right.inverse_cascade_power()?;
-    let without_left = left_inverse.connect_direct_power(1, measured, 0)?;
-    without_left.connect_direct_power(1, &right_inverse, 0)
+    let without_left = left_inverse.connect_power(1, measured, 0)?;
+    without_left.connect_power(1, &right_inverse, 0)
 }
 
 fn remove_right_then_left(
@@ -57,8 +57,8 @@ fn remove_right_then_left(
 ) -> rfkit_core::Result<Network> {
     let left_inverse = left.inverse_cascade_power()?;
     let right_inverse = right.inverse_cascade_power()?;
-    let without_right = measured.connect_direct_power(1, &right_inverse, 0)?;
-    left_inverse.connect_direct_power(1, &without_right, 0)
+    let without_right = measured.connect_power(1, &right_inverse, 0)?;
+    left_inverse.connect_power(1, &without_right, 0)
 }
 
 #[test]

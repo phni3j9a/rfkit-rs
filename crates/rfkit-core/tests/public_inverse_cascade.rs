@@ -319,7 +319,7 @@ fn connect_groupwise(
     assert!(!first_group.is_empty());
     let mut labels: Vec<(bool, usize)> = (0..first.nports()).map(|port| (true, port)).collect();
     labels.extend((0..second.nports()).map(|port| (false, port)));
-    let mut output = first.connect_direct_power(first_group[0], second, second_group[0])?;
+    let mut output = first.connect_power(first_group[0], second, second_group[0])?;
     labels.retain(|&(side, port)| {
         !(side && port == first_group[0] || !side && port == second_group[0])
     });
@@ -332,7 +332,7 @@ fn connect_groupwise(
             .iter()
             .position(|&(side, port)| !side && port == second_port)
             .expect("second group port survives until its pair is connected");
-        output = output.inner_connect_direct_power(first_index, second_index)?;
+        output = output.inner_connect_power(first_index, second_index)?;
         labels
             .retain(|&(side, port)| !(side && port == first_port || !side && port == second_port));
     }
@@ -364,7 +364,12 @@ fn four_port_fixture(offset: f64) -> Network {
             )
         }
     });
-    Network::new(frequency, s, Array2::from_elem((1, 4), c(50.0, 0.0))).unwrap()
+    // Keep this historical direct-kernel cascade fixture outside the
+    // consolidated matched-selection domain.  The old test deliberately
+    // exercised the direct physical-junction kernel; negative-real references
+    // retain that coverage when the public call is now `connect_power`
+    // while keeping the original survivor-reference bookkeeping observable.
+    Network::new(frequency, s, Array2::from_elem((1, 4), c(-50.0, 0.0))).unwrap()
 }
 
 fn cascade_four_port(
@@ -380,7 +385,7 @@ fn compose_two_port(first: &Network, second: &Network) -> rfkit_core::Result<Net
     // Each two-port is ordered [left, right].  The right port of `first` is
     // physically connected to the left port of `second`; survivors therefore
     // remain [first.left, second.right].
-    first.connect_direct_power(1, second, 0)
+    first.connect_power(1, second, 0)
 }
 
 fn well_conditioned_two_port_complex_reference_fixture() -> Network {

@@ -325,8 +325,8 @@ non-reciprocal two-port cases, an ideal through, complex/signed-reference V/I
 wave reversal, a genuinely cross-mode-coupled asymmetric four-port, a larger
 six-port double inverse, exact metadata/source preservation, and finite
 near-singular transmission acceptance. The four-port invariant workflow
-connects each group pair through the existing public `connect_direct_power` and
-`inner_connect_direct_power` methods, then removes both left-first and
+connects each group pair through the existing public `connect_power` and
+`inner_connect_power` methods, then removes both left-first and
 right-first fixtures with the same helpers; it checks the coupled DUT response
 and exact output references rather than only testing a relational inverse.
 Structured tests distinguish malformed zero-port/cardinality/z0 shapes,
@@ -353,7 +353,7 @@ The focused external workflow in
 `crates/rfkit-touchstone/tests/public_inverse_cascade_workflow.rs` and
 `crates/rfkit-touchstone/examples/inverse_cascade_touchstone.rs` parses
 independent two-port LEFT/DUT/RIGHT sweeps, constructs the measured cascade
-with `connect_direct_power`, removes fixtures in both orders, explicitly
+with `connect_power`, removes fixtures in both orders, explicitly
 renormalizes to common 50 Ω, and verifies writer/readback. No implicit
 orientation, reference conversion, noise calibration, or broad scikit-rf
 compatibility claim is introduced; inverse networks remain mathematical
@@ -373,7 +373,7 @@ directional transmission blocks are not independently required to be
 invertible.
 
 Core tests in `crates/rfkit-core/tests/public_cascade.rs` cover two-port
-agreement with `connect_direct_power` on the shared well-conditioned domain,
+agreement with `connect_power` on the shared well-conditioned domain,
 genuinely coupled four-port and inverse composition/removal, exact metadata
 and source immutability, complex/signed-reference physical behavior, zero and
 larger even-port inputs, the independently stated partial-singular but joint-
@@ -416,7 +416,10 @@ claimed; complex/negative-real and partial-singularity cases remain local
 equation/invariant evidence.
 
 Issue #88 adds the direct physical-junction operation
-`Network::connect_direct_power`. Its canonical fixture
+`Network::connect_direct_power`.
+Superseded by #109
+
+Its canonical fixture
 `power_wave_connect_direct_three_to_four_port_complex_z0.json` is an
 independently generated asymmetric, non-reciprocal three-port A plus four-port
 B case at three frequencies, with A[1] connected to B[2]. The single RNG seed
@@ -433,7 +436,7 @@ the two input arrays rather than treating output z0 as a floating oracle.
 `crates/rfkit-core/tests/oracle_direct_connection.rs` checks the fixture
 schema, pinned versions/seed, exact grids, source S inputs, complex references,
 selected ports, shapes, survivor mapping, and output references before calling
-only the public `connect_direct_power` method. It compares every connected S
+only the public `connect_power` method. It compares every connected S
 component under exactly `rtol=1e-12`, `atol=1e-12`; no private kernel or matched
 connection is used. It also snapshots both inputs to verify borrowing and
 immutability. Python oracle tests defend one public connect call, strict
@@ -453,8 +456,8 @@ invariant tests, while the pinned differential claim is limited to the
 canonical positive-real-part fixture domain.
 
 The focused Touchstone test and executable in
-`crates/rfkit-touchstone/tests/public_direct_connection_workflow.rs` and
-`crates/rfkit-touchstone/examples/connect_direct_power_touchstone.rs` parse
+`crates/rfkit-touchstone/tests/public_connect_power_workflow.rs` and
+`crates/rfkit-touchstone/examples/connect_power_touchstone.rs` parse
 separate 3-port and 4-port v1.0 inputs at different common references, connect
 without pre-renormalizing either source, independently solve the physical
 V/I boundary, and assert both input snapshots are unchanged. They then call
@@ -464,7 +467,10 @@ is not asked to repair references, and the workflow makes no Touchstone v2,
 mixed-mode, or automatic-renormalization promise.
 
 Issue #90 adds `Network::inner_connect_direct_power` for the same direct
-physical V/I junction inside one network. The implementation in
+physical V/I junction inside one network.
+Superseded by #109
+
+The historical implementation in
 `crates/rfkit-core/src/direct_connection.rs`, exposed through
 `crates/rfkit-core/src/lib.rs`, evaluates the complete selected `S_ii` block,
 including both off-diagonal couplings, through
@@ -497,14 +503,58 @@ survivor/reference/frequency preservation, source immutability, exact
 singularity versus finite near-singularity, signed negative-real references,
 malformed serde shapes, non-finite inputs, and checked arithmetic failures.
 The focused Touchstone workflow in
-`crates/rfkit-touchstone/tests/public_direct_inner_connection_workflow.rs`
+`crates/rfkit-touchstone/tests/public_inner_connect_power_workflow.rs`
 and
-`crates/rfkit-touchstone/examples/inner_connect_direct_power_touchstone.rs`
+`crates/rfkit-touchstone/examples/inner_connect_power_touchstone.rs`
 parses a multiport input, directly renormalizes into unequal complex selected
 references, independently checks voltage continuity and current conservation
 for nonzero external excitation, closes the pair, then directly renormalizes
 survivors to one common positive-real writer reference before write/read. The
 writer remains unchanged and never repairs heterogeneous references.
+
+## Consolidated physical power-wave connection (Issue #109)
+
+The legacy matched and Issue #88 direct inter-network fixture families, plus
+the legacy matched and Issue #90 direct inner fixture families, are now
+exercised through the consolidated public methods. The matched inter-network fixture
+`power_wave_connect_matched_three_to_four_port_real_frequency_dependent_z0.json`
+and the direct complex-reference fixture
+`power_wave_connect_direct_three_to_four_port_complex_z0.json` both call
+`Network::connect_power`; their historical metadata operation strings and
+fixture filenames remain unchanged so the pinned generation history stays
+auditable. The matched inner fixture calls `Network::inner_connect_power`, as
+does the direct inner fixture
+`power_wave_inner_connect_direct_five_port_complex_z0.json` for its
+complex-reference domain.
+
+The explicit-grid fixture
+`power_wave_connect_matched_explicit_grid_three_to_four_port_complex_z0.json`
+no longer relies on a private composition adapter. Its conformance case calls
+`interpolate_cartesian_linear(&target)` independently on A and B, then calls
+`connect_power` on the two interpolated networks. This preserves staged
+interpolation-versus-connection diagnostics and makes the interpolation kind
+caller-visible.
+
+The selector tests cover the union of the retired physical domains: finite
+positive exactly equal selected references use one exact dyadic BigRational
+matched Schur evaluator (including zero-real external survivor references and
+Issue #44 extreme arithmetic), while unequal, complex, and negative-real
+nonzero-real selected references use the direct physical V/I kernel.
+Common-domain comparisons use independent physical reconstruction within the
+existing fixture tolerances; exact singular, near-singular, survivor-order,
+malformed-serde, and Touchstone workflows remain structured and deterministic.
+Public regressions A/B/C/D and the huge-internal-block case cover exact
+determinants/adjugates, final-Q cancellation, minimum-subnormal and
+round-to-even conversion, and a genuinely unrepresentable final result as a
+structured non-finite error. The old inner block `S_ii=[[-11,-54],[-2,-15]]`
+is documented as a numerical defect: native elimination can falsely report a
+nonzero `2^-49` pivot although the exact determinant is zero, so the
+consolidated method correctly reports singularity. No case retries through
+the other public evaluation. The current executable paths are
+`crates/rfkit-touchstone/tests/public_connect_power_workflow.rs`,
+`crates/rfkit-touchstone/examples/connect_power_touchstone.rs`,
+`crates/rfkit-touchstone/tests/public_inner_connect_power_workflow.rs`, and
+`crates/rfkit-touchstone/examples/inner_connect_power_touchstone.rs`.
 
 ## Adjacent-interval group-delay conformance (Issue #100)
 

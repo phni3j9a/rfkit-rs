@@ -13,6 +13,8 @@ const EXPECTED_NUMPY_VERSION: &str = "2.5.1";
 const EXPECTED_SCIKIT_RF_VERSION: &str = "2.0.1";
 const EXPECTED_SCIKIT_RF_COMMIT: &str = "bd651e923cac6020de49a096e1d7e9b5f949f884";
 const EXPECTED_CASE_ID: &str = "power_wave_connect_direct_three_to_four_port_complex_z0";
+// The fixture metadata records the historical generator operation. The Rust
+// conformance call itself intentionally uses the consolidated public method.
 const EXPECTED_OPERATION: &str = "connect_direct_power";
 const EXPECTED_RANDOM_SEED: u64 = 20_260_951;
 const EXPECTED_INPUT_RECIPE: &str = "one independent NumPy default_rng stream with seed 20260951, an asymmetric non-reciprocal three-port A and four-port B, three finite frequency samples, and unequal complex frequency-dependent positive-real references on every selected and surviving port";
@@ -369,7 +371,7 @@ fn pinned_scikit_rf_direct_connection_fixture_matches_public_network_method() {
     let source_z0_a_snapshot = network_a.z0().clone();
     let source_z0_b_snapshot = network_b.z0().clone();
     let connected = network_a
-        .connect_direct_power(EXPECTED_PORT_A, &network_b, EXPECTED_PORT_B)
+        .connect_power(EXPECTED_PORT_A, &network_b, EXPECTED_PORT_B)
         .expect("direct fixture connection");
 
     assert_eq!(connected.frequency().hz(), data.frequency_hz.as_slice());

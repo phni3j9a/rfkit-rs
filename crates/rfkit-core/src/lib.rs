@@ -44,7 +44,6 @@ use std::fmt;
 use thiserror::Error;
 
 mod cascade;
-mod composition;
 mod connection;
 mod direct_connection;
 mod group_delay;
@@ -801,13 +800,6 @@ pub enum Error {
         column: usize,
     },
 
-    #[error("explicit-grid matched connection {stage} stage failed: {source}")]
-    GridConnection {
-        stage: GridConnectionStage,
-        #[source]
-        source: Box<Error>,
-    },
-
     #[error("inner connection S-parameter shape must be (nfreq, nport, nport), got {shape:?}")]
     InvalidInnerConnectionSShape { shape: Vec<usize> },
 
@@ -1214,35 +1206,6 @@ pub enum ConnectionInput {
     A,
     /// The network passed as `other` (kernel input B).
     B,
-}
-
-/// Identifies the ordered stage that failed during an explicit-grid matched
-/// connection.
-///
-/// The operation always interpolates the receiver (A) first, then `other`
-/// (B), and only then evaluates the matched connection.  Keeping this stage
-/// outside the nested [`Error`] preserves deterministic failure attribution
-/// while the nested error retains the detailed shape, axis, index, value, or
-/// numerical context from the underlying public operation.
-#[non_exhaustive]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GridConnectionStage {
-    /// Cartesian interpolation of the receiver (`self`, kernel input A).
-    AInterpolation,
-    /// Cartesian interpolation of `other` (kernel input B).
-    BInterpolation,
-    /// Matched power-wave connection after both interpolations complete.
-    Connection,
-}
-
-impl fmt::Display for GridConnectionStage {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(match self {
-            Self::AInterpolation => "A interpolation (receiver)",
-            Self::BInterpolation => "B interpolation (other)",
-            Self::Connection => "matched connection",
-        })
-    }
 }
 
 impl fmt::Display for ConnectionInput {
@@ -2729,12 +2692,19 @@ impl Network {
         Network::new(frequency, interpolated.s, interpolated.z0)
     }
 
-    /// Connects one port of this network to one port of `other` through a
-    /// matched Kurokawa power-wave junction.
+    /// Connects one port of this network to one port of `other` through the
+    /// Kurokawa power-wave physical junction.
     ///
-    /// The operation uses the existing exact-grid matched-connection kernel.
+    /// On an exactly compatible grid with finite, real, strictly positive,
+    /// exactly equal selected references, the operation uses the existing
+    /// matched-connection kernel. Otherwise it uses the direct physical
+    /// voltage/current junction solve. This choice is made once before any
+    /// numerical evaluation and a failed computation is never retried through
+    /// the other kernel.
+    ///
     /// The two frequency axes must both be non-empty and finite, have equal
-    /// lengths, and contain exactly equal values at corresponding indices.
+    /// lengths, and contain exactly equal values at corresponding indices
+    /// for the matched path; the direct path has the same exact-grid policy.
     /// Equality is Rust's `f64` equality: finite negative, duplicate, and
     /// descending samples are accepted, and `-0.0` equals `+0.0`.  A
     /// single-frequency grid is valid.  No grid is selected or inferred; this
@@ -2742,17 +2712,18 @@ impl Network {
     /// otherwise resample either input.  A's frequency values
     /// (`self.frequency()`) are copied into the result exactly.
     ///
-    /// The selected reference impedances must be finite, real, strictly
-    /// positive, and exactly equal at every frequency.  They are the matched
-    /// junction impedance, and may be non-50-ohm and frequency-dependent.
-    /// This requirement is distinct from the surviving external references:
-    /// those values may be any finite complex impedances admitted by the
-    /// connection kernel and are copied without conversion-specific
-    /// positive-real restrictions.
+    /// The selected references are the matched junction impedance when the
+    /// matched path is selected; they may be non-50-ohm and
+    /// frequency-dependent. The direct path additionally admits unequal,
+    /// complex, and negative-real references whenever every stored reference
+    /// has a finite nonzero real part. This requirement is distinct from the
+    /// surviving external references: the matched path accepts finite complex
+    /// values and copies them without conversion-specific positive-real
+    /// restrictions.
     ///
     /// If `k` and `l` are the selected ports of A and B, and `EA` and `EB` are
-    /// the surviving ports in their original order, the elimination equation
-    /// is
+    /// the surviving ports in their original order, the matched path
+    /// eliminates the exchanged internal waves with
     ///
     /// ```text
     /// D     = 1 - S_A[k,k] S_B[l,l]
@@ -2761,6 +2732,45 @@ impl Network {
     /// C_BA = S_B[EB,l] S_A[k,EA] / D
     /// C_BB = S_B[EB,EB] + S_B[EB,l] S_A[k,k] S_B[l,EB] / D.
     /// ```
+    ///
+    /// The matched choice evaluates each frequency with one exact dyadic
+    /// complex Schur calculation. Every finite binary64 component is first
+    /// represented as a `num_rational::BigRational`; `1 - S`, `D`, the
+    /// bilinear correction numerator `N`, and `Q = S_ee * D + N` stay exact
+    /// until the final `Q / D` conversion. `num-rational` performs that final
+    /// conversion with binary64 round-to-nearest-even behavior, including
+    /// subnormals. No binary64 inverse or internal RHS is materialized, no
+    /// pivot threshold or alternate evaluation path is used, and a
+    /// computation is never retried through the direct kernel. An exact zero
+    /// `D` is a structured singularity; a final rational result outside the
+    /// finite binary64 range is a structured non-finite computation.
+    ///
+    /// When the pre-computation selector chooses the direct path, the same
+    /// physical boundary is evaluated from the Kurokawa voltage/current
+    /// coordinates.  For each selected reference `z`,
+    /// `a = (V + z I)/(2 sqrt(abs(Re(z))))`,
+    /// `b = (V - conj(z) I)/(2 sqrt(abs(Re(z))))`, so
+    /// `I = q(a-b)` and `V = q(conj(z) a + z b)` with
+    /// `q = sqrt(abs(Re(z)))/Re(z)`.  With internal incident waves
+    /// `i = [a_A, a_B]` and reflected waves `b_i = [b_A, b_B]`, the physical
+    /// boundary `V_A = V_B` and `I_A + I_B = 0` is
+    ///
+    /// ```text
+    /// C = [[ q_A,             q_B            ],
+    ///      [ q_A*conj(z_A), -q_B*conj(z_B)  ]]
+    /// D = [[-q_A,             -q_B           ],
+    ///      [ q_A*z_A,         -q_B*z_B      ]]
+    ///
+    /// (C + D*S_ii) T = -D*S_ie
+    /// S_out = S_ee + S_ei*T
+    /// ```
+    ///
+    /// Here `S_ii = diag(S_A[k,k], S_B[l,l])` because A and B are disjoint
+    /// before this junction, while `S_ie`, `S_ei`, and `S_ee` use the
+    /// A-survivors-then-B-survivors ordering.  Thus both selected paths
+    /// describe the same physical Kurokawa junction; the direct path retains
+    /// unequal, complex, and negative-real selected references instead of
+    /// introducing an implicit mismatch network or renormalization.
     ///
     /// The denominator is classified as singular only when its computed
     /// complex value is exactly zero.  No conditioning threshold,
@@ -2803,84 +2813,15 @@ impl Network {
     ///     Array2::from_elem((1, 2), Complex64::new(50.0, 0.0)),
     /// )?;
     ///
-    /// let connected = left.connect_matched_power(0, &right, 0)?;
+    /// let connected = left.connect_power(0, &right, 0)?;
     /// assert_eq!(connected.nports(), 2);
     /// assert_eq!(connected.s().dim(), (1, 2, 2));
     /// # Ok(())
     /// # }
     /// # example().unwrap();
     /// ```
-    pub fn connect_matched_power(
-        &self,
-        port: usize,
-        other: &Network,
-        other_port: usize,
-    ) -> Result<Network> {
-        let connected = connection::connect_matched(
-            self.frequency.hz(),
-            &self.s,
-            &self.z0,
-            port,
-            other.frequency.hz(),
-            &other.s,
-            &other.z0,
-            other_port,
-        )
-        .map_err(map_connection_error)?;
-
-        let frequency = Frequency::from_hz(connected.frequency_hz)?;
-        Network::new(frequency, connected.s, connected.z0)
-    }
-
-    /// Connects one port of this network directly to one port of `other` by
-    /// physical voltage continuity and current conservation.
-    ///
-    /// The selected ports use currents directed into their respective
-    /// networks, and the junction conditions are `V_A = V_B` and
-    /// `I_A + I_B = 0`.  The operation uses the repository's Kurokawa
-    /// power-wave equations with
-    /// `q = sqrt(abs(Re(z0))) / Re(z0)`, retaining the signed real part of
-    /// each reference.  This is a direct two-coordinate elimination; it does
-    /// not convert through Z/Y, insert a mismatch network, renormalize either
-    /// input, or choose a fixed reference impedance.
-    ///
-    /// `port_a` and `port_b` are zero-based selected coordinates.  The
-    /// result contains the survivors of `self` in their original order,
-    /// followed by the survivors of `other` in their original order.  Thus a
-    /// one-port input is valid when the other input contributes at least one
-    /// survivor, and no special two-port ordering or insertion rule is used.
-    /// Surviving references are copied exactly in that same order.  The result
-    /// owns a bit-for-bit copy of this network's frequency axis; both inputs
-    /// and all caller-owned data remain unchanged.
-    ///
-    /// Both frequency axes must be non-empty, finite, equal in length, and
-    /// equal at corresponding positions by ordinary `f64` equality.  Finite
-    /// negative, duplicate, descending, and signed-zero samples are valid.
-    /// Every S and reference value must be finite, and every reference in both
-    /// networks (not only selected ports) must have a nonzero real part.
-    /// Unequal, complex, per-port, frequency-dependent, and negative-real
-    /// references are all in-domain.  Only exact evaluated zero pivots in the
-    /// two-by-two direct junction system are singular; finite near-singular
-    /// systems remain valid.  Checked arithmetic reports non-finite
-    /// intermediate values rather than returning a non-finite network.
-    ///
-    /// This additive operation is provisional while `rfkit-core` is in the
-    /// `0.x` series; its name and signature are not a `1.0` stability promise.
-    ///
-    /// # Errors
-    ///
-    /// Returns direct-connection-specific structured errors for malformed
-    /// serde-created shapes, axis mismatches, invalid ports or survivor count,
-    /// non-finite inputs, zero-real references, exact junction singularity,
-    /// and non-finite arithmetic.  The selected-port and pivot coordinates
-    /// are retained for numerical failures.
-    pub fn connect_direct_power(
-        &self,
-        port_a: usize,
-        other: &Network,
-        port_b: usize,
-    ) -> Result<Network> {
-        let connected = direct_connection::connect_direct(
+    pub fn connect_power(&self, port_a: usize, other: &Network, port_b: usize) -> Result<Network> {
+        if use_matched_connection(
             self.frequency.hz(),
             &self.s,
             &self.z0,
@@ -2889,122 +2830,91 @@ impl Network {
             &other.s,
             &other.z0,
             port_b,
-        )
-        .map_err(map_direct_connection_error)?;
-
-        let frequency = Frequency::from_hz(connected.frequency_hz)?;
-        Network::new(frequency, connected.s, connected.z0)
+        ) {
+            let connected = connection::connect_matched(
+                self.frequency.hz(),
+                &self.s,
+                &self.z0,
+                port_a,
+                other.frequency.hz(),
+                &other.s,
+                &other.z0,
+                port_b,
+            )
+            .map_err(map_connection_error)?;
+            let frequency = Frequency::from_hz(connected.frequency_hz)?;
+            Network::new(frequency, connected.s, connected.z0)
+        } else {
+            let connected = direct_connection::connect_direct(
+                self.frequency.hz(),
+                &self.s,
+                &self.z0,
+                port_a,
+                other.frequency.hz(),
+                &other.s,
+                &other.z0,
+                port_b,
+            )
+            .map_err(map_direct_connection_error)?;
+            let frequency = Frequency::from_hz(connected.frequency_hz)?;
+            Network::new(frequency, connected.s, connected.z0)
+        }
     }
 
-    /// Connects one port of this network to one port of `other` through a
-    /// matched Kurokawa power-wave junction after interpolating both networks
-    /// onto an explicit target frequency grid.
+    /// Connects two distinct ports of this network through the Kurokawa
+    /// power-wave physical junction and returns the remaining network.
     ///
-    /// The operation stages are deliberately ordered: all of A (`self`) is
-    /// interpolated first, all of B (`other`) is interpolated second, and the
-    /// existing exact-grid matched connection is evaluated only after both
-    /// stages succeed.  The target grid is never inferred, intersected,
-    /// sorted, subset, or extrapolated.  Even when a source and target grid
-    /// have equal values, each source still goes through the interpolation
-    /// contract; in particular, a source with fewer than two samples is not
-    /// accepted as a same-grid shortcut.
-    ///
-    /// Cartesian linear interpolation is applied independently to the real
-    /// and imaginary components of both S and `z0`.  Each source axis must
-    /// contain at least two finite, strictly increasing samples.  `target`
-    /// must be non-empty, finite, strictly increasing, and within both
-    /// inclusive source spans.  A one-sample target is valid.  Exact source
-    /// knots copy the complete source S/`z0` slices, and the returned
-    /// frequency axis copies `target` exactly, including signed zero.
-    ///
-    /// The final connection uses the existing Kurokawa power-wave
-    /// matched-junction contract.  Selected junction references must be
-    /// finite, real, strictly positive, and exactly equal at every target
-    /// frequency after interpolation; no tolerance-based matching or hidden
-    /// renormalization is performed.  Non-50-ohm and frequency-dependent
-    /// matched junctions are valid, and surviving ports may retain finite
-    /// complex reference impedances.  Output ports are the original A
-    /// survivors followed by the original B survivors.
-    ///
-    /// A connection denominator is singular only when its computed complex
-    /// value is exactly zero.  No conditioning threshold or regularization is
-    /// used.  The result is newly owned and neither input network nor `target`
-    /// is modified.  This operation is provisional while `rfkit-core` is in
-    /// the `0.x` series; its name and signature are not a `1.0` stability
-    /// promise.
-    ///
-    /// # Errors
-    ///
-    /// Errors are wrapped in [`Error::GridConnection`] with a
-    /// [`GridConnectionStage`] identifying A interpolation, B interpolation,
-    /// or the final matched connection.  The nested error preserves the
-    /// detailed shape/axis/index/value, selected-port, junction,
-    /// no-survivor, singularity, and checked-computation context from the
-    /// underlying operation.  Because interpolation precedes port validation,
-    /// an invalid port is reported only after both source interpolations have
-    /// succeeded.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use ndarray::{Array2, Array3};
-    /// use num_complex::Complex64;
-    /// use rfkit_core::{Frequency, Network};
-    ///
-    /// # fn example() -> rfkit_core::Result<()> {
-    /// let left = Network::new(
-    ///     Frequency::from_hz(vec![1.0e9, 2.0e9])?,
-    ///     Array3::zeros((2, 2, 2)),
-    ///     Array2::from_elem((2, 2), Complex64::new(50.0, 0.0)),
-    /// )?;
-    /// let right = Network::new(
-    ///     Frequency::from_hz(vec![1.0e9, 1.5e9, 2.0e9])?,
-    ///     Array3::zeros((3, 2, 2)),
-    ///     Array2::from_elem((3, 2), Complex64::new(50.0, 0.0)),
-    /// )?;
-    /// let target = Frequency::from_hz(vec![1.0e9, 1.25e9, 2.0e9])?;
-    /// let connected = left.connect_matched_power_on_grid(0, &right, 0, &target)?;
-    /// assert_eq!(connected.frequency(), &target);
-    /// assert_eq!(connected.nports(), 2);
-    /// # Ok(())
-    /// # }
-    /// # example().unwrap();
-    /// ```
-    pub fn connect_matched_power_on_grid(
-        &self,
-        port: usize,
-        other: &Network,
-        other_port: usize,
-        target: &Frequency,
-    ) -> Result<Network> {
-        let connected = composition::connect_matched_on_grid(
-            self.frequency.hz(),
-            &self.s,
-            &self.z0,
-            port,
-            other.frequency.hz(),
-            &other.s,
-            &other.z0,
-            other_port,
-            target.hz(),
-        )
-        .map_err(map_composition_error)?;
-
-        let frequency = Frequency::from_hz(connected.frequency_hz)?;
-        Network::new(frequency, connected.s, connected.z0)
-    }
-
-    /// Connects two distinct ports of this network through a matched
-    /// Kurokawa power-wave junction and returns the remaining network.
+    /// When the source grid and selected references satisfy the existing
+    /// exactly matched contract, the matched inner-connection kernel is
+    /// selected. Otherwise the direct physical V/I junction solve is selected
+    /// before any arithmetic. A failed computation is never retried through
+    /// the other kernel.
     ///
     /// For selected ports in internal order `[port_a, port_b]`, the matched
-    /// junction exchanges the two incident waves with
-    /// `P = [[0, 1], [1, 0]]`.  Eliminating the selected internal waves uses
-    /// the equation
+    /// path exchanges the two incident waves with `P = [[0, 1], [1, 0]]`.
+    /// Eliminating the selected internal waves uses the equation
     ///
     /// ```text
     /// S_out = S_EE + S_EI (I - P S_II)^-1 P S_IE.
     /// ```
+    ///
+    /// For the matched choice, each frequency is evaluated with exact dyadic
+    /// complex arithmetic. In
+    /// `M = I - P S_ii`, the exact determinant and adjugate are used to form
+    /// `N = S_EI adj(M) P S_IE`, followed by `Q = S_EE det(M) + N` and the
+    /// single final conversion `Q / det(M)`. Finite binary64 components are
+    /// converted to `num_rational::BigRational` before any of these operations;
+    /// no binary64 inverse, internal RHS, or pivot threshold is used.
+    /// `num-rational` performs the final binary64
+    /// round-to-nearest-even conversion, including subnormals. An exact zero
+    /// determinant is a structured singularity and a final result outside the
+    /// finite binary64 range is a structured non-finite error. The matched
+    /// evaluation is selected once and is never retried through the direct
+    /// kernel after arithmetic failure.
+    ///
+    /// When the selector chooses the direct path, the same physical boundary
+    /// is represented in Kurokawa voltage/current coordinates.  For each
+    /// selected reference `z`,
+    /// `a = (V + z I)/(2 sqrt(abs(Re(z))))`,
+    /// `b = (V - conj(z) I)/(2 sqrt(abs(Re(z))))`, so
+    /// `I = q(a-b)` and `V = q(conj(z) a + z b)` with
+    /// `q = sqrt(abs(Re(z)))/Re(z)`.  For `i = [a_A, a_B]`,
+    /// `b_i = [b_A, b_B]`, and the full selected block `S_ii`, use
+    ///
+    /// ```text
+    /// C = [[ q_A,             q_B            ],
+    ///      [ q_A*conj(z_A), -q_B*conj(z_B)  ]]
+    /// D = [[-q_A,             -q_B           ],
+    ///      [ q_A*z_A,         -q_B*z_B      ]]
+    ///
+    /// (C + D*S_ii) T = -D*S_ie
+    /// S_out = S_EE + S_EI*T
+    /// ```
+    ///
+    /// The direct path retains both off-diagonal entries of `S_ii`; it is not
+    /// two independent one-port reductions.  Both paths enforce `V_A = V_B`
+    /// and `I_A + I_B = 0`, and the selector is evaluated once before either
+    /// equation is computed.
     ///
     /// `port_a` and `port_b` are zero-based and must be distinct and in range.
     /// At least one survivor must remain.  The output contains the survivors
@@ -3017,10 +2927,10 @@ impl Network {
     /// samples and signed zero.  The axis is copied exactly, without sorting,
     /// deduplication, interpolation, or resampling.  The selected junction
     /// reference impedances must be finite, real, strictly positive, and
-    /// exactly equal at every frequency.  They may be non-50-ohm and
-    /// frequency-dependent.  External survivor reference impedances may be
-    /// any finite complex values admitted by the matched connection kernel and
-    /// are copied without conversion-specific positive-real restrictions.
+    /// exactly equal at every frequency for the matched path. The direct path
+    /// admits finite references with nonzero real parts, including complex,
+    /// unequal, and negative-real values. External survivor references are
+    /// copied exactly in either path.
     ///
     /// The private kernel classifies only exact-zero pivots as singular.  No
     /// near-singular threshold, regularization, determinant/rank fallback, or
@@ -3053,113 +2963,37 @@ impl Network {
     ///     Array3::zeros((1, 3, 3)),
     ///     Array2::from_elem((1, 3), Complex64::new(50.0, 0.0)),
     /// )?;
-    /// let reduced = network.inner_connect_matched_power(0, 1)?;
+    /// let reduced = network.inner_connect_power(0, 1)?;
     /// assert_eq!(reduced.nports(), 1);
     /// assert_eq!(reduced.s().dim(), (1, 1, 1));
     /// # Ok(())
     /// # }
     /// # example().unwrap();
     /// ```
-    pub fn inner_connect_matched_power(&self, port_a: usize, port_b: usize) -> Result<Network> {
-        let connected = connection::inner_connect_matched(
-            self.frequency.hz(),
-            &self.s,
-            &self.z0,
-            port_a,
-            port_b,
-        )
-        .map_err(|error| map_inner_connection_error(error, port_a, port_b))?;
-
-        let frequency = Frequency::from_hz(connected.frequency_hz)?;
-        Network::new(frequency, connected.s, connected.z0)
-    }
-
-    /// Connects two distinct ports of this network by direct physical voltage
-    /// continuity and current conservation under Kurokawa power waves.
-    ///
-    /// For selected internal coordinates `i = [port_a, port_b]` and the
-    /// remaining external coordinates `e`, the source relation is partitioned
-    /// as `b_i = S_ii a_i + S_ie a_e` and
-    /// `b_e = S_ei a_i + S_ee a_e`.  The junction equations use currents
-    /// directed into this network:
-    ///
-    /// ```text
-    /// a = (V + z I)/(2 sqrt(abs(Re(z))))
-    /// b = (V - conj(z) I)/(2 sqrt(abs(Re(z))))
-    /// q = sqrt(abs(Re(z))) / Re(z)
-    /// I = q (a - b)
-    /// V = q (conj(z) a + z b)
-    ///
-    /// C = [[ qa,             qb           ],
-    ///      [ qa*conj(za), -qb*conj(zb)  ]]
-    /// D = [[-qa,            -qb           ],
-    ///      [ qa*za,         -qb*zb      ]]
-    ///
-    /// (C + D*S_ii) T = -D*S_ie
-    /// S_out = S_ee + S_ei*T
-    /// ```
-    ///
-    /// The complete two-by-two internal block is used, including both
-    /// off-diagonal couplings.  This is a direct two-coordinate elimination:
-    /// it does not convert through S/Z/Y, divide by `za + zb`, insert a
-    /// mismatch network, renormalize, regularize, or choose a fixed reference.
-    /// The selected reference impedances may be unequal or equal, complex,
-    /// frequency-dependent, or have negative real parts, provided every
-    /// reference is finite with a nonzero real part.  The signed real part is
-    /// retained in `q`.
-    ///
-    /// The result contains every non-selected port in the source's original
-    /// order, with each surviving reference copied exactly.  The source and
-    /// all caller-owned data remain unchanged.  Frequencies are finite
-    /// pointwise labels and are copied bit-for-bit, including signed zero;
-    /// negative, duplicate, and descending samples are valid.  Only exact
-    /// zero pivots in the evaluated two-by-two system are singular.  Finite
-    /// near-singular systems remain in-domain, while checked arithmetic
-    /// rejects non-finite intermediate or output values.
-    ///
-    /// This additive operation is provisional while `rfkit-core` is in the
-    /// `0.x` series; its name and signature are not a `1.0` stability promise.
-    ///
-    /// # Errors
-    ///
-    /// Returns direct-inner-connection-specific structured errors for malformed
-    /// serde-created shapes, invalid frequency/S/z0 data, invalid or equal
-    /// ports, no survivors, zero-real references, exact junction singularity,
-    /// and non-finite arithmetic.  Numerical errors retain selected-port,
-    /// pivot, frequency, and computation row/column context.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use ndarray::{Array2, Array3};
-    /// use num_complex::Complex64;
-    /// use rfkit_core::{Frequency, Network};
-    ///
-    /// # fn example() -> rfkit_core::Result<()> {
-    /// let network = Network::new(
-    ///     Frequency::from_hz(vec![1.0e9])?,
-    ///     Array3::zeros((1, 3, 3)),
-    ///     Array2::from_elem((1, 3), Complex64::new(50.0, 0.0)),
-    /// )?;
-    /// let reduced = network.inner_connect_direct_power(0, 1)?;
-    /// assert_eq!(reduced.nports(), 1);
-    /// assert_eq!(reduced.s().dim(), (1, 1, 1));
-    /// # Ok(())
-    /// # }
-    /// # example().unwrap();
-    /// ```
-    pub fn inner_connect_direct_power(&self, port_a: usize, port_b: usize) -> Result<Network> {
-        let connected = direct_connection::inner_connect_direct(
-            self.frequency.hz(),
-            &self.s,
-            &self.z0,
-            port_a,
-            port_b,
-        )
-        .map_err(map_direct_inner_connection_error)?;
-
-        let frequency = Frequency::from_hz(connected.frequency_hz)?;
-        Network::new(frequency, connected.s, connected.z0)
+    pub fn inner_connect_power(&self, port_a: usize, port_b: usize) -> Result<Network> {
+        if use_matched_inner_connection(self.frequency.hz(), &self.s, &self.z0, port_a, port_b) {
+            let connected = connection::inner_connect_matched(
+                self.frequency.hz(),
+                &self.s,
+                &self.z0,
+                port_a,
+                port_b,
+            )
+            .map_err(|error| map_inner_connection_error(error, port_a, port_b))?;
+            let frequency = Frequency::from_hz(connected.frequency_hz)?;
+            Network::new(frequency, connected.s, connected.z0)
+        } else {
+            let connected = direct_connection::inner_connect_direct(
+                self.frequency.hz(),
+                &self.s,
+                &self.z0,
+                port_a,
+                port_b,
+            )
+            .map_err(map_direct_inner_connection_error)?;
+            let frequency = Frequency::from_hz(connected.frequency_hz)?;
+            Network::new(frequency, connected.s, connected.z0)
+        }
     }
 
     /// Applies one finite physical impedance to a selected source port and
@@ -3255,6 +3089,133 @@ fn map_power_wave_admittance_error(
             map_power_wave_error(ConversionStage::ZToS, error)
         }
     }
+}
+
+/// Decide whether the legacy matched kernel is safe for this connection.
+///
+/// This is deliberately a pre-computation predicate. It validates the shared
+/// shape/axis/data/port/survivor domain needed by either kernel, then checks
+/// the exact matched-junction reference contract. It never performs RF
+/// arithmetic and it never retries a failed kernel with the other
+/// implementation. Returning `false` for malformed data leaves validation
+/// and diagnostics to the direct kernel, which is safe for serde-created
+/// values.
+#[allow(clippy::too_many_arguments)]
+fn use_matched_connection(
+    frequency_a: &[f64],
+    s_a: &Array3<Complex64>,
+    z0_a: &Array2<Complex64>,
+    port_a: usize,
+    frequency_b: &[f64],
+    s_b: &Array3<Complex64>,
+    z0_b: &Array2<Complex64>,
+    port_b: usize,
+) -> bool {
+    let (nfreq_a, nrows_a, ncolumns_a) = s_a.dim();
+    let (nfreq_b, nrows_b, ncolumns_b) = s_b.dim();
+    if nrows_a == 0
+        || nrows_a != ncolumns_a
+        || nrows_b == 0
+        || nrows_b != ncolumns_b
+        || nfreq_a != frequency_a.len()
+        || nfreq_b != frequency_b.len()
+        || z0_a.dim() != (nfreq_a, nrows_a)
+        || z0_b.dim() != (nfreq_b, nrows_b)
+        || frequency_a.is_empty()
+        || frequency_a.len() != frequency_b.len()
+        || port_a >= nrows_a
+        || port_b >= nrows_b
+        || (nrows_a == 1 && nrows_b == 1)
+        || s_a
+            .iter()
+            .any(|value| !value.re.is_finite() || !value.im.is_finite())
+        || s_b
+            .iter()
+            .any(|value| !value.re.is_finite() || !value.im.is_finite())
+        || z0_a
+            .iter()
+            .any(|value| !value.re.is_finite() || !value.im.is_finite())
+        || z0_b
+            .iter()
+            .any(|value| !value.re.is_finite() || !value.im.is_finite())
+    {
+        return false;
+    }
+
+    if frequency_a
+        .iter()
+        .zip(frequency_b)
+        .any(|(&a, &b)| !a.is_finite() || !b.is_finite() || a != b)
+    {
+        return false;
+    }
+
+    for frequency in 0..nfreq_a {
+        let junction_a = z0_a[[frequency, port_a]];
+        let junction_b = z0_b[[frequency, port_b]];
+        if !junction_a.re.is_finite()
+            || !junction_a.im.is_finite()
+            || !junction_b.re.is_finite()
+            || !junction_b.im.is_finite()
+            || junction_a.re <= 0.0
+            || junction_a.im != 0.0
+            || junction_b.re <= 0.0
+            || junction_b.im != 0.0
+            || junction_a != junction_b
+        {
+            return false;
+        }
+    }
+    true
+}
+
+/// Inner-connection counterpart of [`use_matched_connection`].
+fn use_matched_inner_connection(
+    frequency: &[f64],
+    s: &Array3<Complex64>,
+    z0: &Array2<Complex64>,
+    port_a: usize,
+    port_b: usize,
+) -> bool {
+    let (nfreq, nrows, ncolumns) = s.dim();
+    if nrows == 0
+        || nrows != ncolumns
+        || nfreq != frequency.len()
+        || z0.dim() != (nfreq, nrows)
+        || frequency.is_empty()
+        || port_a >= nrows
+        || port_b >= nrows
+        || port_a == port_b
+        || nrows < 3
+        || s.iter()
+            .any(|value| !value.re.is_finite() || !value.im.is_finite())
+        || z0
+            .iter()
+            .any(|value| !value.re.is_finite() || !value.im.is_finite())
+    {
+        return false;
+    }
+    if frequency.iter().any(|value| !value.is_finite()) {
+        return false;
+    }
+
+    for frequency in 0..nfreq {
+        let junction_a = z0[[frequency, port_a]];
+        let junction_b = z0[[frequency, port_b]];
+        if !junction_a.re.is_finite()
+            || !junction_a.im.is_finite()
+            || !junction_b.re.is_finite()
+            || !junction_b.im.is_finite()
+            || junction_a.re <= 0.0
+            || junction_a.im != 0.0
+            || junction_b.re <= 0.0
+            || junction_b.im != 0.0
+            || junction_a != junction_b
+        {
+            return false;
+        }
+    }
+    true
 }
 
 fn map_interpolation_error(error: interpolation::InterpolationError) -> Error {
@@ -3357,23 +3318,6 @@ fn map_interpolation_error(error: interpolation::InterpolationError) -> Error {
             target,
             row,
             column,
-        },
-    }
-}
-
-fn map_composition_error(error: composition::CompositionError) -> Error {
-    match error {
-        composition::CompositionError::AInterpolation(error) => Error::GridConnection {
-            stage: GridConnectionStage::AInterpolation,
-            source: Box::new(map_interpolation_error(error)),
-        },
-        composition::CompositionError::BInterpolation(error) => Error::GridConnection {
-            stage: GridConnectionStage::BInterpolation,
-            source: Box::new(map_interpolation_error(error)),
-        },
-        composition::CompositionError::Connection(error) => Error::GridConnection {
-            stage: GridConnectionStage::Connection,
-            source: Box::new(map_connection_error(error)),
         },
     }
 }
@@ -4763,76 +4707,6 @@ mod tests {
                 frequency: 2,
                 port: 1,
             }
-        );
-    }
-
-    #[test]
-    fn maps_private_composition_errors_with_ordered_public_stage_context() {
-        assert_eq!(
-            map_composition_error(composition::CompositionError::AInterpolation(
-                interpolation::InterpolationError::InvalidSShape { shape: (2, 3, 4) },
-            )),
-            Error::GridConnection {
-                stage: GridConnectionStage::AInterpolation,
-                source: Box::new(Error::InvalidInterpolationShape {
-                    quantity: InterpolationQuantity::S,
-                    shape: vec![2, 3, 4],
-                }),
-            }
-        );
-
-        assert_eq!(
-            map_composition_error(composition::CompositionError::BInterpolation(
-                interpolation::InterpolationError::TargetFrequencyOutOfRange {
-                    index: 2,
-                    value: 4.0,
-                    lower: 1.0,
-                    upper: 3.0,
-                },
-            )),
-            Error::GridConnection {
-                stage: GridConnectionStage::BInterpolation,
-                source: Box::new(Error::InterpolationTargetOutOfRange {
-                    index: 2,
-                    value: 4.0,
-                    lower: 1.0,
-                    upper: 3.0,
-                }),
-            }
-        );
-
-        assert_eq!(
-            map_composition_error(composition::CompositionError::Connection(
-                connection::ConnectionError::MismatchedJunctionZ0 {
-                    frequency: 1,
-                    a: Complex64::new(73.5, 0.0),
-                    b: Complex64::new(74.0, 0.0),
-                },
-            )),
-            Error::GridConnection {
-                stage: GridConnectionStage::Connection,
-                source: Box::new(Error::MismatchedConnectionJunctionZ0 {
-                    frequency: 1,
-                    a: Complex64::new(73.5, 0.0),
-                    b: Complex64::new(74.0, 0.0),
-                }),
-            }
-        );
-    }
-
-    #[test]
-    fn grid_connection_stage_display_is_actionable() {
-        assert_eq!(
-            GridConnectionStage::AInterpolation.to_string(),
-            "A interpolation (receiver)"
-        );
-        assert_eq!(
-            GridConnectionStage::BInterpolation.to_string(),
-            "B interpolation (other)"
-        );
-        assert_eq!(
-            GridConnectionStage::Connection.to_string(),
-            "matched connection"
         );
     }
 

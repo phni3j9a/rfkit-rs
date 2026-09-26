@@ -245,7 +245,7 @@ fn two_port_cascade_agrees_with_single_direct_connection() {
     let a = two_port(0.07, -0.03);
     let b = two_port(-0.04, 0.05);
     let simultaneous = a.cascade_direct_power(&b).unwrap();
-    let sequential = a.connect_direct_power(1, &b, 0).unwrap();
+    let sequential = a.connect_power(1, &b, 0).unwrap();
     assert_eq!(simultaneous.frequency(), sequential.frequency());
     assert_eq!(simultaneous.z0(), sequential.z0());
     for (actual, expected) in simultaneous.s().iter().zip(sequential.s()) {
@@ -454,8 +454,8 @@ fn coupled_partial_singular_witness_succeeds_only_jointly() {
     let b = Network::new(Frequency::from_hz(vec![1.0e9]).unwrap(), b, references).unwrap();
 
     assert!(matches!(
-        a.connect_direct_power(2, &b, 0),
-        Err(Error::SingularDirectConnection { .. })
+        a.connect_power(2, &b, 0),
+        Err(Error::SingularConnection { .. })
     ));
     let result = a.cascade_direct_power(&b).unwrap();
     let m = [[-one, -one], [-one, zero]];
