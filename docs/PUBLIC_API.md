@@ -38,7 +38,12 @@ Keep the existing owned, frequency-major core model as the current baseline:
 - ports use zero-based `usize` indices initially;
 - `ndarray` remains part of the initial public data boundary because it is already exposed by construction and accessors.
 
-## Touchstone 2.0 ingress boundary (Issue #102 Yellow)
+## Touchstone 2.0 ingress boundary (Issue #102 Yellow) — Superseded by #112
+
+This is the historical #102 Full-only decision record. Its original reader
+name and rejection boundary are retained below for provenance; the current
+sole reader and its migration are recorded in the Issue #112 section that
+follows.
 
 The `rfkit-touchstone` crate exposes the additive pure in-memory function
 `parse_touchstone_v2_0_s_full(input: &str) -> Result<rfkit_core::Network>`.
@@ -86,6 +91,91 @@ introducing a universal options/metadata reader, preprocessing files for
 callers, or implementing all v2 sections. The selected separate function
 keeps version/matrix semantics visible, preserves v1 behavior, and completes
 an ingress-to-analysis workflow without a core-model or writer change.
+
+## Touchstone 2.0 S ingress generalization (Issue #112 Yellow)
+
+This section is the current Yellow decision record for Issue #112.
+The current and sole public Version 2.0 single-ended S reader is the
+provisional pure in-memory function
+`parse_touchstone_v2_0_s(input: &str) -> Result<rfkit_core::Network>`. The
+historical `parse_touchstone_v2_0_s_full` name is removed with no deprecated
+alias. The caller asks to decode Touchstone 2.0 S data; the document's
+`[Matrix Format]` selects the storage representation rather than creating a
+second public operation. An absent matrix-format keyword means Full.
+
+Full records preserve every arbitrary row-major complex value. Lower and Upper
+records contain the diagonal and exactly `n(n+1)/2` complex pairs per sample;
+the missing half is expanded by plain transpose, never conjugation. A two-port
+document still requires `[Two-Port Data Order]` with `21_12` or `12_21`, and
+both legal orders decode to the same symmetric matrix under the ratified
+Touchstone 2.0 semantics. The representation is selected from the document,
+never inferred from the scalar count. RI, MA, and DB pairs, all supported
+frequency units, continued `[Reference]` data, option-line override, physical
+frequency-line boundaries, the finite/non-negative/strictly increasing grid,
+and positive real per-port references retain the prior semantics.
+
+The reader remains pure in-memory and single-ended. It continues to reject
+non-S parameters, mixed-mode/noise/information blocks, unknown or other-version
+keywords, complex or non-positive references, malformed or non-finite values,
+duplicate/misplaced directives, invalid count/grid/record boundaries, semantic
+vendor comments, missing `[End]`, and trailing content. It does not sort,
+interpolate, average, repair, renormalize, infer filenames, or add a writer or
+metadata model. The existing writer remains explicitly
+`write_touchstone_v2_0_s_full_ri_hz`; it emits Full/RI/Hz only and keeps its
+current reference restrictions.
+
+The pinned conformance evidence is independently authored and registered as
+`touchstone_v2_0_s_full_three_port`,
+`touchstone_v2_0_s_lower_three_port`, and
+`touchstone_v2_0_s_upper_three_port`. The Lower and Upper fixtures are literal
+deterministic N=3 RI inputs with three samples, unequal real references
+`[25,50,75]`, a continued `[Reference]` vector, split compact records, and
+nonzero imaginary entries. The Full fixture remains the existing canonical
+input and numeric values. All three record scikit-rf `2.0.1` at commit
+`bd651e923cac6020de49a096e1d7e9b5f949f884`, NumPy `2.5.1`, exact
+frequency/reference/text/shape/metadata contract fields, and only decoded S
+under `rtol=1e-12`, `atol=1e-12`. The Lower/Upper operation records are
+`touchstone_v2_0_s_lower_parse` and `touchstone_v2_0_s_upper_parse`.
+
+The pinned scikit-rf two-port triangular `21_12` path has a legacy
+transpose-before-mirror defect: its opposite-triangle storage can be read
+before it is initialized (the required Lower/`21_12` discrepancy is the
+documented example, and the analogous Upper path is not canonicalized). No
+uninitialized or opposite-triangle value is accepted as an expected fixture.
+This is a reference-implementation defect, not a conflict between RF
+standards; Rust follows the ratified two-port semantics in its deterministic
+regression and makes no broad scikit-rf compatibility promise.
+
+The Yellow decision selected one version/S-explicit reader whose document
+keyword selects matrix storage. Keeping a separate triangular reader beside
+the old Full reader would duplicate caller choice for one decoding operation.
+Broadening the old `_full` name was rejected because it would misdescribe its
+accepted domain; retaining triangular rejection and requiring caller-written
+preprocessing leaves the measured ingress gap; a universal reader/options/
+metadata type is larger than this bounded capability. The selected
+generalization is therefore the overlap outcome: one public reader, no new
+overlap-inventory row, and no change to the three existing RF-conversion
+overlaps.
+
+Compatibility is intentionally provisional because `rfkit-rs` is unpublished
+and remains in `0.x`: existing callers replace
+`parse_touchstone_v2_0_s_full` with `parse_touchstone_v2_0_s`, with no alias.
+Successful Full inputs and results remain unchanged; Lower/Upper moves from an
+explicit unsupported error to decoding or contextual validation errors.
+Unaffected diagnostics retain their structure, with only compact-count
+diagnostics necessarily generalized where applicable. No persisted-data or
+canonical-storage migration is needed. Rollback is the bounded PR reversal:
+restore the historical Full-only name and triangular rejection, revert the
+migrated callers/docs/oracle registrations, and leave stored data untouched.
+The choice remains reversible until an explicit stabilization milestone.
+
+Evidence and acceptance are preserved in Issue #112 and
+`docs/CONFORMANCE.md`; implementation provenance is a REWRITE from the
+ratified IBIS Touchstone 2.0 specification, with pinned scikit-rf consulted
+only as a behavior oracle. The focused workflow loads compact triangular data,
+permutes/inspects the resulting Network, writes the existing Full v2 text,
+and reads it back while retaining frequencies and unequal references without
+implicit renormalization.
 
 ## Touchstone 2.0 Full S egress (Issue #104 Yellow)
 

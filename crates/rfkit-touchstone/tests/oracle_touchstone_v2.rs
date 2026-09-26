@@ -1,9 +1,13 @@
 use num_complex::Complex64;
-use rfkit_touchstone::parse_touchstone_v2_0_s_full;
+use rfkit_touchstone::parse_touchstone_v2_0_s;
 use serde::Deserialize;
 
 const FIXTURE: &str =
     include_str!("../../../tools/oracle/fixtures/touchstone_v2_0_s_full_three_port.json");
+const LOWER_FIXTURE: &str =
+    include_str!("../../../tools/oracle/fixtures/touchstone_v2_0_s_lower_three_port.json");
+const UPPER_FIXTURE: &str =
+    include_str!("../../../tools/oracle/fixtures/touchstone_v2_0_s_upper_three_port.json");
 
 #[derive(Debug, Deserialize)]
 struct Fixture {
@@ -60,12 +64,35 @@ impl From<&ComplexValue> for Complex64 {
 
 #[test]
 fn pinned_scikit_rf_touchstone_v2_fixture_matches_new_public_parser() {
-    let fixture: Fixture = serde_json::from_str(FIXTURE).expect("valid canonical fixture");
-    assert_eq!(
-        fixture.metadata.case_id,
-        "touchstone_v2_0_s_full_three_port"
+    assert_fixture(
+        FIXTURE,
+        "touchstone_v2_0_s_full_three_port",
+        "touchstone_v2_0_s_full_parse",
     );
-    assert_eq!(fixture.metadata.operation, "touchstone_v2_0_s_full_parse");
+}
+
+#[test]
+fn pinned_scikit_rf_touchstone_v2_lower_fixture_matches_new_public_parser() {
+    assert_fixture(
+        LOWER_FIXTURE,
+        "touchstone_v2_0_s_lower_three_port",
+        "touchstone_v2_0_s_lower_parse",
+    );
+}
+
+#[test]
+fn pinned_scikit_rf_touchstone_v2_upper_fixture_matches_new_public_parser() {
+    assert_fixture(
+        UPPER_FIXTURE,
+        "touchstone_v2_0_s_upper_three_port",
+        "touchstone_v2_0_s_upper_parse",
+    );
+}
+
+fn assert_fixture(json: &str, expected_case: &str, expected_operation: &str) {
+    let fixture: Fixture = serde_json::from_str(json).expect("valid canonical fixture");
+    assert_eq!(fixture.metadata.case_id, expected_case,);
+    assert_eq!(fixture.metadata.operation, expected_operation);
     assert_eq!(fixture.metadata.port_count, fixture.data.nports);
     assert_eq!(fixture.metadata.numpy_version, "2.5.1");
     assert_eq!(fixture.metadata.scikit_rf_version, "2.0.1");
@@ -73,21 +100,29 @@ fn pinned_scikit_rf_touchstone_v2_fixture_matches_new_public_parser() {
         fixture.metadata.scikit_rf_commit,
         "bd651e923cac6020de49a096e1d7e9b5f949f884"
     );
-    assert!(
-        fixture
-            .metadata
-            .input_recipe
-            .contains("five parameter pairs")
+    assert!(!fixture.metadata.input_recipe.is_empty());
+    assert_eq!(
+        fixture.metadata.shape.frequency,
+        vec![fixture.data.frequency_hz.len()]
     );
-    assert_eq!(fixture.metadata.shape.frequency, vec![2]);
-    assert_eq!(fixture.metadata.shape.s, vec![2, 3, 3]);
-    assert_eq!(fixture.metadata.shape.z0, vec![2, 3]);
+    assert_eq!(
+        fixture.metadata.shape.s,
+        vec![
+            fixture.data.s.len(),
+            fixture.data.nports,
+            fixture.data.nports
+        ]
+    );
+    assert_eq!(
+        fixture.metadata.shape.z0,
+        vec![fixture.data.z0_ohm.len(), fixture.data.nports]
+    );
     assert!(fixture.metadata.tolerance_policy.rtol.is_finite());
     assert!(fixture.metadata.tolerance_policy.atol.is_finite());
     assert!(fixture.metadata.tolerance_policy.rtol >= 0.0);
     assert!(fixture.metadata.tolerance_policy.atol >= 0.0);
 
-    let network = parse_touchstone_v2_0_s_full(&fixture.data.touchstone_text)
+    let network = parse_touchstone_v2_0_s(&fixture.data.touchstone_text)
         .expect("Touchstone v2 fixture must parse");
     assert_eq!(
         network.frequency().hz(),

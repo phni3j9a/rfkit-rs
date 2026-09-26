@@ -2,24 +2,48 @@
 
 scikit-rf is used as a reference oracle, not as the API specification.
 
-Touchstone 2.0 Full-matrix S ingress is a separate format-boundary case. The
-public `parse_touchstone_v2_0_s_full` entrypoint is tested externally with
-asymmetric one-, two-, and larger-port inputs, RI/MA/DB decoding, all frequency
-units, both explicit two-port orders, arbitrary complete-record continuation,
-continued per-port `[Reference]` data and option-line override, later option
-line ignore semantics, exact declared
-frequency counts, `[End]`/trailing-content handling, and recognized semantic
-comments. Structural/order/count, unsupported-subset, numerical, and checked
-size failures are tested independently, including malformed declarations that
-must not allocate from enormous dimensions. The canonical
-`touchstone_v2_0_s_full_three_port` fixture records scikit-rf `2.0.1` at
-commit `bd651e923cac6020de49a096e1d7e9b5f949f884`, NumPy `2.5.1`, independently
-authored source text with a continued heterogeneous `[Reference]` vector, and
-strict `rtol=1e-12`, `atol=1e-12` output-only comparison. Frequency, references,
-source text, shape, and metadata are exact contract fields; the Rust oracle
-calls only the new public API. The focused workflow explicitly inspects the
-loaded network, direct-renormalizes unequal references to a common positive-real
-reference, then crosses the existing v1 writer/readback boundary.
+Touchstone 2.0 single-ended S ingress is one format-boundary operation exposed
+as `parse_touchstone_v2_0_s`. The document's `[Matrix Format]` selects Full,
+Lower, or Upper representation; absent format means Full. Full preserves every
+row-major complex value, while Lower/Upper expand the declared triangular
+storage by plain transpose (never conjugation), including the diagonal. A
+two-port document retains its required `[Two-Port Data Order]` directive and
+both legal orders produce the same symmetric matrix under the ratified
+Touchstone 2.0 semantics. The reader remains pure in-memory and does not infer
+representation from scalar count.
+
+The public parser is tested externally with asymmetric one-, two-, and
+larger-port Full inputs, deterministic N=3 Lower and Upper inputs, RI/MA/DB
+decoding, all frequency units, both explicit two-port orders, arbitrary
+complete-record continuation, compact pair counts, continued per-port
+`[Reference]` data and option-line override, later option-line ignore
+semantics, exact declared frequency counts, `[End]`/trailing-content handling,
+and recognized semantic comments. Structural/order/count, unsupported-subset,
+numerical, and checked-size failures are tested independently, including
+malformed declarations that must not allocate from enormous dimensions.
+
+The canonical pinned fixtures are `touchstone_v2_0_s_full_three_port`,
+`touchstone_v2_0_s_lower_three_port`, and
+`touchstone_v2_0_s_upper_three_port`. They record scikit-rf `2.0.1` at commit
+`bd651e923cac6020de49a096e1d7e9b5f949f884`, NumPy `2.5.1`, literal
+independently authored source text, exact frequency/reference/text/shape and
+metadata contracts, and strict `rtol=1e-12`, `atol=1e-12` comparison for only
+decoded S. Lower and Upper use unequal real references `[25,50,75]`, N=3,
+nonzero imaginary entries, and no random generation. The Rust oracle calls
+only the new public API. The focused workflow explicitly inspects a loaded
+triangular network, permutes ports, writes existing Full v2 text, and checks
+readback of S, reference order, and frequencies without renormalization.
+
+The pinned scikit-rf reader has a known two-port triangular `21_12` legacy
+defect (the required Lower/`21_12` example is the narrow exception recorded by
+Issue #112; the analogous Upper path is also not canonicalized): its source
+performs a transpose before mirror fill, so an opposite-triangle value can be
+read before it is initialized instead of producing the standards-defined
+result. That implementation discrepancy is documented rather than
+canonicalized; no uninitialized value is accepted as oracle data. The Rust
+regression follows the ratified Touchstone 2.0 two-port semantics for both
+`21_12` and `12_21`, and this exception is not a general scikit-rf
+compatibility claim.
 
 Touchstone 2.0 Full S egress is covered as Issue #104's bounded complementary
 format boundary. Deterministic Rust tests exercise one-, two-, and larger-N

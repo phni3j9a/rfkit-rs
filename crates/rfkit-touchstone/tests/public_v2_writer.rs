@@ -2,7 +2,7 @@ use ndarray::{Array2, Array3};
 use num_complex::Complex64;
 use rfkit_core::{Frequency, Network};
 use rfkit_touchstone::{
-    Error, parse_touchstone_v2_0_s_full, write_touchstone_v1_0_s_ri_hz,
+    Error, parse_touchstone_v2_0_s, write_touchstone_v1_0_s_ri_hz,
     write_touchstone_v2_0_s_full_ri_hz,
 };
 use serde_json::{Value, json};
@@ -111,7 +111,7 @@ fn preserves_asymmetric_data_unequal_references_and_exact_v2_roundtrip() {
     assert_eq!(first, second);
     assert_eq!(network, before);
 
-    let reread = parse_touchstone_v2_0_s_full(&first).unwrap();
+    let reread = parse_touchstone_v2_0_s(&first).unwrap();
     assert_bitwise_equal(&reread, &network);
 }
 
@@ -128,7 +128,7 @@ fn preserves_nontrivial_binary64_and_signed_zero_values() {
     let network = Network::new(frequency, s, z0).unwrap();
     let text = write_touchstone_v2_0_s_full_ri_hz(&network).unwrap();
     assert!(text.contains("-0"));
-    let reread = parse_touchstone_v2_0_s_full(&text).unwrap();
+    let reread = parse_touchstone_v2_0_s(&text).unwrap();
     assert_bitwise_equal(&reread, &network);
 }
 

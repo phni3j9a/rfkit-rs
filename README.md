@@ -25,8 +25,8 @@ The first vertical slice should make these excellent before expanding broadly:
 
 - Frequency and Network data model
 - Touchstone ingress/egress (the current public slice is explicitly limited to
-  Touchstone 1.0 single-ended S ingress plus bounded Touchstone 2.0 Full S
-  ingress/egress; broader format support is future work)
+  Touchstone 1.0 single-ended S ingress plus bounded Touchstone 2.0
+  single-ended S ingress/Full S egress; broader format support is future work)
 - S/Z/Y conversions
 - renormalization including complex and per-port Z0
 - interpolation
@@ -140,11 +140,11 @@ writer when preserving unequal real per-port references matters:
 
 ```rust
 use rfkit_touchstone::{
-    parse_touchstone_v2_0_s_full, write_touchstone_v2_0_s_full_ri_hz,
+    parse_touchstone_v2_0_s, write_touchstone_v2_0_s_full_ri_hz,
 };
 
 fn write_v2(input: &str) -> rfkit_touchstone::Result<String> {
-    let source = parse_touchstone_v2_0_s_full(input)?;
+    let source = parse_touchstone_v2_0_s(input)?;
     write_touchstone_v2_0_s_full_ri_hz(&source)
 }
 ```
@@ -257,39 +257,42 @@ definition`, or `S-parameter uses the traveling definition` comments.
 Ordinary comments, including `Port[n] = ...` port-name comments, remain
 ignorable; universal vendor-marker recognition is outside this reader's scope.
 
-Touchstone 2.0 Full-matrix S data has a separate, explicit ingress function:
+Touchstone 2.0 single-ended S data has one explicit ingress function:
 
 ```rust
-use rfkit_touchstone::parse_touchstone_v2_0_s_full;
+use rfkit_touchstone::parse_touchstone_v2_0_s;
 
 fn load_v2(text: &str) -> rfkit_touchstone::Result<rfkit_core::Network> {
-    parse_touchstone_v2_0_s_full(text)
+    parse_touchstone_v2_0_s(text)
 }
 ```
 
 This bounded single-ended subset obtains the port and frequency counts from
 `[Number of Ports]` and `[Number of Frequencies]`, requires `[Version] 2.0`,
 `[Network Data]`, `[End]`, and (for two-port data) an explicit `[Two-Port Data
-Order]`. It accepts Full matrices in RI, MA, or DB form with Hz/kHz/MHz/GHz
-units, arbitrary complete-record continuations, and an optional real-positive
-per-port `[Reference]` vector that overrides the option-line `R` value. Each
-frequency must begin a physical line; values are preserved in frequency-major
-row-major `Network` order without sorting, interpolation, repair, or implicit
-renormalization. The resulting `(nfreq,nport)` references are expanded exactly
-per frequency and port.
+Order]`. It accepts Full, Lower, and Upper matrices in RI, MA, or DB form with
+Hz/kHz/MHz/GHz units, arbitrary complete-record continuations, and an optional
+real-positive per-port `[Reference]` vector that overrides the option-line `R`
+value. An absent `[Matrix Format]` means Full. Lower/Upper compact records
+contain the diagonal and are expanded by plain transpose, never conjugation;
+the two legal two-port data orders produce the same symmetric matrix as
+required by Touchstone 2.0. Representation is selected by the document, never
+inferred from scalar count. Each frequency must begin a physical line; values
+are preserved in frequency-major `Network` order without sorting,
+interpolation, repair, or implicit renormalization. The resulting
+`(nfreq,nport)` references are expanded exactly per frequency and port.
 
-Lower/Upper matrices, non-S parameters, mixed-mode, noise, information blocks,
-unknown keywords, other versions, complex/non-positive references, duplicate or
-misplaced bracket directives, incomplete/surplus records, missing `[End]`,
-trailing content, non-finite values, and recognized HFSS/Ansys semantic
-comments are rejected with structured errors. As required by the Touchstone
-option-line rule, later `#` lines are ignored after the first option line. This
-function is pure in-memory; it does not
-inspect filenames or perform filesystem I/O. To use the existing v1 writer,
-explicitly direct-renormalize the parsed network to one common positive-real
-reference first. To preserve unequal real references, call the explicit v2
-writer instead. The focused v2 ingress-to-v1 executable demonstrates the
-renormalization workflow:
+Non-S parameters, mixed-mode, noise, information blocks, unknown keywords,
+other versions, complex/non-positive references, duplicate or misplaced
+bracket directives, incomplete/surplus records, missing `[End]`, trailing
+content, non-finite values, and recognized HFSS/Ansys semantic comments are
+rejected with structured errors. As required by the Touchstone option-line
+rule, later `#` lines are ignored after the first option line. This function is
+pure in-memory; it does not inspect filenames or perform filesystem I/O. To
+use the existing v1 writer, explicitly direct-renormalize the parsed network
+to one common positive-real reference first. To preserve unequal real
+references, call the explicit v2 Full writer instead. The focused v2
+ingress-to-v1 executable demonstrates the renormalization workflow:
 
 ```text
 cargo run -p rfkit-touchstone --example touchstone_v2_full_workflow

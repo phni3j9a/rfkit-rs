@@ -229,7 +229,7 @@ this check after the canonical fixture checker and runs the checker unit tests.
 
 ## Generate and verify
 
-The harness has forty-seven registered canonical cases. The original three cases
+The harness has forty-nine registered canonical cases. The original three cases
 remain unchanged:
 
 - `three_port_complex_z0` — the representative four-frequency, three-port
@@ -252,7 +252,7 @@ The Touchstone v1.0 ingress case is:
   through the pinned public `skrf.io.touchstone.Touchstone` parser; the text
   and explicit port count remain exact contract fields.
 
-The Touchstone v2.0 ingress case is:
+The Touchstone v2.0 ingress cases are:
 
 - `touchstone_v2_0_s_full_three_port` — independently authored Version 2.0
   single-ended Full-matrix RI text with two MHz records, arbitrary complete
@@ -261,6 +261,28 @@ The Touchstone v2.0 ingress case is:
   frequency axis, and references are exact contract fields; expected S comes
   only from the pinned public `skrf.io.touchstone.Touchstone` parser and is
   compared at `rtol=1e-12`, `atol=1e-12`.
+- `touchstone_v2_0_s_lower_three_port` — independently authored Version 2.0
+  single-ended Lower-matrix RI text with three MHz records, split compact
+  records, and a continued `[Reference]` vector `[25,50,75]` ohm. The six
+  compact pairs per sample include nonzero imaginary parts; scikit-rf output
+  is checked for the expected plain-transpose symmetric expansion. The source
+  text, matrix format, pair count, directive/count metadata, shape, frequency
+  axis, and references are exact contract fields; only decoded S uses
+  `rtol=1e-12`, `atol=1e-12`.
+- `touchstone_v2_0_s_upper_three_port` — the independent Upper-matrix sibling
+  with the same explicit three-port/reference/continuation coverage and a
+  distinct literal S recipe. It has the same exact-contract and S-only
+  tolerance policy as the Lower case.
+
+Both compact cases record the pinned scikit-rf `2.0.1` version, commit
+`bd651e923cac6020de49a096e1d7e9b5f949f884`, NumPy `2.5.1`, the literal
+no-random construction, physical reference order, and operation ids
+`touchstone_v2_0_s_lower_parse` / `touchstone_v2_0_s_upper_parse`. The oracle
+fixtures intentionally use N=3: pinned scikit-rf's two-port triangular
+`21_12` path (the required Lower/`21_12` case and the analogous Upper path)
+has a legacy transpose-before-mirror defect, so no uninitialized or
+opposite-triangle values are canonicalized here. The ratified Touchstone 2.0
+two-port semantics are covered by the standards-based Rust regression instead.
 
 The mixed-mode cases are:
 

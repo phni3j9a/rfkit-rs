@@ -36,13 +36,15 @@
 //! HFSS/Ansys semantic markers only; universal vendor-format recognition is
 //! outside this crate's scope.
 //!
-//! [`parse_touchstone_v2_0_s_full`] is the separate Touchstone 2.0 entrypoint.
-//! It accepts only single-ended Full-matrix S data, obtains the port and
+//! [`parse_touchstone_v2_0_s`] is the separate Touchstone 2.0 entrypoint.  It
+//! accepts single-ended Full, Lower, and Upper S data, obtains the port and
 //! frequency counts from the document, preserves an optional real-positive
 //! per-port `[Reference]` vector, and requires complete records plus `[End]`.
-//! Lower/Upper, mixed-mode, noise, information, non-S, unknown-keyword,
-//! complex-reference, and malformed-count features are rejected explicitly;
-//! no filename inference or filesystem I/O is performed.
+//! Triangular records are expanded by plain transpose without conjugation;
+//! absent `[Matrix Format]` means Full.  Mixed-mode, noise, information,
+//! non-S, unknown-keyword, complex-reference, and malformed-count features
+//! remain rejected explicitly; no filename inference or filesystem I/O is
+//! performed.
 //!
 //! # Example
 //!
@@ -578,23 +580,26 @@ pub fn write_touchstone_v2_0_s_full_ri_hz(network: &Network) -> Result<String> {
     writer::write_touchstone_v2_0_s_full_ri_hz(network)
 }
 
-/// Parse the deliberately bounded Touchstone 2.0 single-ended Full-matrix
+/// Parse the deliberately bounded Touchstone 2.0 single-ended Full/Lower/Upper
 /// S-parameter subset into the canonical frequency-major [`Network`].
 ///
 /// Unlike the v1 entrypoint, the port count and sample count come from the
 /// required v2 directives.  The parser accepts RI, MA, and DB data in the
 /// four standard frequency units, both explicit two-port orders, and an
 /// optional real-positive per-port `[Reference]` vector (including
-/// continuation lines).  It requires complete Full records, `[Network Data]`,
-/// the declared `[Number of Frequencies]`, and a terminating `[End]`.
+/// continuation lines).  It requires complete records, `[Network Data]`, the
+/// declared `[Number of Frequencies]`, and a terminating `[End]`.  Full is the
+/// default when `[Matrix Format]` is absent.  Lower and Upper records include
+/// the diagonal in row-wise order and expand their missing half by plain
+/// transpose, never conjugation.
 ///
-/// Lower/Upper matrices, mixed-mode, noise, information blocks, non-S
-/// parameters, unknown keywords, complex references, and vendor semantic
-/// comments are rejected explicitly.  Parsing is pure and in-memory; no file
-/// name, filesystem, automatic version detection, sorting, interpolation,
-/// renormalization, or alternate wave convention is applied.
-pub fn parse_touchstone_v2_0_s_full(input: &str) -> Result<Network> {
-    v2::parse_touchstone_v2_0_s_full(input)
+/// Mixed-mode, noise, information blocks, non-S parameters, unknown keywords,
+/// complex references, and vendor semantic comments are rejected explicitly.
+/// Parsing is pure and in-memory; no file name, filesystem, automatic version
+/// detection, sorting, interpolation, renormalization, or alternate wave
+/// convention is applied.
+pub fn parse_touchstone_v2_0_s(input: &str) -> Result<Network> {
+    v2::parse_touchstone_v2_0_s(input)
 }
 
 #[derive(Clone, Copy)]

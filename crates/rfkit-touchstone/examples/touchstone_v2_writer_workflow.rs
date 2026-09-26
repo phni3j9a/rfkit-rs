@@ -2,7 +2,7 @@
 //! export/read it again without renormalizing the S coordinates.
 
 use num_complex::Complex64;
-use rfkit_touchstone::{parse_touchstone_v2_0_s_full, write_touchstone_v2_0_s_full_ri_hz};
+use rfkit_touchstone::{parse_touchstone_v2_0_s, write_touchstone_v2_0_s_full_ri_hz};
 
 const INPUT: &str = "[Version] 2.0\n\
 # Hz S RI R 37\n\
@@ -15,7 +15,7 @@ const INPUT: &str = "[Version] 2.0\n\
 [End]\n";
 
 fn main() -> rfkit_touchstone::Result<()> {
-    let source = parse_touchstone_v2_0_s_full(INPUT)?;
+    let source = parse_touchstone_v2_0_s(INPUT)?;
     let reordered = source.permute_ports(&[2, 0, 1])?;
 
     // The mapping is new-port -> old-port.  These independent checks make
@@ -28,7 +28,7 @@ fn main() -> rfkit_touchstone::Result<()> {
     assert_eq!(reordered.z0()[[0, 2]], Complex64::new(61.0, 0.0));
 
     let text = write_touchstone_v2_0_s_full_ri_hz(&reordered)?;
-    let reread = parse_touchstone_v2_0_s_full(&text)?;
+    let reread = parse_touchstone_v2_0_s(&text)?;
     assert_eq!(reread.s(), reordered.s());
     assert_eq!(reread.z0(), reordered.z0());
     print!("{text}");

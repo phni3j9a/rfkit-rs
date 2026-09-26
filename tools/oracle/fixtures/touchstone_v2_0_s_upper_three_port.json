@@ -1,0 +1,236 @@
+{
+  "data": {
+    "frequency_hz": [
+      10000000.0,
+      20000000.0,
+      30000000.0
+    ],
+    "nports": 3,
+    "s": [
+      [
+        [
+          {
+            "imag": 0.25,
+            "real": -0.15
+          },
+          {
+            "imag": 0.45,
+            "real": 0.35
+          },
+          {
+            "imag": 0.65,
+            "real": -0.55
+          }
+        ],
+        [
+          {
+            "imag": 0.45,
+            "real": 0.35
+          },
+          {
+            "imag": 0.85,
+            "real": 0.75
+          },
+          {
+            "imag": 1.05,
+            "real": -0.95
+          }
+        ],
+        [
+          {
+            "imag": 0.65,
+            "real": -0.55
+          },
+          {
+            "imag": 1.05,
+            "real": -0.95
+          },
+          {
+            "imag": -1.25,
+            "real": 1.15
+          }
+        ]
+      ],
+      [
+        [
+          {
+            "imag": -0.26,
+            "real": 0.16
+          },
+          {
+            "imag": 0.46,
+            "real": -0.36
+          },
+          {
+            "imag": 0.66,
+            "real": 0.56
+          }
+        ],
+        [
+          {
+            "imag": 0.46,
+            "real": -0.36
+          },
+          {
+            "imag": -0.86,
+            "real": 0.76
+          },
+          {
+            "imag": 1.06,
+            "real": 0.96
+          }
+        ],
+        [
+          {
+            "imag": 0.66,
+            "real": 0.56
+          },
+          {
+            "imag": 1.06,
+            "real": 0.96
+          },
+          {
+            "imag": 1.26,
+            "real": -1.16
+          }
+        ]
+      ],
+      [
+        [
+          {
+            "imag": 0.27,
+            "real": -0.17
+          },
+          {
+            "imag": -0.47,
+            "real": 0.37
+          },
+          {
+            "imag": 0.67,
+            "real": -0.57
+          }
+        ],
+        [
+          {
+            "imag": -0.47,
+            "real": 0.37
+          },
+          {
+            "imag": 0.87,
+            "real": 0.77
+          },
+          {
+            "imag": 1.07,
+            "real": -0.97
+          }
+        ],
+        [
+          {
+            "imag": 0.67,
+            "real": -0.57
+          },
+          {
+            "imag": 1.07,
+            "real": -0.97
+          },
+          {
+            "imag": -1.27,
+            "real": 1.17
+          }
+        ]
+      ]
+    ],
+    "touchstone_text": "! Independently authored Touchstone v2.0 Upper S oracle input\n[Version] 2.0\n# MHz S RI R 19\n[Number of Ports] 3\n[Number of Frequencies] 3\n[Reference] 25 50\n75\n[Matrix Format] Upper\n[Network Data]\n10 -0.15 0.25 0.35 0.45\n-0.55 0.65 0.75 0.85\n-0.95 1.05 1.15 -1.25\n20 0.16 -0.26 -0.36 0.46\n0.56 0.66 0.76 -0.86\n0.96 1.06 -1.16 1.26\n30 -0.17 0.27 0.37 -0.47\n-0.57 0.67 0.77 0.87\n-0.97 1.07 1.17 -1.27\n[End]\n",
+    "z0_ohm": [
+      [
+        {
+          "imag": 0.0,
+          "real": 25.0
+        },
+        {
+          "imag": 0.0,
+          "real": 50.0
+        },
+        {
+          "imag": 0.0,
+          "real": 75.0
+        }
+      ],
+      [
+        {
+          "imag": 0.0,
+          "real": 25.0
+        },
+        {
+          "imag": 0.0,
+          "real": 50.0
+        },
+        {
+          "imag": 0.0,
+          "real": 75.0
+        }
+      ],
+      [
+        {
+          "imag": 0.0,
+          "real": 25.0
+        },
+        {
+          "imag": 0.0,
+          "real": 50.0
+        },
+        {
+          "imag": 0.0,
+          "real": 75.0
+        }
+      ]
+    ]
+  },
+  "metadata": {
+    "case_id": "touchstone_v2_0_s_upper_three_port",
+    "deterministic_construction": "literal source text; no random generation",
+    "input_recipe": "literal TOUCHSTONE_V2_UPPER_TEXT below: three MHz Upper-matrix RI records, three unequal real per-port references [25,50,75] ohm, a continued [Reference] vector, split compact records, nonzero imaginary parts, and no random generation",
+    "matrix_format": "Upper",
+    "numpy_version": "2.5.1",
+    "operation": "touchstone_v2_0_s_upper_parse",
+    "pair_count": 6,
+    "port_count": 3,
+    "reference_impedance": {
+      "complex": false,
+      "frequency_dependent": false,
+      "per_port": true,
+      "unit": "ohm"
+    },
+    "reference_order_ohm": [
+      25.0,
+      50.0,
+      75.0
+    ],
+    "schema": "rfkit-rs.oracle.fixture",
+    "schema_version": 1,
+    "scikit_rf_commit": "bd651e923cac6020de49a096e1d7e9b5f949f884",
+    "scikit_rf_version": "2.0.1",
+    "shape": {
+      "frequency": [
+        3
+      ],
+      "s": [
+        3,
+        3,
+        3
+      ],
+      "z0": [
+        3,
+        3
+      ]
+    },
+    "tolerance_policy": {
+      "atol": 1e-12,
+      "comparison": "abs(actual-expected) <= atol + rtol*abs(expected)",
+      "justification": "Strict binary64 tolerance for an independently authored Touchstone 2.0 single-ended Upper-matrix RI input. The pinned public scikit-rf parser supplies expected frequency/S/z0 values; the matrix-format directive, compact text, references, and shape remain exact contract fields.",
+      "regeneration": "canonical UTF-8 JSON serialization; parsed S is checked with the recorded numeric tolerance while frequency and references remain exact",
+      "rtol": 1e-12
+    },
+    "wave_definition": "power"
+  }
+}

@@ -727,6 +727,24 @@ TOUCHSTONE_V2_CASE_SPECS = {
         "input_recipe": oracle.TOUCHSTONE_V2_INPUT_RECIPE,
         "references": [37.0, 61.0, 83.0],
     },
+    "touchstone_v2_0_s_lower_three_port": {
+        "operation": "touchstone_v2_0_s_lower_parse",
+        "ports": 3,
+        "frequencies": 3,
+        "output": "s",
+        "input_recipe": oracle.TOUCHSTONE_V2_LOWER_INPUT_RECIPE,
+        "matrix_format": "Lower",
+        "references": [25.0, 50.0, 75.0],
+    },
+    "touchstone_v2_0_s_upper_three_port": {
+        "operation": "touchstone_v2_0_s_upper_parse",
+        "ports": 3,
+        "frequencies": 3,
+        "output": "s",
+        "input_recipe": oracle.TOUCHSTONE_V2_UPPER_INPUT_RECIPE,
+        "matrix_format": "Upper",
+        "references": [25.0, 50.0, 75.0],
+    },
 }
 
 
@@ -1291,6 +1309,151 @@ class TouchstoneV2RegistrationAndCheckerTests(unittest.TestCase):
                     ),
                     1,
                 )
+
+
+class TouchstoneV2TriangularRegistrationAndCheckerTests(unittest.TestCase):
+    """Protect the Lower/Upper compact parser fixture contracts."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.np, cls.skrf = oracle._load_dependencies()
+
+    @staticmethod
+    def _fixture_path(case_id: str) -> Path:
+        paths = {
+            oracle.TOUCHSTONE_V2_LOWER_CASE_ID: oracle.TOUCHSTONE_V2_LOWER_FIXTURE,
+            oracle.TOUCHSTONE_V2_UPPER_CASE_ID: oracle.TOUCHSTONE_V2_UPPER_FIXTURE,
+        }
+        return paths[case_id]
+
+    def test_cases_are_registered_with_compact_contracts(self) -> None:
+        registered = {case.case_id: case for case in oracle._CASES}
+        for case_id, spec in TOUCHSTONE_V2_CASE_SPECS.items():
+            if spec.get("matrix_format") not in {"Lower", "Upper"}:
+                continue
+            with self.subTest(case_id=case_id):
+                self.assertIn(case_id, registered)
+                case = registered[case_id]
+                fixture = oracle._read_canonical_json(self._fixture_path(case_id))
+                metadata = fixture["metadata"]
+                self.assertEqual(case.path, self._fixture_path(case_id))
+                self.assertEqual(case.comparison, "numeric_output")
+                self.assertEqual(case.numeric_output_key, spec["output"])
+                self.assertEqual(metadata["case_id"], case_id)
+                self.assertEqual(metadata["operation"], spec["operation"])
+                self.assertEqual(metadata["matrix_format"], spec["matrix_format"])
+                self.assertEqual(metadata["pair_count"], 6)
+                self.assertEqual(metadata["port_count"], spec["ports"])
+                self.assertEqual(metadata["input_recipe"], spec["input_recipe"])
+                self.assertEqual(
+                    metadata["deterministic_construction"],
+                    "literal source text; no random generation",
+                )
+                self.assertEqual(
+                    metadata["reference_order_ohm"], spec["references"]
+                )
+                self.assertEqual(
+                    metadata["scikit_rf_commit"], oracle.EXPECTED_SCIKIT_RF_COMMIT
+                )
+                self.assertEqual(
+                    metadata["scikit_rf_version"], oracle.EXPECTED_SCIKIT_RF_VERSION
+                )
+                self.assertEqual(metadata["numpy_version"], oracle.EXPECTED_NUMPY_VERSION)
+                self.assertEqual(metadata["shape"]["frequency"], [3])
+                self.assertEqual(metadata["shape"]["s"], [3, 3, 3])
+                self.assertEqual(metadata["shape"]["z0"], [3, 3])
+                self.assertEqual(
+                    metadata["tolerance_policy"]["rtol"],
+                    1e-12,
+                )
+                self.assertEqual(
+                    metadata["tolerance_policy"]["atol"],
+                    1e-12,
+                )
+                self.assertEqual(
+                    [value["real"] for value in fixture["data"]["z0_ohm"][0]],
+                    spec["references"],
+                )
+
+    def test_builders_preserve_literal_text_and_plain_transpose_output(self) -> None:
+        expected_first_sample = {
+            oracle.TOUCHSTONE_V2_LOWER_CASE_ID: [
+                [(0.10, 0.20), (0.30, -0.40), (0.70, -0.80)],
+                [(0.30, -0.40), (0.50, 0.60), (0.90, 1.00)],
+                [(0.70, -0.80), (0.90, 1.00), (1.10, -1.20)],
+            ],
+            oracle.TOUCHSTONE_V2_UPPER_CASE_ID: [
+                [(-0.15, 0.25), (0.35, 0.45), (-0.55, 0.65)],
+                [(0.35, 0.45), (0.75, 0.85), (-0.95, 1.05)],
+                [(-0.55, 0.65), (-0.95, 1.05), (1.15, -1.25)],
+            ],
+        }
+        registered = {case.case_id: case for case in oracle._CASES}
+        for case_id, expected_matrix in expected_first_sample.items():
+            with self.subTest(case_id=case_id):
+                case = registered[case_id]
+                regenerated = case.builder(self.np, self.skrf)
+                fixture = oracle._read_canonical_json(self._fixture_path(case_id))
+                self.assertEqual(
+                    regenerated["data"]["touchstone_text"],
+                    fixture["data"]["touchstone_text"],
+                )
+                self.assertEqual(
+                    regenerated["data"]["frequency_hz"],
+                    [10_000_000.0, 20_000_000.0, 30_000_000.0],
+                )
+                self.assertEqual(
+                    regenerated["data"]["z0_ohm"],
+                    fixture["data"]["z0_ohm"],
+                )
+                actual_matrix = regenerated["data"]["s"][0]
+                for row, expected_row in zip(actual_matrix, expected_matrix):
+                    for value, (expected_real, expected_imag) in zip(row, expected_row):
+                        self.assertEqual(value["real"], expected_real)
+                        self.assertEqual(value["imag"], expected_imag)
+                self.assertNotEqual(actual_matrix[0][1]["imag"], 0.0)
+                self.assertEqual(
+                    actual_matrix[0][1]["imag"], actual_matrix[1][0]["imag"]
+                )
+                self.assertEqual(
+                    actual_matrix[0][1]["real"], actual_matrix[1][0]["real"]
+                )
+
+    def test_checker_tolerates_only_compact_parser_outputs(self) -> None:
+        registered = {case.case_id: case for case in oracle._CASES}
+        for case_id in (
+            oracle.TOUCHSTONE_V2_LOWER_CASE_ID,
+            oracle.TOUCHSTONE_V2_UPPER_CASE_ID,
+        ):
+            with self.subTest(case_id=case_id):
+                case = registered[case_id]
+                fixture = oracle._read_canonical_json(self._fixture_path(case_id))
+                adjusted = copy.deepcopy(fixture)
+                adjusted["data"]["s"][0][0][0]["real"] += 1e-13
+                with tempfile.TemporaryDirectory() as directory:
+                    path = Path(directory) / self._fixture_path(case_id).name
+                    path.write_bytes(oracle._canonical_bytes(adjusted))
+                    self.assertEqual(
+                        oracle._check_numeric_fixture(
+                            path, fixture, case.numeric_output_key
+                        ),
+                        0,
+                    )
+
+                drifted_reference = copy.deepcopy(fixture)
+                drifted_reference["data"]["z0_ohm"][0][1]["real"] += 1e-13
+                drifted_text = copy.deepcopy(fixture)
+                drifted_text["data"]["touchstone_text"] += "! drift\n"
+                for drifted in (drifted_reference, drifted_text):
+                    with tempfile.TemporaryDirectory() as directory:
+                        path = Path(directory) / self._fixture_path(case_id).name
+                        path.write_bytes(oracle._canonical_bytes(drifted))
+                        self.assertEqual(
+                            oracle._check_numeric_fixture(
+                                path, fixture, case.numeric_output_key
+                            ),
+                            1,
+                        )
 
 
 class InterpolationRegistrationAndCheckerTests(unittest.TestCase):
