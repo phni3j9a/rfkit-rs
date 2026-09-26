@@ -1,4 +1,4 @@
-//! Touchstone 2.0 single-ended Full-matrix S-parameter ingress.
+//! Touchstone 2.0 single-ended Full/Lower/Upper S-parameter ingress.
 //!
 //! This module intentionally has its own document state machine.  Touchstone
 //! 1.0's row/continuation rules are sufficiently different that trying to
@@ -28,6 +28,13 @@ enum TwoPortDataOrder {
     Natural12_21,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MatrixFormat {
+    Full,
+    Lower,
+    Upper,
+}
+
 struct KeywordLine<'a> {
     number: usize,
     name: String,
@@ -42,19 +49,20 @@ struct ScalarValue {
 }
 
 /// Parse the supported Touchstone 2.0 document subset.
-pub(crate) fn parse_touchstone_v2_0_s_full(input: &str) -> Result<Network> {
+pub(crate) fn parse_touchstone_v2_0_s(input: &str) -> Result<Network> {
     let lines = collect_lines(input)?;
 
     let mut version_seen = false;
     let mut option: Option<Options> = None;
     let mut nports: Option<usize> = None;
-    let mut matrix_elements: Option<usize> = None;
+    let mut full_matrix_elements: Option<usize> = None;
+    let mut record_elements: Option<usize> = None;
     let mut two_port_order: Option<TwoPortDataOrder> = None;
     let mut reference_seen = false;
     let mut references = Vec::new();
     let mut reference_pending = false;
     let mut nfrequencies: Option<usize> = None;
-    let mut matrix_format_full = true;
+    let mut matrix_format = MatrixFormat::Full;
     let mut matrix_format_seen = false;
     let mut network_data_seen = false;
     let mut ended = false;
@@ -128,13 +136,14 @@ pub(crate) fn parse_touchstone_v2_0_s_full(input: &str) -> Result<Network> {
                     &keyword,
                     &mut option,
                     &mut nports,
-                    &mut matrix_elements,
+                    &mut full_matrix_elements,
+                    &mut record_elements,
                     &mut two_port_order,
                     &mut reference_seen,
                     &mut references,
                     &mut reference_pending,
                     &mut nfrequencies,
-                    &mut matrix_format_full,
+                    &mut matrix_format,
                     &mut matrix_format_seen,
                     &mut network_data_seen,
                 )?;
@@ -167,12 +176,6 @@ pub(crate) fn parse_touchstone_v2_0_s_full(input: &str) -> Result<Network> {
                             message: "[Two-Port Data Order] is only valid for two ports".to_owned(),
                         });
                     }
-                    if !matrix_format_full {
-                        return Err(Error::V2Unsupported {
-                            line: keyword.number,
-                            feature: "[Matrix Format] Lower/Upper".to_owned(),
-                        });
-                    }
                 }
             } else if keyword.name == "end" {
                 if !keyword.args.is_empty() {
@@ -184,7 +187,7 @@ pub(crate) fn parse_touchstone_v2_0_s_full(input: &str) -> Result<Network> {
                 finish_end(
                     keyword.number,
                     nfrequencies.expect("network data requires a frequency count"),
-                    matrix_elements.expect("network data requires a matrix size"),
+                    record_elements.expect("network data requires a matrix size"),
                     current_frequency,
                     &current_scalars,
                     &current_matrix,
@@ -260,9 +263,10 @@ pub(crate) fn parse_touchstone_v2_0_s_full(input: &str) -> Result<Network> {
         feed_network_data_line(
             raw,
             nports.expect("network data requires [Number of Ports]"),
-            matrix_elements.expect("network data requires a matrix size"),
+            record_elements.expect("network data requires a matrix size"),
             nfrequencies.expect("network data requires a frequency count"),
             two_port_order.unwrap_or(TwoPortDataOrder::Natural12_21),
+            matrix_format,
             option.expect("network data requires an option line"),
             &mut current_frequency,
             &mut current_record_line,
@@ -314,7 +318,8 @@ pub(crate) fn parse_touchstone_v2_0_s_full(input: &str) -> Result<Network> {
     }
 
     let nports = nports.expect("checked above");
-    let matrix_elements = matrix_elements.expect("checked above");
+    let full_matrix_elements = full_matrix_elements.expect("checked above");
+    let record_elements = record_elements.expect("checked by network data");
     let nfrequencies = nfrequencies.expect("checked by network data");
     let options = option.expect("checked above");
     if frequencies.len() != nfrequencies {
@@ -333,6 +338,15 @@ pub(crate) fn parse_touchstone_v2_0_s_full(input: &str) -> Result<Network> {
             actual: references.len(),
         });
     }
+    nfrequencies
+        .checked_mul(record_elements)
+        .ok_or_else(|| Error::V2SizeOverflow {
+            line: last_line_number(&lines),
+            quantity: SizeQuantity::MatrixElements,
+            detail: format!(
+                "{nfrequencies} frequency records × {record_elements} compact matrix elements"
+            ),
+        })?;
     let z0_values_len = nfrequencies
         .checked_mul(nports)
         .ok_or_else(|| Error::V2SizeOverflow {
@@ -340,16 +354,15 @@ pub(crate) fn parse_touchstone_v2_0_s_full(input: &str) -> Result<Network> {
             quantity: SizeQuantity::ReferenceImpedanceElements,
             detail: format!("{nfrequencies} frequency records × {nports} ports"),
         })?;
-    let s_values_len =
-        nfrequencies
-            .checked_mul(matrix_elements)
-            .ok_or_else(|| Error::V2SizeOverflow {
-                line: last_line_number(&lines),
-                quantity: SizeQuantity::MatrixElements,
-                detail: format!(
-                    "{nfrequencies} frequency records × {matrix_elements} matrix elements"
-                ),
-            })?;
+    let s_values_len = nfrequencies
+        .checked_mul(full_matrix_elements)
+        .ok_or_else(|| Error::V2SizeOverflow {
+            line: last_line_number(&lines),
+            quantity: SizeQuantity::MatrixElements,
+            detail: format!(
+                "{nfrequencies} frequency records × {full_matrix_elements} expanded matrix elements"
+            ),
+        })?;
 
     let z0_profile = if references.is_empty() {
         vec![options.resistance; nports]
@@ -389,6 +402,14 @@ pub(crate) fn parse_touchstone_v2_0_s_full(input: &str) -> Result<Network> {
             shape: vec![nfrequencies, nports],
         }
     })?;
+    debug_assert_eq!(
+        record_elements,
+        if matrix_format == MatrixFormat::Full {
+            full_matrix_elements
+        } else {
+            triangular_count(nports).expect("checked at declaration")
+        }
+    );
     Network::new(frequency, s, z0).map_err(Error::Core)
 }
 
@@ -519,18 +540,29 @@ fn parse_version(keyword: &KeywordLine<'_>, seen: &mut bool) -> Result<()> {
     Ok(())
 }
 
+fn triangular_count(nports: usize) -> Option<usize> {
+    if nports % 2 == 0 {
+        nports
+            .checked_div(2)
+            .and_then(|half| half.checked_mul(nports.checked_add(1)?))
+    } else {
+        nports.checked_mul(nports.checked_add(1)?.checked_div(2)?)
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn parse_pre_network_keyword(
     keyword: &KeywordLine<'_>,
     option: &mut Option<Options>,
     nports: &mut Option<usize>,
-    matrix_elements: &mut Option<usize>,
+    full_matrix_elements: &mut Option<usize>,
+    record_elements: &mut Option<usize>,
     two_port_order: &mut Option<TwoPortDataOrder>,
     reference_seen: &mut bool,
     references: &mut Vec<f64>,
     reference_pending: &mut bool,
     nfrequencies: &mut Option<usize>,
-    matrix_format_full: &mut bool,
+    matrix_format: &mut MatrixFormat,
     matrix_format_seen: &mut bool,
     network_data_seen: &mut bool,
 ) -> Result<()> {
@@ -567,22 +599,38 @@ fn parse_pre_network_keyword(
             if ports == 0 {
                 return Err(Error::InvalidPortCount { nports: 0 });
             }
-            let elements = ports
+            let full_elements = ports
                 .checked_mul(ports)
                 .ok_or_else(|| Error::V2SizeOverflow {
                     line: keyword.number,
                     quantity: SizeQuantity::MatrixElements,
                     detail: format!("{ports} ports × {ports} ports"),
                 })?;
-            elements
+            let compact_elements =
+                triangular_count(ports).ok_or_else(|| Error::V2SizeOverflow {
+                    line: keyword.number,
+                    quantity: SizeQuantity::MatrixElements,
+                    detail: format!("{ports} ports × ({ports} + 1) / 2 compact elements"),
+                })?;
+            full_elements
                 .checked_mul(2)
                 .ok_or_else(|| Error::V2SizeOverflow {
                     line: keyword.number,
                     quantity: SizeQuantity::RecordValues,
-                    detail: format!("{elements} complex matrix elements × 2 scalars"),
+                    detail: format!("{full_elements} expanded complex matrix elements × 2 scalars"),
+                })?;
+            compact_elements
+                .checked_mul(2)
+                .ok_or_else(|| Error::V2SizeOverflow {
+                    line: keyword.number,
+                    quantity: SizeQuantity::RecordValues,
+                    detail: format!(
+                        "{compact_elements} compact complex matrix elements × 2 scalars"
+                    ),
                 })?;
             *nports = Some(ports);
-            *matrix_elements = Some(elements);
+            *full_matrix_elements = Some(full_elements);
+            *record_elements = Some(full_elements);
         }
         "two-port data order" => {
             if two_port_order.is_some() {
@@ -682,9 +730,10 @@ fn parse_pre_network_keyword(
                     message: "[Matrix Format] requires Full, Lower, or Upper".to_owned(),
                 });
             }
-            match keyword.args[0].text.to_ascii_lowercase().as_str() {
-                "full" => {}
-                "lower" | "upper" => *matrix_format_full = false,
+            let format = match keyword.args[0].text.to_ascii_lowercase().as_str() {
+                "full" => MatrixFormat::Full,
+                "lower" => MatrixFormat::Lower,
+                "upper" => MatrixFormat::Upper,
                 _ => {
                     return Err(Error::V2Structural {
                         line: keyword.number,
@@ -694,7 +743,28 @@ fn parse_pre_network_keyword(
                         ),
                     });
                 }
-            }
+            };
+            let ports = nports.expect("matrix format requires ports");
+            let elements = if format == MatrixFormat::Full {
+                *full_matrix_elements
+                    .as_ref()
+                    .expect("number of ports computes full matrix size")
+            } else {
+                triangular_count(ports).ok_or_else(|| Error::V2SizeOverflow {
+                    line: keyword.number,
+                    quantity: SizeQuantity::MatrixElements,
+                    detail: format!("{ports} ports × ({ports} + 1) / 2 compact elements"),
+                })?
+            };
+            elements
+                .checked_mul(2)
+                .ok_or_else(|| Error::V2SizeOverflow {
+                    line: keyword.number,
+                    quantity: SizeQuantity::RecordValues,
+                    detail: format!("{elements} complex matrix elements × 2 scalars"),
+                })?;
+            *matrix_format = format;
+            *record_elements = Some(elements);
             *matrix_format_seen = true;
         }
         "network data" => {
@@ -801,9 +871,10 @@ fn consume_reference_line(
 fn feed_network_data_line(
     raw: RawLine<'_>,
     nports: usize,
-    matrix_elements: usize,
+    record_elements: usize,
     nfrequencies: usize,
     two_port_order: TwoPortDataOrder,
+    matrix_format: MatrixFormat,
     options: Options,
     current_frequency: &mut Option<f64>,
     current_record_line: &mut usize,
@@ -845,7 +916,7 @@ fn feed_network_data_line(
             &tokens[1..],
             raw.number,
             options.format,
-            matrix_elements,
+            record_elements,
             current_scalars,
             current_matrix,
         )?;
@@ -854,18 +925,19 @@ fn feed_network_data_line(
             &tokens,
             raw.number,
             options.format,
-            matrix_elements,
+            record_elements,
             current_scalars,
             current_matrix,
         )?;
     }
 
-    if current_matrix.len() == matrix_elements {
+    if current_matrix.len() == record_elements {
         if !current_scalars.is_empty() {
             return Err(Error::V2Structural {
                 line: raw.number,
-                message: "internal record state retained a scalar after completing the Full matrix"
-                    .to_owned(),
+                message:
+                    "internal record state retained a scalar after completing the matrix record"
+                        .to_owned(),
             });
         }
         let frequency = current_frequency
@@ -879,6 +951,7 @@ fn feed_network_data_line(
             matrix,
             nports,
             two_port_order,
+            matrix_format,
             frequencies,
             s_values,
             frequency,
@@ -892,16 +965,16 @@ fn decode_network_scalars(
     tokens: &[Token<'_>],
     line: usize,
     format: DataFormat,
-    matrix_elements: usize,
+    record_elements: usize,
     current_scalars: &mut Vec<ScalarValue>,
     current_matrix: &mut Vec<Complex64>,
 ) -> Result<()> {
-    let record_values = matrix_elements
+    let record_values = record_elements
         .checked_mul(2)
         .ok_or_else(|| Error::V2SizeOverflow {
             line,
             quantity: SizeQuantity::RecordValues,
-            detail: format!("{matrix_elements} complex matrix elements × 2 scalars"),
+            detail: format!("{record_elements} complex matrix elements × 2 scalars"),
         })?;
     let decoded_values = current_matrix
         .len()
@@ -915,7 +988,7 @@ fn decode_network_scalars(
     if decoded_values > record_values {
         return Err(Error::V2Count {
             line,
-            what: "scalar values in the current Full matrix record".to_owned(),
+            what: "scalar values in the current matrix record".to_owned(),
             expected: record_values,
             actual: decoded_values,
         });
@@ -924,7 +997,7 @@ fn decode_network_scalars(
     if tokens.len() > remaining {
         return Err(Error::V2Count {
             line,
-            what: "scalar values in the current Full matrix record".to_owned(),
+            what: "scalar values in the current matrix record".to_owned(),
             expected: remaining,
             actual: tokens.len(),
         });
@@ -986,36 +1059,97 @@ fn decode_scalar_pair(
     }
 }
 
+fn triangular_row_major_index(
+    format: MatrixFormat,
+    nports: usize,
+    row: usize,
+    column: usize,
+) -> Option<usize> {
+    match format {
+        MatrixFormat::Lower if row >= column => triangular_count(row)?.checked_add(column),
+        MatrixFormat::Upper if row <= column => {
+            let prior_rows = match row.checked_sub(1) {
+                Some(prior) => triangular_count(prior)?,
+                None => 0,
+            };
+            row.checked_mul(nports)?
+                .checked_sub(prior_rows)?
+                .checked_add(column.checked_sub(row)?)
+        }
+        MatrixFormat::Full | MatrixFormat::Lower | MatrixFormat::Upper => None,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn append_matrix(
     matrix: Vec<Complex64>,
     nports: usize,
     order: TwoPortDataOrder,
+    matrix_format: MatrixFormat,
     frequencies: &mut Vec<f64>,
     s_values: &mut Vec<Complex64>,
     frequency: f64,
     line: usize,
 ) -> Result<()> {
-    if matrix.len()
-        != nports
-            .checked_mul(nports)
-            .ok_or_else(|| Error::V2SizeOverflow {
-                line,
-                quantity: SizeQuantity::MatrixElements,
-                detail: format!("{nports} ports × {nports} ports"),
-            })?
-    {
+    let full_elements = nports
+        .checked_mul(nports)
+        .ok_or_else(|| Error::V2SizeOverflow {
+            line,
+            quantity: SizeQuantity::MatrixElements,
+            detail: format!("{nports} ports × {nports} expanded elements"),
+        })?;
+    let record_elements = if matrix_format == MatrixFormat::Full {
+        full_elements
+    } else {
+        triangular_count(nports).ok_or_else(|| Error::V2SizeOverflow {
+            line,
+            quantity: SizeQuantity::MatrixElements,
+            detail: format!("{nports} ports × ({nports} + 1) / 2 compact elements"),
+        })?
+    };
+    if matrix.len() != record_elements {
         return Err(Error::V2Structural {
             line,
-            message: "completed Full matrix has an invalid number of pairs".to_owned(),
+            message: "completed matrix record has an invalid number of pairs".to_owned(),
         });
     }
     frequencies.push(frequency);
-    if nports == 2 && order == TwoPortDataOrder::Legacy21_12 {
+    if matrix_format == MatrixFormat::Full && nports == 2 && order == TwoPortDataOrder::Legacy21_12
+    {
         // Physical order N11, N21, N12, N22; Network is row-major N11,
         // N12, N21, N22.
         s_values.extend([matrix[0], matrix[2], matrix[1], matrix[3]]);
-    } else {
+    } else if matrix_format == MatrixFormat::Full {
         s_values.extend(matrix);
+    } else {
+        // Triangular Touchstone records declare symmetry.  Expand the missing
+        // half with a plain transpose, preserving complex values without
+        // conjugation.  The two-port rule is deliberately special: both
+        // Lower and Upper records carry N11, N21, N22 in that order.
+        let storage_format = if nports == 2 {
+            MatrixFormat::Lower
+        } else {
+            matrix_format
+        };
+        for row in 0..nports {
+            for column in 0..nports {
+                let (stored_row, stored_column) = match storage_format {
+                    MatrixFormat::Lower if row >= column => (row, column),
+                    MatrixFormat::Lower => (column, row),
+                    MatrixFormat::Upper if row <= column => (row, column),
+                    MatrixFormat::Upper => (column, row),
+                    MatrixFormat::Full => unreachable!("triangular expansion uses Lower/Upper"),
+                };
+                let index =
+                    triangular_row_major_index(storage_format, nports, stored_row, stored_column)
+                        .ok_or_else(|| Error::V2SizeOverflow {
+                        line,
+                        quantity: SizeQuantity::MatrixElements,
+                        detail: "triangular matrix index".to_owned(),
+                    })?;
+                s_values.push(matrix[index]);
+            }
+        }
     }
     Ok(())
 }
@@ -1024,7 +1158,7 @@ fn append_matrix(
 fn finish_end(
     line: usize,
     nfrequencies: usize,
-    matrix_elements: usize,
+    record_elements: usize,
     current_frequency: Option<f64>,
     current_scalars: &[ScalarValue],
     current_matrix: &[Complex64],
@@ -1032,12 +1166,12 @@ fn finish_end(
     record_line: usize,
 ) -> Result<()> {
     if current_frequency.is_some() {
-        let expected = matrix_elements
+        let expected = record_elements
             .checked_mul(2)
             .ok_or_else(|| Error::V2SizeOverflow {
                 line,
                 quantity: SizeQuantity::RecordValues,
-                detail: format!("{matrix_elements} complex matrix elements × 2 scalars"),
+                detail: format!("{record_elements} complex matrix elements × 2 scalars"),
             })?;
         let actual = current_matrix
             .len()
@@ -1050,7 +1184,7 @@ fn finish_end(
             })?;
         return Err(Error::V2Count {
             line,
-            what: format!("scalar values in Full matrix record starting at line {record_line}"),
+            what: format!("scalar values in matrix record starting at line {record_line}"),
             expected,
             actual,
         });

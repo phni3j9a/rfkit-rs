@@ -1,0 +1,236 @@
+{
+  "data": {
+    "frequency_hz": [
+      10000000.0,
+      20000000.0,
+      30000000.0
+    ],
+    "nports": 3,
+    "s": [
+      [
+        [
+          {
+            "imag": 0.2,
+            "real": 0.1
+          },
+          {
+            "imag": -0.4,
+            "real": 0.3
+          },
+          {
+            "imag": -0.8,
+            "real": 0.7
+          }
+        ],
+        [
+          {
+            "imag": -0.4,
+            "real": 0.3
+          },
+          {
+            "imag": 0.6,
+            "real": 0.5
+          },
+          {
+            "imag": 1.0,
+            "real": 0.9
+          }
+        ],
+        [
+          {
+            "imag": -0.8,
+            "real": 0.7
+          },
+          {
+            "imag": 1.0,
+            "real": 0.9
+          },
+          {
+            "imag": -1.2,
+            "real": 1.1
+          }
+        ]
+      ],
+      [
+        [
+          {
+            "imag": 0.21,
+            "real": -0.11
+          },
+          {
+            "imag": -0.41,
+            "real": -0.31
+          },
+          {
+            "imag": 0.81,
+            "real": 0.71
+          }
+        ],
+        [
+          {
+            "imag": -0.41,
+            "real": -0.31
+          },
+          {
+            "imag": 0.61,
+            "real": -0.51
+          },
+          {
+            "imag": 1.01,
+            "real": -0.91
+          }
+        ],
+        [
+          {
+            "imag": 0.81,
+            "real": 0.71
+          },
+          {
+            "imag": 1.01,
+            "real": -0.91
+          },
+          {
+            "imag": -1.21,
+            "real": 1.11
+          }
+        ]
+      ],
+      [
+        [
+          {
+            "imag": -0.22,
+            "real": 0.12
+          },
+          {
+            "imag": 0.42,
+            "real": 0.32
+          },
+          {
+            "imag": 0.82,
+            "real": 0.72
+          }
+        ],
+        [
+          {
+            "imag": 0.42,
+            "real": 0.32
+          },
+          {
+            "imag": -0.62,
+            "real": 0.52
+          },
+          {
+            "imag": 1.02,
+            "real": -0.92
+          }
+        ],
+        [
+          {
+            "imag": 0.82,
+            "real": 0.72
+          },
+          {
+            "imag": 1.02,
+            "real": -0.92
+          },
+          {
+            "imag": -1.22,
+            "real": 1.12
+          }
+        ]
+      ]
+    ],
+    "touchstone_text": "! Independently authored Touchstone v2.0 Lower S oracle input\n[Version] 2.0\n# MHz S RI R 17\n[Number of Ports] 3\n[Number of Frequencies] 3\n[Reference] 25 50\n75\n[Matrix Format] Lower\n[Network Data]\n10 0.10 0.20 0.30 -0.40\n0.50 0.60 0.70 -0.80\n0.90 1.00 1.10 -1.20\n20 -0.11 0.21 -0.31 -0.41\n-0.51 0.61 0.71 0.81 -0.91 1.01\n1.11 -1.21\n30 0.12 -0.22 0.32 0.42\n0.52 -0.62 0.72 0.82 -0.92 1.02\n1.12 -1.22\n[End]\n",
+    "z0_ohm": [
+      [
+        {
+          "imag": 0.0,
+          "real": 25.0
+        },
+        {
+          "imag": 0.0,
+          "real": 50.0
+        },
+        {
+          "imag": 0.0,
+          "real": 75.0
+        }
+      ],
+      [
+        {
+          "imag": 0.0,
+          "real": 25.0
+        },
+        {
+          "imag": 0.0,
+          "real": 50.0
+        },
+        {
+          "imag": 0.0,
+          "real": 75.0
+        }
+      ],
+      [
+        {
+          "imag": 0.0,
+          "real": 25.0
+        },
+        {
+          "imag": 0.0,
+          "real": 50.0
+        },
+        {
+          "imag": 0.0,
+          "real": 75.0
+        }
+      ]
+    ]
+  },
+  "metadata": {
+    "case_id": "touchstone_v2_0_s_lower_three_port",
+    "deterministic_construction": "literal source text; no random generation",
+    "input_recipe": "literal TOUCHSTONE_V2_LOWER_TEXT below: three MHz Lower-matrix RI records, three unequal real per-port references [25,50,75] ohm, a continued [Reference] vector, split compact records, nonzero imaginary parts, and no random generation",
+    "matrix_format": "Lower",
+    "numpy_version": "2.5.1",
+    "operation": "touchstone_v2_0_s_lower_parse",
+    "pair_count": 6,
+    "port_count": 3,
+    "reference_impedance": {
+      "complex": false,
+      "frequency_dependent": false,
+      "per_port": true,
+      "unit": "ohm"
+    },
+    "reference_order_ohm": [
+      25.0,
+      50.0,
+      75.0
+    ],
+    "schema": "rfkit-rs.oracle.fixture",
+    "schema_version": 1,
+    "scikit_rf_commit": "bd651e923cac6020de49a096e1d7e9b5f949f884",
+    "scikit_rf_version": "2.0.1",
+    "shape": {
+      "frequency": [
+        3
+      ],
+      "s": [
+        3,
+        3,
+        3
+      ],
+      "z0": [
+        3,
+        3
+      ]
+    },
+    "tolerance_policy": {
+      "atol": 1e-12,
+      "comparison": "abs(actual-expected) <= atol + rtol*abs(expected)",
+      "justification": "Strict binary64 tolerance for an independently authored Touchstone 2.0 single-ended Lower-matrix RI input. The pinned public scikit-rf parser supplies expected frequency/S/z0 values; the matrix-format directive, compact text, references, and shape remain exact contract fields.",
+      "regeneration": "canonical UTF-8 JSON serialization; parsed S is checked with the recorded numeric tolerance while frequency and references remain exact",
+      "rtol": 1e-12
+    },
+    "wave_definition": "power"
+  }
+}

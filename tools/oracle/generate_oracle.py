@@ -58,10 +58,15 @@ calls public ``Network.gmm2se`` with an explicit adjacent ``z0_se`` target.
 Only floating S outputs are numeric-tolerance fields; metadata, shapes,
 frequencies, inputs, and references remain exact canonical contract data.
 The Touchstone cases include independent v1.0 and v2.0 parser inputs; the v2
-case uses public ``skrf.io.touchstone.Touchstone`` on a named ``.ts`` stream,
-continued heterogeneous ``[Reference]`` data, and arbitrary Full-matrix record
-continuations. Only parsed S is tolerant in the v2 fixture; source text,
-directive/count metadata, frequencies, and references are exact.
+cases use public ``skrf.io.touchstone.Touchstone`` on named ``.ts`` streams,
+continued heterogeneous ``[Reference]`` data, and arbitrary Full/Lower/Upper
+record continuations. Only parsed S is tolerant in the v2 fixtures; source
+text, directive/count metadata, frequencies, and references are exact. The
+Lower and Upper cases are deterministic literal three-port inputs with
+non-zero imaginary components, so plain-transpose expansion is observable.
+The pinned scikit-rf two-port Lower/``21_12`` legacy transpose defect is not
+serialized as expected data; the standards-based two-port behavior is covered
+by the Rust regression instead.
 """
 
 from __future__ import annotations
@@ -149,6 +154,90 @@ TOUCHSTONE_V2_TEXT = (
     "1.10 -1.20 1.30 1.40 1.50 -1.60 1.70 1.80\n"
     "20 -0.11 0.21 -0.31 -0.41 -0.51 0.61 0.71 0.81 -0.91 1.01 -1.11 -1.21\n"
     "1.31 -1.41 1.51 1.61 -1.71 1.81\n"
+    "[End]\n"
+)
+TOUCHSTONE_V2_LOWER_FIXTURE = (
+    Path(__file__).resolve().parent
+    / "fixtures"
+    / "touchstone_v2_0_s_lower_three_port.json"
+)
+TOUCHSTONE_V2_LOWER_CASE_ID = "touchstone_v2_0_s_lower_three_port"
+TOUCHSTONE_V2_LOWER_NPORTS = 3
+TOUCHSTONE_V2_LOWER_INPUT_RECIPE = (
+    "literal TOUCHSTONE_V2_LOWER_TEXT below: three MHz Lower-matrix RI "
+    "records, three unequal real per-port references [25,50,75] ohm, a "
+    "continued [Reference] vector, split compact records, nonzero imaginary "
+    "parts, and no random generation"
+)
+TOUCHSTONE_V2_LOWER_RTOL = 1e-12
+TOUCHSTONE_V2_LOWER_ATOL = 1e-12
+TOUCHSTONE_V2_LOWER_TOLERANCE_JUSTIFICATION = (
+    "Strict binary64 tolerance for an independently authored Touchstone 2.0 "
+    "single-ended Lower-matrix RI input. The pinned public scikit-rf parser "
+    "supplies expected frequency/S/z0 values; the matrix-format directive, "
+    "compact text, references, and shape remain exact contract fields."
+)
+TOUCHSTONE_V2_LOWER_TEXT = (
+    "! Independently authored Touchstone v2.0 Lower S oracle input\n"
+    "[Version] 2.0\n"
+    "# MHz S RI R 17\n"
+    "[Number of Ports] 3\n"
+    "[Number of Frequencies] 3\n"
+    "[Reference] 25 50\n"
+    "75\n"
+    "[Matrix Format] Lower\n"
+    "[Network Data]\n"
+    "10 0.10 0.20 0.30 -0.40\n"
+    "0.50 0.60 0.70 -0.80\n"
+    "0.90 1.00 1.10 -1.20\n"
+    "20 -0.11 0.21 -0.31 -0.41\n"
+    "-0.51 0.61 0.71 0.81 -0.91 1.01\n"
+    "1.11 -1.21\n"
+    "30 0.12 -0.22 0.32 0.42\n"
+    "0.52 -0.62 0.72 0.82 -0.92 1.02\n"
+    "1.12 -1.22\n"
+    "[End]\n"
+)
+TOUCHSTONE_V2_UPPER_FIXTURE = (
+    Path(__file__).resolve().parent
+    / "fixtures"
+    / "touchstone_v2_0_s_upper_three_port.json"
+)
+TOUCHSTONE_V2_UPPER_CASE_ID = "touchstone_v2_0_s_upper_three_port"
+TOUCHSTONE_V2_UPPER_NPORTS = 3
+TOUCHSTONE_V2_UPPER_INPUT_RECIPE = (
+    "literal TOUCHSTONE_V2_UPPER_TEXT below: three MHz Upper-matrix RI "
+    "records, three unequal real per-port references [25,50,75] ohm, a "
+    "continued [Reference] vector, split compact records, nonzero imaginary "
+    "parts, and no random generation"
+)
+TOUCHSTONE_V2_UPPER_RTOL = 1e-12
+TOUCHSTONE_V2_UPPER_ATOL = 1e-12
+TOUCHSTONE_V2_UPPER_TOLERANCE_JUSTIFICATION = (
+    "Strict binary64 tolerance for an independently authored Touchstone 2.0 "
+    "single-ended Upper-matrix RI input. The pinned public scikit-rf parser "
+    "supplies expected frequency/S/z0 values; the matrix-format directive, "
+    "compact text, references, and shape remain exact contract fields."
+)
+TOUCHSTONE_V2_UPPER_TEXT = (
+    "! Independently authored Touchstone v2.0 Upper S oracle input\n"
+    "[Version] 2.0\n"
+    "# MHz S RI R 19\n"
+    "[Number of Ports] 3\n"
+    "[Number of Frequencies] 3\n"
+    "[Reference] 25 50\n"
+    "75\n"
+    "[Matrix Format] Upper\n"
+    "[Network Data]\n"
+    "10 -0.15 0.25 0.35 0.45\n"
+    "-0.55 0.65 0.75 0.85\n"
+    "-0.95 1.05 1.15 -1.25\n"
+    "20 0.16 -0.26 -0.36 0.46\n"
+    "0.56 0.66 0.76 -0.86\n"
+    "0.96 1.06 -1.16 1.26\n"
+    "30 -0.17 0.27 0.37 -0.47\n"
+    "-0.57 0.67 0.77 0.87\n"
+    "-0.97 1.07 1.17 -1.27\n"
     "[End]\n"
 )
 S_TO_Z_FIXTURE = (
@@ -2914,6 +3003,135 @@ def _touchstone_v2_fixture(np: Any, skrf: Any) -> dict[str, Any]:
             "z0_ohm": _complex_array(network_z0),
         },
     }
+
+
+def _touchstone_v2_triangular_fixture(
+    np: Any,
+    skrf: Any,
+    *,
+    case_id: str,
+    matrix_format: str,
+    nports: int,
+    input_recipe: str,
+    text: str,
+    rtol: float,
+    atol: float,
+    tolerance_justification: str,
+) -> dict[str, Any]:
+    """Build one independently authored v2 Lower/Upper fixture.
+
+    The compact records are parsed only through the pinned public scikit-rf
+    Touchstone reader.  The triangular input is deliberately kept separate
+    from the Full fixture so that no expected S values are obtained by a
+    local expansion or a Full round-trip.
+    """
+
+    stream = StringIO(text)
+    stream.name = f"{case_id}.ts"
+    from skrf.io.touchstone import Touchstone
+
+    parsed = Touchstone(stream)
+    frequency = np.asarray(parsed.f, dtype=np.float64)
+    network_s = np.asarray(parsed.s, dtype=np.complex128)
+    network_z0 = np.asarray(parsed.z0, dtype=np.complex128)
+    expected_references = np.asarray([25.0, 50.0, 75.0], dtype=np.float64)
+    if network_s.shape != (3, nports, nports):
+        raise ValueError(f"unexpected Touchstone v2 {matrix_format} S shape: {network_s.shape}")
+    if network_z0.shape != (3, nports):
+        raise ValueError(f"unexpected Touchstone v2 {matrix_format} z0 shape: {network_z0.shape}")
+    if not np.isfinite(frequency).all() or not np.isfinite(network_s).all():
+        raise ValueError(f"Touchstone v2 {matrix_format} oracle output must be finite")
+    expected_z0 = np.broadcast_to(expected_references, network_z0.shape)
+    if not np.array_equal(network_z0.real, expected_z0) or not np.all(network_z0.imag == 0.0):
+        raise ValueError(
+            f"Touchstone v2 {matrix_format} oracle references differ from [25,50,75]"
+        )
+    if np.array_equal(network_s.imag, np.zeros_like(network_s.imag)):
+        raise ValueError(f"Touchstone v2 {matrix_format} input lost nonzero imaginary parts")
+    if not np.array_equal(network_s, np.swapaxes(network_s, 1, 2)):
+        raise ValueError(f"Touchstone v2 {matrix_format} output is not plain-transpose symmetric")
+
+    return {
+        "metadata": {
+            "case_id": case_id,
+            "deterministic_construction": "literal source text; no random generation",
+            "input_recipe": input_recipe,
+            "matrix_format": matrix_format,
+            "numpy_version": np.__version__,
+            "operation": f"touchstone_v2_0_s_{matrix_format.lower()}_parse",
+            "pair_count": nports * (nports + 1) // 2,
+            "port_count": nports,
+            "reference_impedance": {
+                "complex": False,
+                "frequency_dependent": False,
+                "per_port": True,
+                "unit": "ohm",
+            },
+            "reference_order_ohm": [float(value) for value in expected_references],
+            "schema": "rfkit-rs.oracle.fixture",
+            "schema_version": SCHEMA_VERSION,
+            "scikit_rf_commit": EXPECTED_SCIKIT_RF_COMMIT,
+            "scikit_rf_version": skrf.__version__,
+            "shape": {
+                "frequency": list(frequency.shape),
+                "s": list(network_s.shape),
+                "z0": list(network_z0.shape),
+            },
+            "tolerance_policy": {
+                "atol": atol,
+                "comparison": "abs(actual-expected) <= atol + rtol*abs(expected)",
+                "justification": tolerance_justification,
+                "regeneration": (
+                    "canonical UTF-8 JSON serialization; parsed S is checked "
+                    "with the recorded numeric tolerance while frequency and "
+                    "references remain exact"
+                ),
+                "rtol": rtol,
+            },
+            "wave_definition": "power",
+        },
+        "data": {
+            "frequency_hz": [float(value) for value in frequency],
+            "nports": nports,
+            "s": _complex_array(network_s),
+            "touchstone_text": text,
+            "z0_ohm": _complex_array(network_z0),
+        },
+    }
+
+
+def _touchstone_v2_lower_fixture(np: Any, skrf: Any) -> dict[str, Any]:
+    """Build the Lower-matrix Touchstone 2.0 fixture."""
+
+    return _touchstone_v2_triangular_fixture(
+        np,
+        skrf,
+        case_id=TOUCHSTONE_V2_LOWER_CASE_ID,
+        matrix_format="Lower",
+        nports=TOUCHSTONE_V2_LOWER_NPORTS,
+        input_recipe=TOUCHSTONE_V2_LOWER_INPUT_RECIPE,
+        text=TOUCHSTONE_V2_LOWER_TEXT,
+        rtol=TOUCHSTONE_V2_LOWER_RTOL,
+        atol=TOUCHSTONE_V2_LOWER_ATOL,
+        tolerance_justification=TOUCHSTONE_V2_LOWER_TOLERANCE_JUSTIFICATION,
+    )
+
+
+def _touchstone_v2_upper_fixture(np: Any, skrf: Any) -> dict[str, Any]:
+    """Build the Upper-matrix Touchstone 2.0 fixture."""
+
+    return _touchstone_v2_triangular_fixture(
+        np,
+        skrf,
+        case_id=TOUCHSTONE_V2_UPPER_CASE_ID,
+        matrix_format="Upper",
+        nports=TOUCHSTONE_V2_UPPER_NPORTS,
+        input_recipe=TOUCHSTONE_V2_UPPER_INPUT_RECIPE,
+        text=TOUCHSTONE_V2_UPPER_TEXT,
+        rtol=TOUCHSTONE_V2_UPPER_RTOL,
+        atol=TOUCHSTONE_V2_UPPER_ATOL,
+        tolerance_justification=TOUCHSTONE_V2_UPPER_TOLERANCE_JUSTIFICATION,
+    )
 
 
 def _interpolation_inputs(np: Any) -> tuple[Any, Any, Any, Any]:
@@ -7201,6 +7419,20 @@ _CASES = (
         TOUCHSTONE_V2_CASE_ID,
         TOUCHSTONE_V2_FIXTURE,
         _touchstone_v2_fixture,
+        "numeric_output",
+        "s",
+    ),
+    _OracleCase(
+        TOUCHSTONE_V2_LOWER_CASE_ID,
+        TOUCHSTONE_V2_LOWER_FIXTURE,
+        _touchstone_v2_lower_fixture,
+        "numeric_output",
+        "s",
+    ),
+    _OracleCase(
+        TOUCHSTONE_V2_UPPER_CASE_ID,
+        TOUCHSTONE_V2_UPPER_FIXTURE,
+        _touchstone_v2_upper_fixture,
         "numeric_output",
         "s",
     ),
