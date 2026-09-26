@@ -40,6 +40,15 @@ five-port source, a selected middle port, explicit finite loads including a
 short, and a one-port load built through public ``skrf.network.z2s`` and
 ``Network`` APIs before one public ``skrf.network.connect`` call; only its
 reduced S output is numeric-tolerance compared.
+The mixed-open termination fixture independently extends this domain to one
+tagged load profile containing both explicit ideal opens and finite complex
+impedances.  Open samples use the physical one-port power-wave reflection
+``S=+1`` rather than an infinite/large impedance, finite samples use public
+``skrf.network.z2s``, and one public ``skrf.network.connect`` call supplies
+the reduced-network expectation.  The result is explicitly restored with
+``result.renormalize(result.z0, s_def="power")`` and checked as power waves
+before expected S extraction; only its restored reduced S output is numeric-
+tolerance compared.
 The direct S-to-Y singular-domain fixture adds an independently constructed
 non-reciprocal three-port S input whose ``I-S`` system is exactly singular
 while the direct Kurokawa ``A`` system remains nonsingular.  Its expected Y is
@@ -757,6 +766,45 @@ TERMINATE_IMPEDANCE_TOLERANCE_JUSTIFICATION = (
     "load through public z2s and Network APIs; the surviving references, "
     "frequency labels, source inputs, load values, and ordering metadata are "
     "checked as exact contract fields."
+)
+
+# The explicit-load termination case extends the finite-only fixture with the
+# physical ideal-open boundary.  Keep the load profile tagged rather than
+# encoding Open as an infinite/large impedance: the latter would make the
+# input ambiguous and would exercise a different numerical problem.  The
+# selected port remains the middle port so the output survivor order also
+# covers a genuine interior elimination.
+TERMINATE_MIXED_OPEN_FIXTURE = (
+    Path(__file__).resolve().parent
+    / "fixtures"
+    / "power_wave_terminate_port_mixed_open_five_port_complex_z0.json"
+)
+TERMINATE_MIXED_OPEN_CASE_ID = (
+    "power_wave_terminate_port_mixed_open_five_port_complex_z0"
+)
+TERMINATE_MIXED_OPEN_RANDOM_SEED = 20_260_963
+TERMINATE_MIXED_OPEN_NFREQ = 4
+TERMINATE_MIXED_OPEN_NPORTS = 5
+TERMINATE_MIXED_OPEN_PORT = 2
+TERMINATE_MIXED_OPEN_RTOL = 1e-12
+TERMINATE_MIXED_OPEN_ATOL = 1e-12
+TERMINATE_MIXED_OPEN_INPUT_RECIPE = (
+    "independent local NumPy default_rng input with seed 20260963, an "
+    "asymmetric non-reciprocal five-port S stack, four finite frequency "
+    "samples, a middle selected port 2, unequal complex frequency-dependent "
+    "positive-real source references, and mixed physical loads "
+    "[Open, 31+7j, Open, -17+4j] ohm"
+)
+TERMINATE_MIXED_OPEN_TOLERANCE_JUSTIFICATION = (
+    "Strict binary64 mixed tolerance for a deterministic, well-conditioned, "
+    "asymmetric five-port physical-load boundary with explicit ideal-open and "
+    "finite samples in one profile.  Finite load samples are converted through "
+    "public skrf.network.z2s and Open samples use the physical one-port "
+    "power-wave reflection S=+1; the expected reduced S comes from one public "
+    "skrf.network.connect call.  The connect result is explicitly restored with "
+    "result.renormalize(result.z0, s_def=\"power\") and checked as power waves "
+    "before expected S extraction; frequency, source "
+    "S/z0, tagged loads, survivor z0, ordering, and metadata are exact fields."
 )
 
 # The interpolation case is kept as one direct, independently generated
@@ -4162,6 +4210,267 @@ def _terminate_impedance_fixture(np: Any, skrf: Any) -> dict[str, Any]:
     }
 
 
+def _terminate_mixed_open_fixture(np: Any, skrf: Any) -> dict[str, Any]:
+    """Build the mixed ideal-open/finite-load case through public APIs."""
+
+    frequency_hz = np.array(
+        [0.83e9, 1.29e9, 1.87e9, 2.41e9],
+        dtype=np.float64,
+    )
+    rng = np.random.default_rng(TERMINATE_MIXED_OPEN_RANDOM_SEED)
+    source_s = (
+        rng.normal(
+            loc=0.0,
+            scale=0.019,
+            size=(
+                TERMINATE_MIXED_OPEN_NFREQ,
+                TERMINATE_MIXED_OPEN_NPORTS,
+                TERMINATE_MIXED_OPEN_NPORTS,
+            ),
+        )
+        + 1j
+        * rng.normal(
+            loc=0.0,
+            scale=0.019,
+            size=(
+                TERMINATE_MIXED_OPEN_NFREQ,
+                TERMINATE_MIXED_OPEN_NPORTS,
+                TERMINATE_MIXED_OPEN_NPORTS,
+            ),
+        )
+    ).astype(np.complex128)
+    for frequency in range(TERMINATE_MIXED_OPEN_NFREQ):
+        for port in range(TERMINATE_MIXED_OPEN_NPORTS):
+            source_s[frequency, port, port] += complex(
+                0.085 + 0.011 * frequency + 0.006 * port,
+                -0.012 + 0.002 * frequency + 0.001 * port,
+            )
+
+    frequency_index = np.arange(
+        TERMINATE_MIXED_OPEN_NFREQ,
+        dtype=np.float64,
+    )[:, None]
+    port_index = np.arange(
+        TERMINATE_MIXED_OPEN_NPORTS,
+        dtype=np.float64,
+    )[None, :]
+    source_z0 = (
+        37.0
+        + 1.9 * frequency_index
+        + 4.6 * port_index
+        + 1j * (-2.7 + 0.23 * frequency_index + 0.41 * port_index)
+    ).astype(np.complex128)
+    load_profile = [
+        ("open", None),
+        ("impedance_ohm", 31.0 + 7.0j),
+        ("open", None),
+        ("impedance_ohm", -17.0 + 4.0j),
+    ]
+
+    if not np.isfinite(frequency_hz).all():
+        raise ValueError("mixed-open termination frequencies must be finite")
+    if not np.isfinite(source_s).all():
+        raise ValueError("mixed-open termination S input must be finite")
+    if not np.isfinite(source_z0).all() or not (source_z0.real > 0.0).all():
+        raise ValueError(
+            "mixed-open termination source z0 must be finite and positive-real"
+        )
+    if np.array_equal(
+        source_z0[:, TERMINATE_MIXED_OPEN_PORT][:-1],
+        source_z0[:, TERMINATE_MIXED_OPEN_PORT][1:],
+    ):
+        raise ValueError("mixed-open selected references must vary by frequency")
+    if len(load_profile) != TERMINATE_MIXED_OPEN_NFREQ:
+        raise ValueError("mixed-open load profile must have one value per frequency")
+    for kind, value in load_profile:
+        if kind == "open":
+            if value is not None:
+                raise ValueError("mixed-open Open load must not carry an impedance")
+        elif kind == "impedance_ohm":
+            if value is None or not np.isfinite(value):
+                raise ValueError("mixed-open finite loads must be finite")
+        else:
+            raise ValueError(f"unknown mixed-open load kind: {kind!r}")
+    _assert_non_symmetric(np, source_s, name="mixed-open termination S input")
+    _assert_s_conditioning(source_s)
+
+    case_id = TERMINATE_MIXED_OPEN_CASE_ID
+    source_network = skrf.Network(
+        f=frequency_hz,
+        s=source_s,
+        z0=source_z0,
+        s_def="power",
+        name=f"{case_id}_source",
+    )
+    load_z0 = source_z0[:, [TERMINATE_MIXED_OPEN_PORT]]
+    load_s = np.empty(
+        (TERMINATE_MIXED_OPEN_NFREQ, 1, 1),
+        dtype=np.complex128,
+    )
+    for frequency, (kind, value) in enumerate(load_profile):
+        if kind == "open":
+            # An ideal physical open has I=0 and therefore power-wave
+            # reflection coefficient +1.  It is not represented as a large Z.
+            load_s[frequency, 0, 0] = 1.0 + 0.0j
+            continue
+        converted = skrf.network.z2s(
+            np.asarray([[[value]]], dtype=np.complex128),
+            z0=load_z0[frequency : frequency + 1],
+            s_def="power",
+        )
+        load_s[frequency, 0, 0] = np.asarray(converted, dtype=np.complex128)[
+            0, 0, 0
+        ]
+    if not np.isfinite(load_s).all():
+        raise ValueError("mixed-open load S must be finite")
+    if not np.array_equal(load_s[[0, 2], 0, 0], np.ones(2, dtype=np.complex128)):
+        raise ValueError("mixed-open load S must encode Open as reflection +1")
+
+    load_network = skrf.Network(
+        f=frequency_hz,
+        s=load_s,
+        z0=load_z0,
+        s_def="power",
+        name=f"{case_id}_load",
+    )
+    connected = skrf.network.connect(
+        source_network,
+        TERMINATE_MIXED_OPEN_PORT,
+        load_network,
+        0,
+    )
+
+    # Complex-reference junction routines may expose a pseudo-wave result in
+    # other operation paths.  Always make the expected wave convention
+    # explicit before taking any output samples, and retain the observed raw
+    # label in metadata so an omitted restoration is review-visible.
+    raw_wave_definition = connected.s_def
+    if raw_wave_definition not in ("power", "pseudo"):
+        raise ValueError(
+            "mixed-open public connect returned an unknown wave definition: "
+            f"{raw_wave_definition!r}"
+        )
+    restored = connected.copy()
+    restored.renormalize(connected.z0, s_def="power")
+    output_wave_definition = restored.s_def
+    if output_wave_definition != "power":
+        raise ValueError(
+            "mixed-open connect result must be power-labelled after restoration"
+        )
+
+    output_frequency = np.asarray(restored.f, dtype=np.float64)
+    output_s = np.asarray(restored.s, dtype=np.complex128)
+    output_z0 = np.asarray(restored.z0, dtype=np.complex128)
+    survivors = [
+        port
+        for port in range(TERMINATE_MIXED_OPEN_NPORTS)
+        if port != TERMINATE_MIXED_OPEN_PORT
+    ]
+    expected_z0 = source_z0[:, survivors]
+    if not np.array_equal(output_frequency, frequency_hz):
+        raise ValueError("mixed-open output frequency changed")
+    if output_s.shape != (
+        TERMINATE_MIXED_OPEN_NFREQ,
+        len(survivors),
+        len(survivors),
+    ):
+        raise ValueError("mixed-open output S shape changed")
+    if not np.isfinite(output_s).all() or not np.isfinite(output_z0).all():
+        raise ValueError("mixed-open output must be finite")
+    if not np.array_equal(output_z0, expected_z0):
+        raise ValueError("mixed-open survivor references changed")
+
+    shape = {
+        "frequency": list(output_frequency.shape),
+        "input_s": list(source_s.shape),
+        "input_z0": list(source_z0.shape),
+        "loads": [len(load_profile)],
+        "output_s": list(output_s.shape),
+        "output_z0": list(output_z0.shape),
+    }
+    serialized_loads = []
+    for kind, value in load_profile:
+        if kind == "open":
+            serialized_loads.append({"kind": "open"})
+        else:
+            serialized_loads.append(
+                {
+                    "kind": "impedance_ohm",
+                    "value": _complex_value(value),
+                }
+            )
+    return {
+        "metadata": {
+            "case_id": case_id,
+            "input_recipe": TERMINATE_MIXED_OPEN_INPUT_RECIPE,
+            "load_boundary": {
+                "finite_only": False,
+                "includes_ideal_open": True,
+                "includes_ideal_short": False,
+                "load_excitation": "none",
+                "open_sentinel": "explicit PortLoad::Open variant",
+                "unit": "ohm",
+            },
+            "numpy_version": np.__version__,
+            "operation": "terminate_port_power",
+            "port": TERMINATE_MIXED_OPEN_PORT,
+            "port_order": {
+                "description": "source ports except the selected port, in original order",
+                "input": list(range(TERMINATE_MIXED_OPEN_NPORTS)),
+                "output": survivors,
+            },
+            "random_seed": TERMINATE_MIXED_OPEN_RANDOM_SEED,
+            "reference_impedance": {
+                "complex": True,
+                "frequency_dependent": True,
+                "per_port": True,
+                "positive_real": True,
+                "source_field": "z0_ohm",
+                "survivor_field": "z0_survivor_ohm",
+                "unit": "ohm",
+            },
+            "schema": "rfkit-rs.oracle.fixture",
+            "schema_version": SCHEMA_VERSION,
+            "scikit_rf_commit": EXPECTED_SCIKIT_RF_COMMIT,
+            "scikit_rf_version": skrf.__version__,
+            "shape": shape,
+            "tolerance_policy": {
+                "atol": TERMINATE_MIXED_OPEN_ATOL,
+                "comparison": (
+                    "only data.s_terminated is numeric output; "
+                    "abs(actual-expected) <= atol + rtol*abs(expected)"
+                ),
+                "justification": TERMINATE_MIXED_OPEN_TOLERANCE_JUSTIFICATION,
+                "regeneration": (
+                    "canonical UTF-8 JSON serialization; s_terminated is checked "
+                    "with the recorded numeric tolerance; frequency, source S/z0, "
+                    "tagged loads, survivor z0, ordering, wave definitions, and "
+                    "metadata are checked exactly"
+                ),
+                "rtol": TERMINATE_MIXED_OPEN_RTOL,
+            },
+            "wave_definition": "power",
+            "wave_definitions": {
+                "connect_raw": raw_wave_definition,
+                "input": source_network.s_def,
+                "load": load_network.s_def,
+                "output": output_wave_definition,
+                "restoration": (
+                    "public result.renormalize(result.z0, s_def=\"power\")"
+                ),
+            },
+        },
+        "data": {
+            "frequency_hz": [float(value) for value in output_frequency],
+            "loads": serialized_loads,
+            "s": _complex_array(source_s),
+            "s_terminated": _complex_array(output_s),
+            "z0_ohm": _complex_array(source_z0),
+            "z0_survivor_ohm": _complex_array(output_z0),
+        },
+    }
+
+
 def _inner_connect_inputs(np: Any, *, seed: int) -> tuple[Any, Any, Any, Any]:
     """Build independent finite S/z0 input for the inner-connect case."""
 
@@ -7468,6 +7777,13 @@ _CASES = (
         TERMINATE_IMPEDANCE_CASE_ID,
         TERMINATE_IMPEDANCE_FIXTURE,
         _terminate_impedance_fixture,
+        "numeric_output",
+        "s_terminated",
+    ),
+    _OracleCase(
+        TERMINATE_MIXED_OPEN_CASE_ID,
+        TERMINATE_MIXED_OPEN_FIXTURE,
+        _terminate_mixed_open_fixture,
         "numeric_output",
         "s_terminated",
     ),

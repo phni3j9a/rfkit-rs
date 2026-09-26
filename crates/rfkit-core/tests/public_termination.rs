@@ -1,11 +1,15 @@
 use ndarray::{Array1, Array2, Array3};
 use num_complex::Complex64;
-use rfkit_core::{Error, Frequency, Network};
+use rfkit_core::{Error, Frequency, Network, PortLoad};
 use serde_json::json;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 fn c(real: f64, imag: f64) -> Complex64 {
     Complex64::new(real, imag)
+}
+
+fn finite_loads(loads: &[Complex64]) -> Vec<PortLoad> {
+    loads.iter().copied().map(PortLoad::ImpedanceOhm).collect()
 }
 
 fn network(frequency_hz: Vec<f64>, s: Array3<Complex64>, z0: Array2<Complex64>) -> Network {
@@ -69,6 +73,41 @@ fn expected_termination(
     (output, output_z0)
 }
 
+fn expected_profile_termination(
+    s: &Array3<Complex64>,
+    z0: &Array2<Complex64>,
+    port: usize,
+    loads: &[PortLoad],
+) -> (Array3<Complex64>, Array2<Complex64>) {
+    let (nfreq, nports, _) = s.dim();
+    let survivors: Vec<_> = (0..nports).filter(|&candidate| candidate != port).collect();
+    let mut output = Array3::zeros((nfreq, nports - 1, nports - 1));
+    let mut output_z0 = Array2::zeros((nfreq, nports - 1));
+    for frequency in 0..nfreq {
+        let selected_s = s[[frequency, port, port]];
+        let feedback = match loads[frequency] {
+            PortLoad::ImpedanceOhm(load) => {
+                let reference = z0[[frequency, port]];
+                let c = load - reference;
+                let d = load + reference.conj();
+                c / (d - c * selected_s)
+            }
+            PortLoad::Open => c(1.0, 0.0) / (c(1.0, 0.0) - selected_s),
+            _ => unreachable!("unknown future PortLoad variant in test"),
+        };
+        for (row, &source_row) in survivors.iter().enumerate() {
+            output_z0[[frequency, row]] = z0[[frequency, source_row]];
+            for (column, &source_column) in survivors.iter().enumerate() {
+                output[[frequency, row, column]] = s[[frequency, source_row, source_column]]
+                    + s[[frequency, source_row, port]]
+                        * feedback
+                        * s[[frequency, port, source_column]];
+            }
+        }
+    }
+    (output, output_z0)
+}
+
 fn asymmetric_case() -> (
     Vec<f64>,
     Array3<Complex64>,
@@ -103,7 +142,9 @@ fn termination_matches_real_reference_analytical_values_and_survivor_order() {
     let z0 = Array2::from_shape_vec((1, 2), vec![c(50.0, 0.0), c(75.0, 0.0)]).unwrap();
     let source = network(frequency.clone(), s.clone(), z0.clone());
     let load = [c(125.0, 0.0)];
-    let actual = source.terminate_port_impedance_power(0, &load).unwrap();
+    let actual = source
+        .terminate_port_power(0, &finite_loads(&load))
+        .unwrap();
     let reflection =
         c(125.0 - 50.0, 0.0) / (c(125.0 + 50.0, 0.0) - c(125.0 - 50.0, 0.0) * c(0.1, 0.02));
     let expected = c(0.4, -0.03) + c(-0.2, 0.15) * reflection * c(0.3, -0.1);
@@ -119,7 +160,9 @@ fn termination_matches_real_reference_analytical_values_and_survivor_order() {
 
     // Selecting the last port leaves the first port in place and uses the
     // same physical formula in the opposite survivor direction.
-    let actual = source.terminate_port_impedance_power(1, &load).unwrap();
+    let actual = source
+        .terminate_port_power(1, &finite_loads(&load))
+        .unwrap();
     let reflection = (c(125.0, 0.0) - c(75.0, 0.0))
         / (c(125.0 + 75.0, 0.0) - (c(125.0, 0.0) - c(75.0, 0.0)) * c(0.4, -0.03));
     let expected = c(0.1, 0.02) + c(0.3, -0.1) * reflection * c(-0.2, 0.15);
@@ -134,12 +177,84 @@ fn termination_matches_real_reference_analytical_values_and_survivor_order() {
 }
 
 #[test]
+fn open_termination_matches_analytical_two_port_and_preserves_inputs() {
+    let frequency = vec![1.0e9];
+    let s = Array3::from_shape_vec(
+        (1, 2, 2),
+        vec![
+            c(0.17, -0.04),
+            c(0.31, 0.09),
+            c(-0.22, 0.13),
+            c(0.42, -0.02),
+        ],
+    )
+    .unwrap();
+    let z0 = Array2::from_shape_vec((1, 2), vec![c(47.0, 8.0), c(-63.0, 2.5)]).unwrap();
+    let source = network(frequency.clone(), s.clone(), z0.clone());
+    let source_snapshot = source.clone();
+    let loads = [PortLoad::Open];
+    let loads_snapshot = loads;
+
+    let actual = source.terminate_port_power(0, &loads).unwrap();
+    let expected =
+        s[[0, 1, 1]] + s[[0, 1, 0]] * (c(1.0, 0.0) / (c(1.0, 0.0) - s[[0, 0, 0]])) * s[[0, 0, 1]];
+    assert_eq!(actual.frequency().hz(), frequency.as_slice());
+    assert_eq!(actual.z0(), &Array2::from_elem((1, 1), z0[[0, 1]]));
+    assert!((actual.s()[[0, 0, 0]] - expected).norm() < 1.0e-15);
+    assert_eq!(source.s(), source_snapshot.s());
+    assert_eq!(source.z0(), source_snapshot.z0());
+    for (actual, expected) in source
+        .frequency()
+        .hz()
+        .iter()
+        .zip(source_snapshot.frequency().hz())
+    {
+        assert_eq!(actual.to_bits(), expected.to_bits());
+    }
+    assert_eq!(loads, loads_snapshot);
+}
+
+#[test]
+fn open_termination_supports_mixed_profiles_asymmetric_middle_port_and_exact_metadata() {
+    let (frequency, s, z0, finite) = asymmetric_case();
+    let source = network(frequency.clone(), s.clone(), z0.clone());
+    let source_snapshot = source.clone();
+    let loads = [
+        PortLoad::ImpedanceOhm(finite[0]),
+        PortLoad::Open,
+        PortLoad::ImpedanceOhm(finite[2]),
+    ];
+    let loads_snapshot = loads;
+    let actual = source.terminate_port_power(2, &loads).unwrap();
+    let (expected_s, expected_z0) = expected_profile_termination(&s, &z0, 2, &loads);
+
+    assert_eq!(actual.z0(), &expected_z0);
+    assert_array3_close(actual.s(), &expected_s, 3.0e-15, 3.0e-15);
+    for (actual, expected) in actual.frequency().hz().iter().zip(frequency.iter()) {
+        assert_eq!(actual.to_bits(), expected.to_bits());
+    }
+    assert_eq!(source.s(), source_snapshot.s());
+    assert_eq!(source.z0(), source_snapshot.z0());
+    for (actual, expected) in source
+        .frequency()
+        .hz()
+        .iter()
+        .zip(source_snapshot.frequency().hz())
+    {
+        assert_eq!(actual.to_bits(), expected.to_bits());
+    }
+    assert_eq!(loads, loads_snapshot);
+}
+
+#[test]
 fn termination_supports_n_ports_complex_references_and_load_boundaries() {
     let (frequency, s, z0, load) = asymmetric_case();
     let source = network(frequency.clone(), s.clone(), z0.clone());
     let source_snapshot = source.clone();
     let load_snapshot = load.clone();
-    let actual = source.terminate_port_impedance_power(2, &load).unwrap();
+    let actual = source
+        .terminate_port_power(2, &finite_loads(&load))
+        .unwrap();
     let (expected_s, expected_z0) = expected_termination(&s, &z0, 2, &load);
     for (actual, expected) in actual.frequency().hz().iter().zip(frequency.iter()) {
         assert_eq!(actual.to_bits(), expected.to_bits());
@@ -172,7 +287,9 @@ fn termination_supports_n_ports_complex_references_and_load_boundaries() {
     // Port 0 itself has a finite negative-real complex source reference.  An
     // `abs(Re(z0))` shortcut or a real-only reflection formula would change
     // this direct boundary result, so compare the full c/d/den expression.
-    let actual = source.terminate_port_impedance_power(0, &loads).unwrap();
+    let actual = source
+        .terminate_port_power(0, &finite_loads(&loads))
+        .unwrap();
     let (expected_s, expected_z0) = expected_termination(&s, &z0, 0, &loads);
     assert_array3_close(actual.s(), &expected_s, 3.0e-15, 3.0e-15);
     assert_eq!(actual.z0(), &expected_z0);
@@ -202,7 +319,7 @@ fn termination_zl_equal_reference_is_submatrix_and_complex_short_is_oriented() {
     let source = network(frequency, s.clone(), z0.clone());
     let equal_reference = [z0[[0, 1]], z0[[1, 1]]];
     let reduced = source
-        .terminate_port_impedance_power(1, &equal_reference)
+        .terminate_port_power(1, &finite_loads(&equal_reference))
         .unwrap();
     let expected = Array3::from_shape_fn((2, 2, 2), |(f, row, column)| {
         let source_row = [0, 2][row];
@@ -222,7 +339,7 @@ fn termination_zl_equal_reference_is_submatrix_and_complex_short_is_oriented() {
         Array2::from_shape_vec((1, 2), vec![source_reference, c(72.0, 1.0)]).unwrap(),
     );
     let reduced = source
-        .terminate_port_impedance_power(0, &[c(0.0, 0.0)])
+        .terminate_port_power(0, &finite_loads(&[c(0.0, 0.0)]))
         .unwrap();
     let reflection = -source_reference / (source_reference.conj() + source_reference * c(0.1, 0.0));
     let expected = c(0.05, 0.0) + c(-0.2, 0.3) * reflection * c(0.25, -0.1);
@@ -258,7 +375,7 @@ fn termination_matches_physical_vi_boundary_and_scattering_relation() {
     let load = [c(38.0, 12.0)];
     let selected = 1;
     let reduced = source
-        .terminate_port_impedance_power(selected, &load)
+        .terminate_port_power(selected, &finite_loads(&load))
         .unwrap();
     let external_a = Array1::from_vec(vec![c(0.3, -0.2), c(-0.17, 0.25)]);
     let survivors = [0, 2];
@@ -291,6 +408,55 @@ fn termination_matches_physical_vi_boundary_and_scattering_relation() {
 }
 
 #[test]
+fn open_termination_reconstructs_zero_selected_current_and_external_response() {
+    let z0 =
+        Array2::from_shape_vec((1, 3), vec![c(44.0, 3.0), c(-62.0, -5.0), c(79.0, 7.0)]).unwrap();
+    let s = Array3::from_shape_vec(
+        (1, 3, 3),
+        vec![
+            c(0.06, -0.02),
+            c(0.14, 0.03),
+            c(-0.11, 0.07),
+            c(-0.21, 0.04),
+            c(0.18, -0.06),
+            c(0.16, 0.02),
+            c(0.09, 0.05),
+            c(-0.13, 0.08),
+            c(0.03, -0.01),
+        ],
+    )
+    .unwrap();
+    let source = network(vec![1.0e9], s.clone(), z0.clone());
+    let reduced = source.terminate_port_power(1, &[PortLoad::Open]).unwrap();
+    let external_a = Array1::from_vec(vec![c(0.27, -0.19), c(-0.16, 0.23)]);
+    let survivors = [0, 2];
+    let selected_a = (c(1.0, 0.0) / (c(1.0, 0.0) - s[[0, 1, 1]]))
+        * (0..2)
+            .map(|index| s[[0, 1, survivors[index]]] * external_a[index])
+            .sum::<Complex64>();
+    let mut full_a = Array1::zeros(3);
+    full_a[1] = selected_a;
+    for (index, &survivor) in survivors.iter().enumerate() {
+        full_a[survivor] = external_a[index];
+    }
+    let full_b = matrix_vector(&s, 0, &full_a);
+    assert!((full_a[1] - full_b[1]).norm() < 5.0e-15);
+
+    let selected_reference = z0[[0, 1]];
+    let selected_i =
+        selected_reference.re.abs().sqrt() / selected_reference.re * (full_a[1] - full_b[1]);
+    let selected_v = selected_reference.re.abs().sqrt() * (full_a[1] + full_b[1])
+        - c(0.0, selected_reference.im) * selected_i;
+    assert!(selected_i.norm() < 5.0e-15);
+    assert!(selected_v.norm() > 0.0);
+
+    let reduced_b = matrix_vector(reduced.s(), 0, &external_a);
+    for (index, &survivor) in survivors.iter().enumerate() {
+        assert!((reduced_b[index] - full_b[survivor]).norm() < 5.0e-15);
+    }
+}
+
+#[test]
 fn termination_matches_z_schur_and_existing_matched_connection_on_shared_domain()
 -> rfkit_core::Result<()> {
     let frequency = Frequency::from_hz(vec![1.0e9]).unwrap();
@@ -315,7 +481,7 @@ fn termination_matches_z_schur_and_existing_matched_connection_on_shared_domain(
     let load = c(37.0, 11.0);
     let selected = 1;
     let reduced = source
-        .terminate_port_impedance_power(selected, &[load])
+        .terminate_port_power(selected, &finite_loads(&[load]))
         .unwrap();
     let mut z_reduced = Array3::zeros((1, 2, 2));
     let survivors = [0, 2];
@@ -359,16 +525,25 @@ fn termination_is_covariant_under_port_permutation_and_handles_direct_singular_s
     .unwrap();
     let source = network(frequency, s, z0);
     let direct = source
-        .terminate_port_impedance_power(2, &[c(33.0, -6.0)])
+        .terminate_port_power(2, &finite_loads(&[c(33.0, -6.0)]))
         .unwrap();
     let permuted = source.permute_ports(&[2, 0, 3, 1]).unwrap();
     let permuted_reduced = permuted
-        .terminate_port_impedance_power(0, &[c(33.0, -6.0)])
+        .terminate_port_power(0, &finite_loads(&[c(33.0, -6.0)]))
         .unwrap()
         .permute_ports(&[0, 2, 1])
         .unwrap();
     assert_array3_close(direct.s(), permuted_reduced.s(), 2.0e-15, 2.0e-15);
     assert_eq!(direct.z0(), permuted_reduced.z0());
+
+    let direct_open = source.terminate_port_power(2, &[PortLoad::Open]).unwrap();
+    let permuted_open = permuted
+        .terminate_port_power(0, &[PortLoad::Open])
+        .unwrap()
+        .permute_ports(&[0, 2, 1])
+        .unwrap();
+    assert_array3_close(direct_open.s(), permuted_open.s(), 2.0e-15, 2.0e-15);
+    assert_eq!(direct_open.z0(), permuted_open.z0());
 
     // The ideal thru has singular whole-network Z/Y conversion, while direct
     // finite-load elimination remains well-defined.
@@ -383,7 +558,7 @@ fn termination_is_covariant_under_port_permutation_and_handles_direct_singular_s
     );
     assert!(matches!(thru.to_z_power(), Err(Error::Singular { .. })));
     let terminated = thru
-        .terminate_port_impedance_power(0, &[c(75.0, 0.0)])
+        .terminate_port_power(0, &finite_loads(&[c(75.0, 0.0)]))
         .unwrap();
     assert!((terminated.s()[[0, 0, 0]] - c(0.2, 0.0)).norm() < 1.0e-15);
 }
@@ -413,7 +588,9 @@ fn termination_accepts_d_zero_and_exact_frequency_labels() {
         -source_reference.conj(),
         c(-source_reference.re, source_reference.im),
     ];
-    let result = source.terminate_port_impedance_power(0, &load).unwrap();
+    let result = source
+        .terminate_port_power(0, &finite_loads(&load))
+        .unwrap();
     assert_eq!(result.frequency().hz()[0].to_bits(), frequency[0].to_bits());
     assert_eq!(result.frequency().hz()[1].to_bits(), frequency[1].to_bits());
 }
@@ -427,7 +604,7 @@ fn termination_reports_validation_errors_without_panicking() {
     );
     assert_eq!(
         valid
-            .terminate_port_impedance_power(0, &[c(1.0, 0.0)])
+            .terminate_port_power(0, &finite_loads(&[c(1.0, 0.0)]))
             .unwrap_err(),
         Error::TerminationLoadLengthMismatch {
             expected: 2,
@@ -436,7 +613,7 @@ fn termination_reports_validation_errors_without_panicking() {
     );
     assert_eq!(
         valid
-            .terminate_port_impedance_power(2, &[c(1.0, 0.0), c(1.0, 0.0)])
+            .terminate_port_power(2, &finite_loads(&[c(1.0, 0.0), c(1.0, 0.0)]))
             .unwrap_err(),
         Error::InvalidTerminationPort { port: 2, nports: 2 }
     );
@@ -447,7 +624,7 @@ fn termination_reports_validation_errors_without_panicking() {
     );
     assert_eq!(
         one_port
-            .terminate_port_impedance_power(0, &[c(1.0, 0.0)])
+            .terminate_port_power(0, &finite_loads(&[c(1.0, 0.0)]))
             .unwrap_err(),
         Error::NoTerminationSurvivors { nports: 1 }
     );
@@ -459,7 +636,7 @@ fn termination_reports_validation_errors_without_panicking() {
     );
     assert_eq!(
         nonfinite_s
-            .terminate_port_impedance_power(0, &[c(1.0, 0.0)])
+            .terminate_port_power(0, &finite_loads(&[c(1.0, 0.0)]))
             .unwrap_err(),
         Error::NonFiniteTerminationS {
             frequency: 0,
@@ -474,7 +651,7 @@ fn termination_reports_validation_errors_without_panicking() {
     );
     assert_eq!(
         nonfinite_z0
-            .terminate_port_impedance_power(0, &[c(1.0, 0.0)])
+            .terminate_port_power(0, &finite_loads(&[c(1.0, 0.0)]))
             .unwrap_err(),
         Error::NonFiniteTerminationZ0 {
             frequency: 0,
@@ -488,20 +665,21 @@ fn termination_reports_validation_errors_without_panicking() {
     );
     assert_eq!(
         zero_real
-            .terminate_port_impedance_power(0, &[c(1.0, 0.0)])
+            .terminate_port_power(0, &finite_loads(&[c(1.0, 0.0)]))
             .unwrap_err(),
         Error::ZeroRealTerminationReferenceImpedance {
             frequency: 0,
             port: 0,
         }
     );
-    let nonfinite_load = valid.terminate_port_impedance_power(0, &[c(f64::NAN, 0.0), c(1.0, 0.0)]);
+    let nonfinite_load =
+        valid.terminate_port_power(0, &finite_loads(&[c(f64::NAN, 0.0), c(1.0, 0.0)]));
     assert_eq!(
         nonfinite_load.unwrap_err(),
         Error::NonFiniteTerminationLoad { frequency: 0 }
     );
     let open_sentinel =
-        valid.terminate_port_impedance_power(0, &[c(f64::INFINITY, 0.0), c(1.0, 0.0)]);
+        valid.terminate_port_power(0, &finite_loads(&[c(f64::INFINITY, 0.0), c(1.0, 0.0)]));
     assert_eq!(
         open_sentinel.unwrap_err(),
         Error::NonFiniteTerminationLoad { frequency: 0 }
@@ -519,7 +697,7 @@ fn termination_rejects_malformed_serde_sources_without_panicking() {
     empty_frequency["frequency"]["hz"] = json!([]);
     let empty_frequency: Network = serde_json::from_value(empty_frequency).unwrap();
     let result = catch_unwind(AssertUnwindSafe(|| {
-        empty_frequency.terminate_port_impedance_power(0, &[c(1.0, 0.0)])
+        empty_frequency.terminate_port_power(0, &[PortLoad::Open])
     }));
     assert!(result.is_ok());
     assert_eq!(
@@ -532,7 +710,7 @@ fn termination_rejects_malformed_serde_sources_without_panicking() {
     let frequency_mismatch: Network = serde_json::from_value(frequency_mismatch).unwrap();
     assert_eq!(
         frequency_mismatch
-            .terminate_port_impedance_power(0, &[c(1.0, 0.0), c(1.0, 0.0)])
+            .terminate_port_power(0, &finite_loads(&[c(1.0, 0.0), c(1.0, 0.0)]))
             .unwrap_err(),
         Error::TerminationFrequencyLengthMismatch {
             expected: 1,
@@ -547,7 +725,7 @@ fn termination_rejects_malformed_serde_sources_without_panicking() {
     let malformed_s: Network = serde_json::from_value(malformed_s).unwrap();
     assert_eq!(
         malformed_s
-            .terminate_port_impedance_power(0, &[c(1.0, 0.0)])
+            .terminate_port_power(0, &finite_loads(&[c(1.0, 0.0)]))
             .unwrap_err(),
         Error::InvalidTerminationSShape {
             shape: vec![1, 1, 2]
@@ -560,7 +738,7 @@ fn termination_rejects_malformed_serde_sources_without_panicking() {
     let malformed_z0: Network = serde_json::from_value(malformed_z0).unwrap();
     assert_eq!(
         malformed_z0
-            .terminate_port_impedance_power(0, &[c(1.0, 0.0)])
+            .terminate_port_power(0, &finite_loads(&[c(1.0, 0.0)]))
             .unwrap_err(),
         Error::InvalidTerminationZ0Shape { shape: vec![1, 1] }
     );
@@ -577,7 +755,7 @@ fn termination_rejects_exact_singularity_and_reports_finite_arithmetic_overflow(
     );
     assert_eq!(
         singular
-            .terminate_port_impedance_power(0, &[c(0.0, 0.0)])
+            .terminate_port_power(0, &finite_loads(&[c(0.0, 0.0)]))
             .unwrap_err(),
         Error::SingularTermination {
             frequency: 0,
@@ -587,7 +765,7 @@ fn termination_rejects_exact_singularity_and_reports_finite_arithmetic_overflow(
     s[[0, 0, 0]] = c(-1.0 + 1.0e-15, 0.0);
     let near = network(vec![1.0], s, Array2::from_elem((1, 2), c(50.0, 0.0)));
     assert!(
-        near.terminate_port_impedance_power(0, &[c(0.0, 0.0)])
+        near.terminate_port_power(0, &finite_loads(&[c(0.0, 0.0)]))
             .is_ok()
     );
 
@@ -598,7 +776,7 @@ fn termination_rejects_exact_singularity_and_reports_finite_arithmetic_overflow(
     );
     assert_eq!(
         overflow
-            .terminate_port_impedance_power(0, &[c(f64::MAX, 0.0)])
+            .terminate_port_power(0, &finite_loads(&[c(f64::MAX, 0.0)]))
             .unwrap_err(),
         Error::NonFiniteTerminationComputation {
             frequency: 0,
@@ -606,5 +784,55 @@ fn termination_rejects_exact_singularity_and_reports_finite_arithmetic_overflow(
             row: 0,
             column: 0,
         }
+    );
+}
+
+#[test]
+fn open_termination_distinguishes_exact_and_adjacent_singular_boundaries() {
+    // The selected port is completely decoupled.  Open still checks its own
+    // exact 1-Skk denominator rather than accepting the zero external result.
+    let mut exact_s = Array3::zeros((1, 3, 3));
+    exact_s[[0, 1, 1]] = c(1.0, 0.0);
+    let exact = network(
+        vec![1.0],
+        exact_s,
+        Array2::from_shape_vec((1, 3), vec![c(47.0, 1.0), c(62.0, -4.0), c(79.0, 2.0)]).unwrap(),
+    );
+    assert_eq!(
+        exact.terminate_port_power(1, &[PortLoad::Open]),
+        Err(Error::SingularTermination {
+            frequency: 0,
+            port: 1,
+        })
+    );
+
+    let adjacent_to_one = f64::from_bits(1.0_f64.to_bits() - 1);
+    let mut near_s = Array3::zeros((1, 2, 2));
+    near_s[[0, 0, 0]] = c(adjacent_to_one, 0.0);
+    near_s[[0, 1, 0]] = c(1.0e-300, 0.0);
+    near_s[[0, 0, 1]] = c(1.0, 0.0);
+    let near = network(vec![1.0], near_s, Array2::from_elem((1, 2), c(50.0, 0.0)));
+    let reduced = near
+        .terminate_port_power(0, &[PortLoad::Open])
+        .expect("adjacent representable open denominator remains in domain");
+    assert!(reduced.s().iter().all(|value| value.is_finite()));
+
+    let mut overflow_s = Array3::zeros((1, 2, 2));
+    overflow_s[[0, 0, 0]] = c(adjacent_to_one, 0.0);
+    overflow_s[[0, 1, 0]] = c(f64::MAX, 0.0);
+    overflow_s[[0, 0, 1]] = c(1.0, 0.0);
+    let overflow = network(
+        vec![1.0],
+        overflow_s,
+        Array2::from_elem((1, 2), c(50.0, 0.0)),
+    );
+    assert_eq!(
+        overflow.terminate_port_power(0, &[PortLoad::Open]),
+        Err(Error::NonFiniteTerminationComputation {
+            frequency: 0,
+            port: 0,
+            row: 0,
+            column: 0,
+        })
     );
 }

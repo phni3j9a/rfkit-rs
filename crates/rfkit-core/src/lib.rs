@@ -1523,6 +1523,23 @@ impl fmt::Display for TwoPortStabilityArithmetic {
 /// The crate-wide public error boundary.
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// A physical load imposed at one sampled source frequency.
+///
+/// `ImpedanceOhm` is a finite complex impedance in ohms.  `Open` is the exact
+/// ideal-open boundary (`I_k = 0`); it is not represented by a large finite
+/// impedance or a non-finite sentinel.  The values are intentionally small
+/// and copyable so a per-frequency profile can be written directly as a
+/// slice, for example `&[PortLoad::Open, PortLoad::ImpedanceOhm(z)]`.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PortLoad {
+    /// A finite complex physical impedance in ohms, including zero and
+    /// negative-resistance values.
+    ImpedanceOhm(Complex64),
+    /// The exact physical open-circuit boundary at the selected port.
+    Open,
+}
+
 /// Frequency axis in hertz.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Frequency {
@@ -2996,58 +3013,54 @@ impl Network {
         }
     }
 
-    /// Applies one finite physical impedance to a selected source port and
-    /// returns the reduced network with that port removed.
+    /// Applies one explicit physical load per source-frequency sample to a
+    /// selected source port and returns the reduced network with that port
+    /// removed.
     ///
     /// The operation uses currents directed into this network and Kurokawa
-    /// power waves.  For selected port `k`, source reference `z_k`, and load
-    /// `ZL`, the physical boundary is eliminated directly with
-    /// `c = ZL - z_k`, `d = ZL + conj(z_k)`, and
-    /// `den = d - c*S[k,k]`:
+    /// power waves.  For a finite `PortLoad::ImpedanceOhm(z_l)`, selected port
+    /// `k`, source reference `z_k`, and survivors `E`, the physical boundary
+    /// is eliminated directly with `c = z_l - z_k`, `d = z_l + conj(z_k)`,
+    /// and `den = d - c*S[k,k]`:
     ///
     /// ```text
     /// S_out = S[E,E] + S[E,k] * (c/den) * S[k,E]
     /// ```
     ///
-    /// `load_ohm` supplies exactly one finite complex impedance in ohms per
-    /// source frequency.  Zero, purely reactive, and negative-resistance
-    /// loads are valid; an open-circuit sentinel is not part of this finite
-    /// impedance operation.  Source references may be complex or have
-    /// negative real parts, but every source reference must be finite with a
-    /// nonzero real part for the Kurokawa normalization domain.
+    /// `PortLoad::Open` selects the exact ideal-open boundary `I_k = 0`, which
+    /// gives `a_k = b_k` and the factor `1 / (1 - S[k,k])`.  It is not a large
+    /// finite impedance or an infinity/NaN sentinel.  Open and finite loads
+    /// may be mixed in the borrowed per-frequency slice.  Zero, purely
+    /// reactive, and negative-resistance finite loads are valid.  Source
+    /// references may be complex or have negative real parts, but every
+    /// source reference must be finite with a nonzero real part for the
+    /// Kurokawa normalization domain.
     ///
     /// The source frequency samples are opaque pointwise labels and are
     /// copied exactly.  Survivors retain their original order and exact
-    /// source references.  The source network and `load_ohm` are borrowed and
-    /// unchanged.  No S/Z/Y conversion, renormalization, tolerance cutoff,
-    /// pseudoinverse, or fallback is used.  Only an exactly zero evaluated
-    /// `den` is singular; a finite nonzero near-singular denominator remains
-    /// valid.  In particular, `d == 0` is valid when `den != 0` because the
-    /// implementation never forms `c/d`.
+    /// source references.  The source network and borrowed load slice are
+    /// unchanged.  No scalar broadcasting, S/Z/Y conversion,
+    /// renormalization, tolerance cutoff, pseudoinverse, or fallback is used.
+    /// An exactly zero evaluated boundary denominator is singular; a finite
+    /// nonzero near-singular denominator remains valid.  For finite loads,
+    /// `d == 0` is valid when `den != 0` because the implementation never
+    /// forms `c/d`.
     ///
-    /// This additive operation is provisional while `rfkit-core` is in the
-    /// `0.x` series; its name and signature are not a `1.0` stability
-    /// promise.
+    /// This generalized replacement operation is provisional while
+    /// `rfkit-core` is in the `0.x` series; its name and signature are not a
+    /// `1.0` stability promise.
     ///
     /// # Errors
     ///
     /// Returns a structured [`Error`] for malformed serde-created source
     /// axes/shapes, a one-port source or invalid selected port, a mismatched
-    /// load length, non-finite S/references/load values, zero-real source
-    /// references, exact denominator singularity, or non-finite arithmetic.
-    pub fn terminate_port_impedance_power(
-        &self,
-        port: usize,
-        load_ohm: &[Complex64],
-    ) -> Result<Network> {
-        let terminated = termination::terminate_port_impedance_power(
-            self.frequency.hz(),
-            &self.s,
-            &self.z0,
-            port,
-            load_ohm,
-        )
-        .map_err(map_termination_error)?;
+    /// load length, non-finite S/references or finite impedance values,
+    /// zero-real source references, exact denominator singularity, or
+    /// non-finite arithmetic.
+    pub fn terminate_port_power(&self, port: usize, loads: &[PortLoad]) -> Result<Network> {
+        let terminated =
+            termination::terminate_port_power(self.frequency.hz(), &self.s, &self.z0, port, loads)
+                .map_err(map_termination_error)?;
 
         let frequency = Frequency::from_hz(terminated.frequency_hz)?;
         Network::new(frequency, terminated.s, terminated.z0)
