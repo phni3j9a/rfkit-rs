@@ -157,10 +157,30 @@ fn preserves_exact_bits_and_supports_nonstandard_owned_ndarray_layouts() {
     let output = input.select_ports_zero_incident(&order).unwrap();
 
     assert_selected_bits(&input, &output, &order);
-    let subset = input.select_ports_zero_incident(&[1, 2, 0]).unwrap();
-    assert_selected_bits(&input, &subset, &[1, 2, 0]);
+    let subset_ports = [1, 0];
+    let subset = input.select_ports_zero_incident(&subset_ports).unwrap();
+    assert_selected_bits(&input, &subset, &subset_ports);
+
+    // The smaller selection visibly retains exact scalar bits from the
+    // nonstandard source: the source port 1 reference carries a NaN payload
+    // and a negative zero, while the selected S coordinate carrying a
+    // negative-zero real component is retained too.  The NaN in the omitted
+    // source port 2 coordinate is accepted by selection but cannot appear in
+    // the selected S block.
+    assert_eq!(subset.z0()[[1, 0]].im.to_bits(), nan_payload.to_bits());
+    assert_eq!(subset.z0()[[1, 0]].re.to_bits(), (-0.0f64).to_bits());
+    assert_eq!(subset.s()[[0, 0, 1]].re.to_bits(), (-0.0f64).to_bits());
+    assert_eq!(input.s()[[1, 0, 2]].re.to_bits(), 0x7ff8_2468_1357_9bdf);
+    assert!(
+        subset
+            .s()
+            .iter()
+            .all(|value| value.re.is_finite() && value.im.is_finite())
+    );
     assert!(output.s().is_standard_layout());
     assert!(output.z0().is_standard_layout());
+    assert!(subset.s().is_standard_layout());
+    assert!(subset.z0().is_standard_layout());
     assert_network_bits_equal(&input, &input_before);
 }
 
@@ -268,7 +288,7 @@ fn omitted_incident_waves_have_the_stored_reference_boundary() {
         (1, 4),
         vec![
             complex(42.0, 5.0),
-            complex(-37.0, 8.0),
+            complex(37.0, 8.0),
             complex(61.0, -4.0),
             complex(-53.0, -7.0),
         ],
@@ -288,30 +308,89 @@ fn omitted_incident_waves_have_the_stored_reference_boundary() {
                 .sum::<Complex64>()
         })
         .collect();
+    let selected = input.select_ports_zero_incident(&retained).unwrap();
+    let selected_output: Vec<_> = (0..retained.len())
+        .map(|row| {
+            (0..retained.len())
+                .map(|column| selected.s()[[0, row, column]] * retained_input[column])
+                .sum::<Complex64>()
+        })
+        .collect();
+
+    // The same nonzero retained excitation is applied to the full network
+    // with a_R=0 and to the exact selected network.  This is the coordinate
+    // projection being tested, not a physical termination solve.
+    assert!(retained_input.iter().all(|wave| wave.norm() > 0.0));
+    for (new_row, &old_row) in retained.iter().enumerate() {
+        assert!((selected_output[new_row] - full_output[old_row]).norm() < 1.0e-14);
+    }
 
     for old_port in [1, 3] {
         let reference = input.z0()[[0, old_port]];
-        let normalization = reference.re.abs().sqrt();
-        let current = -full_output[old_port] * normalization / reference.re;
-        let voltage = -reference * current;
+        assert_ne!(reference.im, 0.0);
+        if old_port == 1 {
+            assert!(reference.re > 0.0);
+        } else {
+            assert!(reference.re < 0.0);
+        }
+        assert!(full_output[old_port].norm() > 1.0e-12);
+
+        // Independently invert the repository's Kurokawa equations, rather
+        // than assigning V=-z0*I.  With g=sqrt(abs(Re(z0))),
+        // I=(g/Re(z0))*(a-b) and V=g*(a+b)-j*Im(z0)*I.
+        let g = reference.re.abs().sqrt();
+        let full_a = full_input[old_port];
+        let full_b = full_output[old_port];
+        assert_eq!(full_a, Complex64::new(0.0, 0.0));
+        let current = complex(g / reference.re, 0.0) * (full_a - full_b);
+        let voltage = complex(g, 0.0) * (full_a + full_b) - complex(0.0, reference.im) * current;
+        let denominator = complex(2.0 * g, 0.0);
+        let reconstructed_a = (voltage + reference * current) / denominator;
+        let reconstructed_b = (voltage - reference.conj() * current) / denominator;
+
+        assert!((reconstructed_a - full_a).norm() < 1.0e-14);
+        assert!((reconstructed_b - full_b).norm() < 1.0e-14);
         assert!((voltage + reference * current).norm() < 1.0e-14);
-        let incident = (voltage + reference * current) / (2.0 * normalization);
-        assert_eq!(incident, Complex64::new(0.0, 0.0));
+        // The stored reference, rather than its conjugate, defines the zero-
+        // incident boundary.  This deliberately makes no passive-load claim
+        // for the negative-real reference at old port 3.
+        assert!((voltage + reference.conj() * current).norm() > 1.0e-8);
     }
 }
 
 #[test]
 fn singular_omitted_feedback_block_does_not_affect_exact_selection() {
     let mut s = Array3::zeros((1, 3, 3));
-    s[[0, 1, 1]] = complex(1.0, 0.0);
-    s[[0, 2, 2]] = complex(1.0, 0.0);
+    s[[0, 1, 1]] = complex(0.5, 0.0);
+    s[[0, 1, 2]] = complex(0.5, 0.0);
+    s[[0, 2, 1]] = complex(0.5, 0.0);
+    s[[0, 2, 2]] = complex(0.5, 0.0);
     s[[0, 0, 0]] = complex(0.25, -0.1);
+    s[[0, 0, 1]] = complex(0.125, 0.0);
+    s[[0, 0, 2]] = complex(-0.2, 0.0);
+    s[[0, 1, 0]] = complex(0.3, 0.0);
+    s[[0, 2, 0]] = complex(-0.4, 0.0);
     let input = Network::new(
         Frequency::from_hz(vec![2.4e9]).unwrap(),
         s,
         Array2::from_elem((1, 3), complex(50.0, 0.0)),
     )
     .unwrap();
+
+    let omitted_block = [
+        [input.s()[[0, 1, 1]], input.s()[[0, 1, 2]]],
+        [input.s()[[0, 2, 1]], input.s()[[0, 2, 2]]],
+    ];
+    let determinant = (Complex64::new(1.0, 0.0) - omitted_block[0][0])
+        * (Complex64::new(1.0, 0.0) - omitted_block[1][1])
+        - (-omitted_block[0][1]) * (-omitted_block[1][0]);
+    assert_eq!(determinant, Complex64::new(0.0, 0.0));
+    assert_ne!(omitted_block[0][1], Complex64::new(0.0, 0.0));
+    assert_ne!(omitted_block[1][0], Complex64::new(0.0, 0.0));
+    assert_ne!(input.s()[[0, 0, 1]], Complex64::new(0.0, 0.0));
+    assert_ne!(input.s()[[0, 0, 2]], Complex64::new(0.0, 0.0));
+    assert_ne!(input.s()[[0, 1, 0]], Complex64::new(0.0, 0.0));
+    assert_ne!(input.s()[[0, 2, 0]], Complex64::new(0.0, 0.0));
 
     let selected = input.select_ports_zero_incident(&[0]).unwrap();
     assert_eq!(selected.s()[[0, 0, 0]], input.s()[[0, 0, 0]]);

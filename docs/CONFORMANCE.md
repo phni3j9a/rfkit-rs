@@ -168,13 +168,19 @@ Core-level coverage accepts every nonempty ordered distinct subset, including
 one-port and full selections, and exercises unequal complex and
 frequency-dependent references, identity/swap/cycle and inverse/composition
 round trips, exact component preservation, source/list immutability, malformed
-serde shapes, and structured empty/duplicate/out-of-range diagnostics. The
-retained response is checked as `b_E=S_EE*a_E` with omitted `a_R=0`, including
-the stored-reference `V_R+z0_R I_R=0` boundary and a coupled singular omitted
-block that must not trigger a fictitious feedback solve. These checks
-characterize selection as exact coordinate copying, not a wave conversion or
-physical termination, and leave each writer's separate reference validation
-unchanged.
+serde shapes, and structured empty/duplicate/out-of-range diagnostics. A
+nonstandard-owned-ndarray fixture retains the full-permutation regression and
+also selects a smaller ordered subset, checking exact NaN-payload and
+signed-zero bits while accepting a non-finite value in an omitted coordinate;
+the newly owned output layout is checked separately. The retained response is
+checked as `b_E=S_EE*a_E` with omitted `a_R=0`; the omitted-port boundary is
+independently reconstructed from the full `a,b` Kurokawa equations and checks
+both `V_R+z0_R I_R=0` and that the conjugate-reference expression is nonzero.
+A deterministic coupled omitted block independently establishes
+`det(I-S_RR)=0` and still must not trigger a fictitious feedback solve. These
+checks characterize selection as exact coordinate copying, not a wave
+conversion or physical termination, and leave each writer's separate
+reference validation unchanged.
 
 The pinned subset fixture
 `tools/oracle/fixtures/port_selection_zero_incident_five_port_complex_z0.json`

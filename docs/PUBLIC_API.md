@@ -808,9 +808,11 @@ the repository's algebraic extension and do not establish a passive-load
 claim.
 
 The source frequency axis (including negative, duplicate, descending,
-non-finite, and signed-zero labels), S/z0 scalar bits (including NaN payloads),
-and nonstandard owned ndarray layouts are preserved without additional validity checks. Structural source
-validation still runs before selection indexing: frequency must be nonempty and
+non-finite, and signed-zero labels) and copied S/z0 scalar bits (including NaN
+payloads) are preserved exactly. Nonstandard owned ndarray input layouts are
+supported without additional validity checks; returned arrays are newly owned
+standard-layout arrays, so input strides/layout are not preserved. Structural
+source validation still runs before selection indexing: frequency must be nonempty and
 match S, S must be square with a positive port count, and z0 must have exact
 `(nfreq,nport)` shape. Empty, duplicate, and out-of-range selections report
 structured context (position, offending index, and duplicate positions),
