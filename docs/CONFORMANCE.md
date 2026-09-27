@@ -676,6 +676,64 @@ Exact half-turns and exact selected zeros are actionable structured failures;
 other phase undersampling remains an explicit sampling limitation rather than
 an automatic detector.
 
+## Lossless power-wave reference-plane shifts (Issue #118)
+
+Issue #118 adds `Network::shift_reference_planes_lossless_power`, which applies
+an explicit `(nfreq,nport)` one-way phase table in radians to the stored
+power-wave S data:
+
+```text
+d[f,p] = exp(-j * phase[f,p])
+S_out[f,i,j] = d[f,i] * S_in[f,i,j] * d[f,j]
+```
+
+The Rust kernel evaluates each endpoint factor separately, combines the two
+factors before applying them to S, and normalizes that product with binary64
+`hypot` and one division.  It never forms the supplied phase sum first.  It
+preserves frequency labels, physical port order, references, and source
+immutability.  It validates shapes and finite values before indexing, requires
+finite strictly positive real references, and reports non-finite or
+unrepresentable arithmetic with operation/sample/port context.  The table is
+sampled caller input: no distance, velocity, delay, frequency-unit inference,
+causality, interpolation, renormalization, or all-frequency realizability
+claim is made.
+
+The canonical fixture
+`tools/oracle/fixtures/reference_plane_shift_lossless_power_four_port_media_connect.json`
+uses NumPy `2.5.1`, scikit-rf `2.0.1` at commit
+`bd651e923cac6020de49a096e1d7e9b5f949f884`, seed `20260965`, an asymmetric
+four-port input, unequal real-positive frequency-dependent references, and a
+signed one-way phase table.  Expected S is generated through public
+`DefinedGammaZ0.line(..., s_def="power")` and sequential public
+`network.connect` calls; generation independently verifies the `D S D`
+identity.  Frequency, source S/z0, phase, mapping, and metadata are exact
+fixture contract fields; only shifted S uses `rtol=1e-12`, `atol=1e-12`.
+
+`crates/rfkit-core/tests/public_reference_plane_shift.rs` covers analytical
+one-port reflection and two-port transmission phases, N-port/multi-sample
+sign behavior, signed-zero and metadata bit preservation, nonstandard owned
+ndarray layouts, singular/active/nonreciprocal data, source immutability,
+phase-negation round trips, extreme finite arithmetic, and malformed
+shape/non-finite/reference/unrepresentable-output errors.  The differential
+test `crates/rfkit-core/tests/oracle_reference_plane_shift.rs` enforces the
+pinned metadata/input/reference/phase contract before comparing only shifted S.
+The focused Touchstone workflow in
+`crates/rfkit-touchstone/tests/public_reference_plane_shift_workflow.rs` and
+`crates/rfkit-touchstone/examples/reference_plane_shift_touchstone.rs` parses
+v1.0 S/RI/Hz data, applies an explicit negative phase table, checks analytical
+reflection/transmission and adjacent group delay, then verifies unchanged
+writer/read semantics.
+
+The reproducible checks are:
+
+```text
+/home/server/.cache/rfkit-rs-oracle-venv/bin/python tools/oracle/generate_oracle.py check --case reference_plane_shift_lossless_power_four_port_media_connect
+cd tools/oracle && /home/server/.cache/rfkit-rs-oracle-venv/bin/python -m unittest test_generate_oracle.py
+cargo test -p rfkit-core --test public_reference_plane_shift --test oracle_reference_plane_shift
+cargo test -p rfkit-touchstone --test public_reference_plane_shift_workflow
+cargo run -p rfkit-touchstone --example reference_plane_shift_touchstone
+```
+
 ## Reporting
 
 Eventually CI should publish a machine-generated coverage report such as:

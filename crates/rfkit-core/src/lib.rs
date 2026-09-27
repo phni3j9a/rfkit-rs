@@ -36,6 +36,12 @@
 //! ideal-open and floating-network domains can be exported after changing to
 //! a writer-compatible common reference.  [`Network::renormalize_power`]
 //! remains the composed S→Z→S operation with its existing domain and errors.
+//!
+//! [`Network::shift_reference_planes_lossless_power`] applies one explicit
+//! per-sample, per-port one-way electrical phase table through the direct
+//! power-wave `D S D` rule.  It is restricted to finite, real, strictly
+//! positive stored references and does not infer delay, distance, velocity,
+//! frequency units, or a propagation model.
 
 use ndarray::{Array2, Array3};
 use num_complex::Complex64;
@@ -55,6 +61,7 @@ mod max_singular_value;
 mod mixed_mode;
 mod power_wave_admittance;
 mod power_waves;
+mod reference_plane;
 mod stability;
 mod termination;
 
@@ -262,6 +269,77 @@ pub enum Error {
         frequency: usize,
         row: usize,
         column: usize,
+    },
+
+    #[error("lossless reference-plane shift frequency axis must not be empty")]
+    EmptyReferencePlaneShiftFrequency,
+
+    #[error(
+        "lossless reference-plane shift frequency length does not match the S-parameter frequency dimension: expected {expected}, got {actual}"
+    )]
+    ReferencePlaneShiftFrequencyLengthMismatch { expected: usize, actual: usize },
+
+    #[error("lossless reference-plane shift received an invalid S-parameter shape {shape:?}")]
+    InvalidReferencePlaneShiftSShape { shape: Vec<usize> },
+
+    #[error(
+        "lossless reference-plane shift received an invalid reference-impedance shape {shape:?}"
+    )]
+    InvalidReferencePlaneShiftZ0Shape { shape: Vec<usize> },
+
+    #[error("lossless reference-plane shift received an invalid one-way phase shape {shape:?}")]
+    InvalidReferencePlaneShiftPhaseShape { shape: Vec<usize> },
+
+    #[error(
+        "lossless reference-plane shift received a non-finite frequency at index {index}: {value:?}"
+    )]
+    NonFiniteReferencePlaneShiftFrequency { index: usize, value: f64 },
+
+    #[error(
+        "lossless reference-plane shift received a non-finite S-parameter at frequency {frequency}, row {row}, column {column}"
+    )]
+    NonFiniteReferencePlaneShiftS {
+        frequency: usize,
+        row: usize,
+        column: usize,
+    },
+
+    #[error(
+        "lossless reference-plane shift received a non-finite reference impedance at frequency {frequency}, port {port}"
+    )]
+    NonFiniteReferencePlaneShiftZ0 { frequency: usize, port: usize },
+
+    #[error(
+        "lossless reference-plane shift requires a finite, real, strictly positive reference impedance at frequency {frequency}, port {port}: {value:?}"
+    )]
+    InvalidReferencePlaneShiftZ0 {
+        frequency: usize,
+        port: usize,
+        value: Complex64,
+    },
+
+    #[error(
+        "lossless reference-plane shift received a non-finite one-way phase at frequency {frequency}, port {port}"
+    )]
+    NonFiniteReferencePlaneShiftPhase { frequency: usize, port: usize },
+
+    #[error(
+        "lossless reference-plane shift arithmetic became non-finite or unrepresentable at frequency {frequency}, port {port} while evaluating {stage}"
+    )]
+    NonFiniteReferencePlaneShiftPhaseComputation {
+        frequency: usize,
+        port: usize,
+        stage: ReferencePlaneShiftArithmetic,
+    },
+
+    #[error(
+        "lossless reference-plane shift arithmetic became non-finite or unrepresentable at frequency {frequency}, row {row}, column {column} while evaluating {stage}"
+    )]
+    NonFiniteReferencePlaneShiftComputation {
+        frequency: usize,
+        row: usize,
+        column: usize,
+        stage: ReferencePlaneShiftArithmetic,
     },
 
     #[error("inverse-cascade frequency axis must not be empty")]
@@ -1493,6 +1571,34 @@ impl fmt::Display for GroupDelayArithmetic {
     }
 }
 
+/// Arithmetic stage used by a lossless reference-plane shift diagnostic.
+///
+/// The operation evaluates each endpoint's phase factor independently,
+/// multiplies the two factors before applying them to an S coordinate, and
+/// then checks the output component.  These stages make an unrepresentable
+/// binary64 result distinguishable from invalid input.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReferencePlaneShiftArithmetic {
+    /// Evaluation of one `exp(-j*phase)` endpoint factor.
+    PhaseFactor,
+    /// Multiplication and unit-magnitude normalization of the row and column
+    /// endpoint factors.
+    EndpointFactor,
+    /// Multiplication of the combined endpoint factor and S coordinate.
+    Output,
+}
+
+impl fmt::Display for ReferencePlaneShiftArithmetic {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::PhaseFactor => "individual phase factor",
+            Self::EndpointFactor => "combined endpoint phase factors",
+            Self::Output => "rotated S-parameter output",
+        })
+    }
+}
+
 impl fmt::Display for TwoPortStabilityArithmetic {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let description = match self {
@@ -1782,6 +1888,88 @@ impl Network {
             port_in,
         )
         .map_err(map_group_delay_error)
+    }
+
+    /// Shifts every stored port reference plane by an explicit one-way
+    /// electrical phase using lossless Kurokawa power-wave coordinates.
+    ///
+    /// `one_way_phase_rad[f, p]` is the signed one-way electrical phase in
+    /// radians at source sample `f` and physical port `p`.  With the
+    /// repository's `exp(+j omega t)` convention, a positive value adds a
+    /// lossless line phase outward from that port and a negative value removes
+    /// it.  The operation evaluates
+    ///
+    /// ```text
+    /// d[f,p] = exp(-j * one_way_phase_rad[f,p])
+    /// S_out[f,i,j] = d[f,i] * S_in[f,i,j] * d[f,j]
+    /// ```
+    ///
+    /// This is the direct `D S D` transformation, not `D S Dᴴ` and not one
+    /// global phase.  A reflection therefore receives twice its own
+    /// one-way phase, while a transmission receives the endpoint sum.  The
+    /// input array must have exact shape `(nfreq, nport)`; no scalar
+    /// broadcasting, distance/velocity inference, seconds conversion,
+    /// center-frequency policy, unwrap, interpolation, resampling, sorting,
+    /// or hidden renormalization is performed.  A caller wanting a delay
+    /// `tau[p]` must explicitly construct
+    /// `phase[f,p] = 2*pi*frequency_hz[f]*tau[p]`.
+    ///
+    /// The stored references must all be finite, exactly real, and strictly
+    /// positive.  Unequal per-port and frequency-dependent references are
+    /// supported, but complex, zero-real, and negative-real references are
+    /// rejected even when every requested phase is zero.  Frequency labels
+    /// are finite pointwise samples and may be negative, duplicate, or
+    /// descending; no frequency derivative is taken.  S may be singular,
+    /// active, nonreciprocal, or non-passive.
+    ///
+    /// Validation of frequency/S/z0/phase cardinality, shapes, and finite
+    /// values is completed before indexing, including for malformed
+    /// serde-created networks.  The source and phase arrays remain unchanged.
+    /// The returned frequency labels, port order, S storage, and z0 values are
+    /// independently owned; frequency and z0 scalar bits are copied exactly.
+    ///
+    /// Numerically, each endpoint factor is evaluated separately with ordinary
+    /// binary64 `sin`/`cos` evaluation.  The two factors are then multiplied
+    /// before they are multiplied by the S coordinate; the implementation
+    /// never forms `one_way_phase_rad[f,i] + one_way_phase_rad[f,j]` first.
+    /// The combined factor is normalized by its binary64 `hypot` magnitude and
+    /// one division before it touches S.  This removes only the small
+    /// unit-circle norm error from the independent trigonometric evaluations;
+    /// it does not impose a phase cutoff, change either supplied phase, or
+    /// claim correctly rounded transcendental results.  Computed factors and
+    /// output components must remain finite.  Thus a finite representable
+    /// rotated component is not rejected merely because the unnormalized
+    /// endpoint product rounded slightly outside the unit circle, while a
+    /// genuinely unrepresentable binary64 output still returns a structured
+    /// error with operation, sample, and port/row/column context.
+    /// Correctly rounded transcendental functions, bit-exact inverse rotation,
+    /// and preservation of an unrepresentable rotated component are not
+    /// promised.  The table is a sampled transformation, not a causality,
+    /// propagation-speed, or all-frequency realizability certificate.
+    ///
+    /// This additive operation is provisional during the `0.x` series and
+    /// remains reversible without a storage migration.
+    ///
+    /// # Errors
+    ///
+    /// Returns operation-specific [`Error`] values for empty or mismatched
+    /// axes, malformed S/z0/phase shapes, non-finite labels/data/phases,
+    /// non-real or non-positive references, and non-finite/unrepresentable
+    /// phase-factor or output arithmetic.  It never returns NaN/Inf or
+    /// panics on malformed serde-created values.
+    pub fn shift_reference_planes_lossless_power(
+        &self,
+        one_way_phase_rad: &Array2<f64>,
+    ) -> Result<Network> {
+        let shifted_s = reference_plane::shift_reference_planes_lossless_power(
+            &self.frequency.hz,
+            &self.s,
+            &self.z0,
+            one_way_phase_rad,
+        )
+        .map_err(map_reference_plane_shift_error)?;
+
+        Network::new(self.frequency.clone(), shifted_s, self.z0.clone())
     }
 
     /// Returns an owned network containing an explicitly ordered subset of
@@ -3959,6 +4147,79 @@ fn map_group_delay_error(error: group_delay::GroupDelayError) -> Error {
             interval,
             port_out,
             port_in,
+            stage,
+        },
+    }
+}
+
+fn map_reference_plane_shift_error(error: reference_plane::ReferencePlaneShiftError) -> Error {
+    match error {
+        reference_plane::ReferencePlaneShiftError::EmptyFrequency => {
+            Error::EmptyReferencePlaneShiftFrequency
+        }
+        reference_plane::ReferencePlaneShiftError::FrequencyLengthMismatch { expected, actual } => {
+            Error::ReferencePlaneShiftFrequencyLengthMismatch { expected, actual }
+        }
+        reference_plane::ReferencePlaneShiftError::InvalidSShape { shape } => {
+            Error::InvalidReferencePlaneShiftSShape {
+                shape: vec![shape.0, shape.1, shape.2],
+            }
+        }
+        reference_plane::ReferencePlaneShiftError::InvalidZ0Shape { shape } => {
+            Error::InvalidReferencePlaneShiftZ0Shape {
+                shape: vec![shape.0, shape.1],
+            }
+        }
+        reference_plane::ReferencePlaneShiftError::InvalidPhaseShape { shape } => {
+            Error::InvalidReferencePlaneShiftPhaseShape {
+                shape: vec![shape.0, shape.1],
+            }
+        }
+        reference_plane::ReferencePlaneShiftError::NonFiniteFrequency { index, value } => {
+            Error::NonFiniteReferencePlaneShiftFrequency { index, value }
+        }
+        reference_plane::ReferencePlaneShiftError::NonFiniteS {
+            frequency,
+            row,
+            column,
+        } => Error::NonFiniteReferencePlaneShiftS {
+            frequency,
+            row,
+            column,
+        },
+        reference_plane::ReferencePlaneShiftError::NonFiniteZ0 { frequency, port } => {
+            Error::NonFiniteReferencePlaneShiftZ0 { frequency, port }
+        }
+        reference_plane::ReferencePlaneShiftError::InvalidZ0 {
+            frequency,
+            port,
+            value,
+        } => Error::InvalidReferencePlaneShiftZ0 {
+            frequency,
+            port,
+            value,
+        },
+        reference_plane::ReferencePlaneShiftError::NonFinitePhase { frequency, port } => {
+            Error::NonFiniteReferencePlaneShiftPhase { frequency, port }
+        }
+        reference_plane::ReferencePlaneShiftError::NonFinitePhaseArithmetic {
+            frequency,
+            port,
+            stage,
+        } => Error::NonFiniteReferencePlaneShiftPhaseComputation {
+            frequency,
+            port,
+            stage,
+        },
+        reference_plane::ReferencePlaneShiftError::NonFiniteComputation {
+            frequency,
+            row,
+            column,
+            stage,
+        } => Error::NonFiniteReferencePlaneShiftComputation {
+            frequency,
+            row,
+            column,
             stage,
         },
     }

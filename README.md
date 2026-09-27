@@ -782,6 +782,58 @@ Its canonical pinned differential family is
 `s_rad_unwrap` plus explicit interval differencing with seconds tolerances
 `rtol=1e-12`, `atol=1e-21`.
 
+## Shift sampled lossless reference planes
+
+`Network::shift_reference_planes_lossless_power` applies an explicit
+`(nfreq,nport)` one-way phase table in radians to the stored power-wave S
+coordinates:
+
+```text
+d[f,p] = exp(-j * phase[f,p])
+S_out[f,i,j] = d[f,i] * S_in[f,i,j] * d[f,j]
+```
+
+The table is caller-supplied sampled data.  Positive and negative phases are
+accepted as written; the method does not infer distance, velocity, delay,
+frequency units, causality, or a propagation model.  Frequency labels, port
+order, and references are preserved exactly, the source remains unchanged, and
+the returned network owns independent arrays.  The operation requires finite
+real-positive references and matching finite S/z0/phase shapes.  It accepts
+singular, active, nonreciprocal, and non-passive S data and reports malformed
+or unrepresentable arithmetic through structured errors.
+Each endpoint factor is evaluated independently, the two factors are multiplied
+before S, and the product is normalized with binary64 `hypot` and one division;
+the supplied phases are never summed first.
+
+```rust
+use ndarray::Array2;
+use rfkit_touchstone::parse_touchstone_v1_0_s;
+
+fn shift(input: &str) -> rfkit_touchstone::Result<rfkit_core::Network> {
+    let source = parse_touchstone_v1_0_s(input, 2)?;
+    let phase = Array2::from_shape_vec(
+        (2, 2),
+        vec![-0.02, -0.03, -0.04, -0.06],
+    )?;
+    Ok(source.shift_reference_planes_lossless_power(&phase)?)
+}
+```
+
+The canonical differential fixture
+`tools/oracle/fixtures/reference_plane_shift_lossless_power_four_port_media_connect.json`
+uses NumPy `2.5.1`, scikit-rf `2.0.1` at commit
+`bd651e923cac6020de49a096e1d7e9b5f949f884`, and seed `20260965`.  Its expected
+output comes from public `DefinedGammaZ0.line(..., s_def="power")` followed by
+sequential public `network.connect` calls, with an independent `D S D`
+identity check.  Only shifted S uses `rtol=1e-12`, `atol=1e-12`; inputs,
+references, phase, frequency, mapping, and metadata remain exact.
+
+The executable Touchstone workflow is:
+
+```text
+cargo run -p rfkit-touchstone --example reference_plane_shift_touchstone
+```
+
 ## Connect networks at a physical power-wave junction
 
 `Network::connect_power` joins one port from each network with the physical

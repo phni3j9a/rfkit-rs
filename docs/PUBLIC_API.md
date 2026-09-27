@@ -1559,6 +1559,76 @@ The focused Touchstone workflow is
 each S21 interval with frequency bounds and checks an analytical 2 ns line
 delay.
 
+## Lossless power-wave reference-plane shifts (Issue #118 Yellow decision)
+
+The provisional public surface adds one explicit sampled transformation:
+
+```rust
+impl Network {
+    pub fn shift_reference_planes_lossless_power(
+        &self,
+        one_way_phase_rad: &Array2<f64>,
+    ) -> Result<Network>;
+}
+```
+
+The input table has shape `(nfreq, nport)` and contains one-way electrical
+phase in radians for each stored frequency and physical port.  The operation
+evaluates
+
+```text
+d[f,p] = exp(-j * one_way_phase_rad[f,p])
+S_out[f,i,j] = d[f,i] * S_in[f,i,j] * d[f,j]
+```
+
+with the two endpoint factors evaluated independently.  A reflection therefore
+receives twice the endpoint phase, while a transmission uses the independent
+phases at its output and input ports.  Positive and negative phase entries are
+caller data; the method does not infer distance, velocity, frequency units,
+delay, causality, or a propagation model.  The stored frequency labels,
+physical port order, and references are copied exactly into a newly owned
+network.
+
+The operation requires a nonempty finite frequency axis whose length matches a
+square positive-port S stack, a matching `(nfreq,nport)` phase and reference
+shape, finite S/z0/phase values, and finite strictly positive real references.
+It accepts singular, active, nonreciprocal, and non-passive S data.  It does
+not sort, broadcast, interpolate, renormalize, convert S/Z/Y, or mutate the
+source.  Validation precedes indexed access, and non-finite or unrepresentable
+phase-factor/output arithmetic returns a structured operation-specific error.
+The endpoint factors are multiplied before they touch S; the implementation
+does not form a potentially overflowing phase sum first.  After that endpoint
+product, Rust evaluates its binary64 magnitude with `hypot` and divides once
+to restore a unit phasor.  This normalization corrects only the small
+unit-circle error from the independent `sin`/`cos` evaluations; it does not
+combine the supplied phase values, apply an arbitrary phase cutoff, or promise
+correctly rounded trigonometric results.  If the endpoint product cannot be
+normalized to a finite nonzero binary64 factor, or the normalized factor still
+produces an unrepresentable output component, the method returns its
+structured arithmetic error.
+
+The Yellow alternatives were a distance/velocity API, an inferred
+frequency-dependent delay model, a media/de-embedding abstraction, or a
+generic phase/rotation method with hidden wave and unit choices.  The selected
+table-based name keeps one-way phase, power waves, units, frequency sampling,
+and reference restrictions visible while closing a bounded de-embedding
+workflow.  It is additive and provisional during `0.x`; rollback removes the
+method, kernel, tests, fixture, workflow, and documentation without a storage
+migration.  It makes no general scikit-rf compatibility or all-frequency
+realizability promise.
+
+The canonical differential fixture is
+`tools/oracle/fixtures/reference_plane_shift_lossless_power_four_port_media_connect.json`.
+It uses NumPy `2.5.1`, scikit-rf `2.0.1` at commit
+`bd651e923cac6020de49a096e1d7e9b5f949f884`, seed `20260965`, three frequencies,
+an asymmetric four-port input, unequal real-positive frequency-dependent
+references, and an explicit signed one-way phase table.  Expected output is
+generated through public `DefinedGammaZ0.line(..., s_def="power")` and
+sequential public `network.connect` calls; the generator independently checks
+the `D S D` identity.  Only shifted S is numeric-tolerance compared at
+`rtol=1e-12`, `atol=1e-12`; inputs, references, phase table, mapping,
+frequency, and metadata are exact.
+
 ## Implemented public baseline
 
 The implemented shape is:
@@ -1627,6 +1697,11 @@ impl Network {
         port_out: usize,
         port_in: usize,
     ) -> Result<Vec<f64>>;
+
+    pub fn shift_reference_planes_lossless_power(
+        &self,
+        one_way_phase_rad: &Array2<f64>,
+    ) -> Result<Network>;
 }
 ```
 
@@ -1670,6 +1745,11 @@ The exact internal delegation remains an implementation detail. The semantic dis
   scikit-rf's sample-aligned `Network.group_delay`; it does not imply phase
   unwrapping, undersampling detection, propagation speed, causality,
   stability, or a broad scikit-rf API compatibility promise.
+- `shift_reference_planes_lossless_power` applies an explicit sampled
+  one-way per-port electrical phase table through the power-wave `D S D`
+  transformation.  It keeps phase sign, radians, frequency samples, and
+  positive-real references explicit; it does not infer a distance/delay model,
+  perform hidden renormalization, or imply all-frequency realizability.
 
 Do not shorten these to broad names such as `connect`, `interpolate`, or `renormalize` until the library has enough supported semantics and evidence to justify what those names mean. Introducing such a default is at least Yellow and becomes Red when reasonable conventions conflict or the choice would freeze hidden policy.
 

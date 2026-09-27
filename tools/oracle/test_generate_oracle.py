@@ -807,6 +807,17 @@ GROUP_DELAY_SECANT_CASE_SPECS = {
 }
 
 
+REFERENCE_PLANE_SHIFT_CASE_SPECS = {
+    oracle.REFERENCE_PLANE_SHIFT_CASE_ID: {
+        "operation": "network_shift_reference_planes_lossless_power",
+        "ports": 4,
+        "frequencies": 3,
+        "seed": oracle.REFERENCE_PLANE_SHIFT_RANDOM_SEED,
+        "output": "s_shifted",
+    },
+}
+
+
 INVERSE_CASCADE_CASE_SPECS = {
     oracle.INVERSE_CASCADE_CASE_ID: {
         "operation": "network_inverse_cascade_power",
@@ -2044,6 +2055,7 @@ class MatrixRegistrationAndCheckerTests(unittest.TestCase):
             + len(TWO_PORT_STABILITY_CASE_SPECS)
             + len(MAX_SINGULAR_VALUE_POWER_CASE_SPECS)
             + len(GROUP_DELAY_SECANT_CASE_SPECS)
+            + len(REFERENCE_PLANE_SHIFT_CASE_SPECS)
             + len(INVERSE_CASCADE_CASE_SPECS)
             + len(CASCADE_DIRECT_CASE_SPECS)
         )
@@ -2058,6 +2070,7 @@ class MatrixRegistrationAndCheckerTests(unittest.TestCase):
         self.assertTrue(set(TWO_PORT_STABILITY_CASE_SPECS).issubset(registered))
         self.assertTrue(set(MAX_SINGULAR_VALUE_POWER_CASE_SPECS).issubset(registered))
         self.assertTrue(set(GROUP_DELAY_SECANT_CASE_SPECS).issubset(registered))
+        self.assertTrue(set(REFERENCE_PLANE_SHIFT_CASE_SPECS).issubset(registered))
         self.assertTrue(set(INVERSE_CASCADE_CASE_SPECS).issubset(registered))
         self.assertTrue(set(CASCADE_DIRECT_CASE_SPECS).issubset(registered))
         self.assertTrue(set(DIRECT_CONNECTION_CASE_SPECS).issubset(registered))
@@ -5286,6 +5299,177 @@ class MaxSingularValuePowerRegistrationAndCheckerTests(unittest.TestCase):
 
         metadata_drift = copy.deepcopy(self.fixture)
         metadata_drift["metadata"]["random_seed"] += 1
+        self.assertEqual(self._check_document(metadata_drift), 1)
+
+
+class ReferencePlaneShiftRegistrationAndCheckerTests(unittest.TestCase):
+    """Protect the independent reference-plane shift oracle contract."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.np, cls.skrf = oracle._load_dependencies()
+        cls.case_id = oracle.REFERENCE_PLANE_SHIFT_CASE_ID
+        cls.case = next(case for case in oracle._CASES if case.case_id == cls.case_id)
+        cls.fixture = oracle._read_canonical_json(cls.case.path)
+
+    def _check_document(self, document: dict[str, object]) -> int:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / self.case.path.name
+            path.write_bytes(oracle._canonical_bytes(document))
+            return oracle._check_numeric_fixture(path, self.fixture, "s_shifted")
+
+    def test_registration_metadata_shapes_and_public_output_contract(self) -> None:
+        spec = REFERENCE_PLANE_SHIFT_CASE_SPECS[self.case_id]
+        registered = {case.case_id: case for case in oracle._CASES}
+        self.assertIn(self.case_id, registered)
+        self.assertEqual(self.case.path, oracle.REFERENCE_PLANE_SHIFT_FIXTURE)
+        self.assertEqual(self.case.path.stem, self.case_id)
+        self.assertEqual(self.case.comparison, "numeric_output")
+        self.assertEqual(self.case.numeric_output_key, spec["output"])
+
+        metadata = self.fixture["metadata"]
+        self.assertEqual(metadata["case_id"], self.case_id)
+        self.assertEqual(metadata["operation"], spec["operation"])
+        self.assertEqual(metadata["random_seed"], spec["seed"])
+        self.assertEqual(metadata["input_recipe"], oracle.REFERENCE_PLANE_SHIFT_INPUT_RECIPE)
+        self.assertEqual(metadata["numpy_version"], oracle.EXPECTED_NUMPY_VERSION)
+        self.assertEqual(metadata["scikit_rf_version"], oracle.EXPECTED_SCIKIT_RF_VERSION)
+        self.assertEqual(metadata["scikit_rf_commit"], oracle.EXPECTED_SCIKIT_RF_COMMIT)
+        self.assertEqual(metadata["wave_definition"], "power")
+        self.assertEqual(
+            metadata["reference_impedance"],
+            {
+                "complex": False,
+                "frequency_dependent": True,
+                "per_port": True,
+                "real_part": "strictly positive",
+                "unit": "ohm",
+            },
+        )
+        self.assertEqual(
+            metadata["shape"],
+            {
+                "frequency": [spec["frequencies"]],
+                "input_s": [spec["frequencies"], spec["ports"], spec["ports"]],
+                "input_z0": [spec["frequencies"], spec["ports"]],
+                "one_way_phase_rad": [spec["frequencies"], spec["ports"]],
+                "output_s": [spec["frequencies"], spec["ports"], spec["ports"]],
+                "output_z0": [spec["frequencies"], spec["ports"]],
+            },
+        )
+        self.assertEqual(
+            metadata["line_construction"],
+            {
+                "characteristic_impedance": "source z0[f,port]",
+                "length": 1.0,
+                "mapping": "sequential connect(current, current_index, line, 0); each line survivor remains at the replaced physical port index",
+                "medium": "DefinedGammaZ0",
+                "s_def": "power",
+                "unit": "m",
+            },
+        )
+        self.assertEqual(
+            metadata["output_port_mapping"],
+            ["line_0", "line_1", "line_2", "line_3"],
+        )
+        self.assertEqual(metadata["tolerance_policy"]["rtol"], oracle.REFERENCE_PLANE_SHIFT_RTOL)
+        self.assertEqual(metadata["tolerance_policy"]["atol"], oracle.REFERENCE_PLANE_SHIFT_ATOL)
+        self.assertIn("only data.s_shifted is numeric output", metadata["tolerance_policy"]["comparison"])
+        self.assertIn("DefinedGammaZ0.line", metadata["tolerance_policy"]["regeneration"])
+        self.assertIn("D S D identity check", metadata["tolerance_policy"]["regeneration"])
+        self.assertEqual(
+            metadata["units"],
+            {
+                "frequency": "Hz",
+                "one_way_phase": "rad",
+                "s": "dimensionless",
+                "z0": "ohm",
+            },
+        )
+
+        self.assertEqual(
+            self.fixture["data"]["frequency_hz"],
+            list(oracle.REFERENCE_PLANE_SHIFT_FREQUENCY_HZ),
+        )
+        self.assertEqual(
+            self.fixture["data"]["one_way_phase_rad"],
+            [list(row) for row in oracle.REFERENCE_PLANE_SHIFT_PHASE_RAD],
+        )
+
+    def test_builder_matches_public_media_connect_and_independent_dsd_witness(self) -> None:
+        generated = self.case.builder(self.np, self.skrf)
+        expected = self.fixture["data"]
+        self.assertEqual(generated["metadata"], self.fixture["metadata"])
+        for key in (
+            "frequency_hz",
+            "one_way_phase_rad",
+            "s_input",
+            "z0_input_ohm",
+            "z0_output_ohm",
+        ):
+            self.assertEqual(generated["data"][key], expected[key])
+
+        source_s = self.np.asarray(
+            [
+                [
+                    [complex(value["real"], value["imag"]) for value in row]
+                    for row in matrix
+                ]
+                for matrix in expected["s_input"]
+            ],
+            dtype=self.np.complex128,
+        )
+        phase = self.np.asarray(expected["one_way_phase_rad"], dtype=self.np.float64)
+        expected_dsd = (
+            self.np.exp(-1j * phase)[:, :, None]
+            * source_s
+            * self.np.exp(-1j * phase)[:, None, :]
+        )
+        actual = self.np.asarray(
+            [
+                [
+                    [complex(value["real"], value["imag"]) for value in row]
+                    for row in matrix
+                ]
+                for matrix in generated["data"]["s_shifted"]
+            ],
+            dtype=self.np.complex128,
+        )
+        self.np.testing.assert_allclose(
+            actual,
+            expected_dsd,
+            rtol=oracle.REFERENCE_PLANE_SHIFT_RTOL,
+            atol=oracle.REFERENCE_PLANE_SHIFT_ATOL,
+        )
+        self.assertTrue(self.np.isfinite(actual).all())
+
+    def test_only_shifted_s_is_numeric_and_contract_drift_fails(self) -> None:
+        adjusted = copy.deepcopy(self.fixture)
+        adjusted["data"]["s_shifted"][0][0][0]["real"] += 1e-13
+        self.assertEqual(self._check_document(adjusted), 0)
+
+        output_drift = copy.deepcopy(self.fixture)
+        output_drift["data"]["s_shifted"][0][0][0]["real"] += 1e-3
+        self.assertEqual(self._check_document(output_drift), 1)
+
+        changed = copy.deepcopy(self.fixture)
+        changed["data"]["frequency_hz"][0] += 1.0
+        self.assertEqual(self._check_document(changed), 1, "frequency_hz")
+
+        changed = copy.deepcopy(self.fixture)
+        changed["data"]["one_way_phase_rad"][0][0] += 1e-3
+        self.assertEqual(self._check_document(changed), 1, "one_way_phase_rad")
+
+        changed = copy.deepcopy(self.fixture)
+        changed["data"]["s_input"][0][0][0]["real"] += 1e-13
+        self.assertEqual(self._check_document(changed), 1, "s_input")
+
+        changed = copy.deepcopy(self.fixture)
+        changed["data"]["z0_input_ohm"][0][0]["real"] += 1e-13
+        self.assertEqual(self._check_document(changed), 1, "z0_input_ohm")
+
+        metadata_drift = copy.deepcopy(self.fixture)
+        metadata_drift["metadata"]["output_port_mapping"][0] = "changed"
         self.assertEqual(self._check_document(metadata_drift), 1)
 
 
