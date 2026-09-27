@@ -7363,6 +7363,235 @@ def _group_delay_secant_fixture(np: Any, skrf: Any) -> dict[str, Any]:
     }
 
 
+# This fixture deliberately uses the public media/line plus sequential
+# network.connect path as an independent physical construction.  The direct
+# DSD expression is checked only as a generation-time identity witness; the
+# serialized expected output is the public composed result.
+REFERENCE_PLANE_SHIFT_FIXTURE = (
+    Path(__file__).resolve().parent
+    / "fixtures"
+    / "reference_plane_shift_lossless_power_four_port_media_connect.json"
+)
+REFERENCE_PLANE_SHIFT_CASE_ID = (
+    "reference_plane_shift_lossless_power_four_port_media_connect"
+)
+REFERENCE_PLANE_SHIFT_RANDOM_SEED = 20_260_965
+REFERENCE_PLANE_SHIFT_NFREQ = 3
+REFERENCE_PLANE_SHIFT_NPORTS = 4
+REFERENCE_PLANE_SHIFT_RTOL = 1e-12
+REFERENCE_PLANE_SHIFT_ATOL = 1e-12
+REFERENCE_PLANE_SHIFT_FREQUENCY_HZ = (0.9e9, 1.6e9, 2.8e9)
+REFERENCE_PLANE_SHIFT_PHASE_RAD = (
+    (0.0, 0.2, -0.3, 0.7),
+    (0.4, -0.8, 0.15, 1.2),
+    (-0.9, 0.3, 0.6, -0.4),
+)
+REFERENCE_PLANE_SHIFT_INPUT_RECIPE = (
+    "independent asymmetric four-port S stack from NumPy default_rng seed "
+    "20260965; frequencies [0.9,1.6,2.8] GHz; unequal real-positive "
+    "frequency-dependent per-port references; signed one-way phase table "
+    "[[0,0.2,-0.3,0.7],[0.4,-0.8,0.15,1.2],[-0.9,0.3,0.6,-0.4]] rad; "
+    "expected output from public DefinedGammaZ0.line plus sequential "
+    "network.connect; no prior fixture values reused"
+)
+REFERENCE_PLANE_SHIFT_TOLERANCE_JUSTIFICATION = (
+    "Strict binary64 mixed tolerance for a deterministic four-port "
+    "lossless-reference-plane transformation.  Only data.s_shifted is "
+    "numeric-tolerance output; source S, frequency, one-way phase table, "
+    "references, line recipe, mapping, and metadata are exact contract "
+    "fields.  The generation-time D S D identity check is independent of "
+    "the serialized public media/connect output."
+)
+
+
+def _reference_plane_shift_inputs(np: Any) -> tuple[Any, Any, Any, Any]:
+    """Build the independent four-port reference-plane-shift input."""
+
+    frequency_hz = np.asarray(REFERENCE_PLANE_SHIFT_FREQUENCY_HZ, dtype=np.float64)
+    phase_rad = np.asarray(REFERENCE_PLANE_SHIFT_PHASE_RAD, dtype=np.float64)
+    rng = np.random.default_rng(REFERENCE_PLANE_SHIFT_RANDOM_SEED)
+    source_s = np.asarray(
+        rng.normal(
+            loc=0.0,
+            scale=0.065,
+            size=(
+                REFERENCE_PLANE_SHIFT_NFREQ,
+                REFERENCE_PLANE_SHIFT_NPORTS,
+                REFERENCE_PLANE_SHIFT_NPORTS,
+            ),
+        )
+        + 1j
+        * rng.normal(
+            loc=0.0,
+            scale=0.055,
+            size=(
+                REFERENCE_PLANE_SHIFT_NFREQ,
+                REFERENCE_PLANE_SHIFT_NPORTS,
+                REFERENCE_PLANE_SHIFT_NPORTS,
+            ),
+        ),
+        dtype=np.complex128,
+    )
+    _assert_non_symmetric(np, source_s, name="reference-plane shift S input")
+    source_z0 = np.asarray(
+        [
+            [43.0, 61.0, 77.0, 95.0],
+            [47.0, 67.0, 83.0, 101.0],
+            [53.0, 73.0, 89.0, 109.0],
+        ],
+        dtype=np.complex128,
+    )
+    expected_shapes = {
+        "frequency": (REFERENCE_PLANE_SHIFT_NFREQ,),
+        "s": (
+            REFERENCE_PLANE_SHIFT_NFREQ,
+            REFERENCE_PLANE_SHIFT_NPORTS,
+            REFERENCE_PLANE_SHIFT_NPORTS,
+        ),
+        "z0": (REFERENCE_PLANE_SHIFT_NFREQ, REFERENCE_PLANE_SHIFT_NPORTS),
+        "phase": (
+            REFERENCE_PLANE_SHIFT_NFREQ,
+            REFERENCE_PLANE_SHIFT_NPORTS,
+        ),
+    }
+    actual_shapes = {
+        "frequency": frequency_hz.shape,
+        "s": source_s.shape,
+        "z0": source_z0.shape,
+        "phase": phase_rad.shape,
+    }
+    if actual_shapes != expected_shapes:
+        raise ValueError(f"reference-plane shift input shape drifted: {actual_shapes}")
+    if (
+        not np.isfinite(frequency_hz).all()
+        or not np.isfinite(source_s).all()
+        or not np.isfinite(source_z0).all()
+        or not np.isfinite(phase_rad).all()
+    ):
+        raise ValueError("reference-plane shift inputs must be finite")
+    if (source_z0.imag != 0.0).any() or not (source_z0.real > 0.0).all():
+        raise ValueError("reference-plane shift references must be real and positive")
+    if np.array_equal(phase_rad, np.zeros_like(phase_rad)):
+        raise ValueError("reference-plane shift phases must not be all zero")
+    return frequency_hz, source_s, source_z0, phase_rad
+
+
+def _reference_plane_shift_fixture(np: Any, skrf: Any) -> dict[str, Any]:
+    """Generate the expected shift through public media and connect calls."""
+
+    frequency_hz, source_s, source_z0, phase_rad = _reference_plane_shift_inputs(np)
+    case_id = REFERENCE_PLANE_SHIFT_CASE_ID
+    frequency = skrf.Frequency.from_f(frequency_hz, unit="hz")
+    source = skrf.Network(
+        frequency=frequency,
+        s=source_s,
+        z0=source_z0,
+        s_def="power",
+        name=f"{case_id}_source",
+    )
+
+    shifted = source
+    output_mapping: list[Any] = list(range(REFERENCE_PLANE_SHIFT_NPORTS))
+    for port in range(REFERENCE_PLANE_SHIFT_NPORTS):
+        medium = skrf.media.DefinedGammaZ0(
+            frequency=frequency,
+            z0=source_z0[:, port],
+            z0_port=source_z0[:, port],
+            gamma=1j * phase_rad[:, port],
+        )
+        line = medium.line(1.0, unit="m", s_def="power")
+        current_index = output_mapping.index(port)
+        shifted = skrf.network.connect(shifted, current_index, line, 0)
+        output_mapping[current_index] = f"line_{port}"
+
+    shifted_s = np.asarray(shifted.s, dtype=np.complex128)
+    shifted_z0 = np.asarray(shifted.z0, dtype=np.complex128)
+    expected_d = np.exp(-1j * phase_rad)
+    expected_dsd = expected_d[:, :, None] * source_s * expected_d[:, None, :]
+    if not np.allclose(
+        shifted_s,
+        expected_dsd,
+        rtol=REFERENCE_PLANE_SHIFT_RTOL,
+        atol=REFERENCE_PLANE_SHIFT_ATOL,
+    ):
+        raise ValueError("public media/connect output disagrees with D S D identity")
+    if not np.array_equal(shifted_z0, source_z0):
+        raise ValueError("public media/connect output changed references")
+    if not np.array_equal(np.asarray(shifted.frequency.f), frequency_hz):
+        raise ValueError("public media/connect output changed frequency labels")
+    if shifted.s_def != "power":
+        raise ValueError(f"public media/connect output changed wave definition: {shifted.s_def}")
+    if output_mapping != [f"line_{port}" for port in range(REFERENCE_PLANE_SHIFT_NPORTS)]:
+        raise ValueError(f"reference-plane output mapping drifted: {output_mapping}")
+
+    return {
+        "metadata": {
+            "case_id": case_id,
+            "input_recipe": REFERENCE_PLANE_SHIFT_INPUT_RECIPE,
+            "line_construction": {
+                "characteristic_impedance": "source z0[f,port]",
+                "length": 1.0,
+                "mapping": "sequential connect(current, current_index, line, 0); each line survivor remains at the replaced physical port index",
+                "medium": "DefinedGammaZ0",
+                "s_def": "power",
+                "unit": "m",
+            },
+            "numpy_version": np.__version__,
+            "operation": "network_shift_reference_planes_lossless_power",
+            "output_port_mapping": [
+                "line_0",
+                "line_1",
+                "line_2",
+                "line_3",
+            ],
+            "random_seed": REFERENCE_PLANE_SHIFT_RANDOM_SEED,
+            "reference_impedance": {
+                "complex": False,
+                "frequency_dependent": True,
+                "per_port": True,
+                "real_part": "strictly positive",
+                "unit": "ohm",
+            },
+            "schema": "rfkit-rs.oracle.fixture",
+            "schema_version": SCHEMA_VERSION,
+            "scikit_rf_commit": EXPECTED_SCIKIT_RF_COMMIT,
+            "scikit_rf_version": skrf.__version__,
+            "shape": {
+                "frequency": list(frequency_hz.shape),
+                "input_s": list(source_s.shape),
+                "input_z0": list(source_z0.shape),
+                "one_way_phase_rad": list(phase_rad.shape),
+                "output_s": list(shifted_s.shape),
+                "output_z0": list(shifted_z0.shape),
+            },
+            "tolerance_policy": {
+                "atol": REFERENCE_PLANE_SHIFT_ATOL,
+                "comparison": "only data.s_shifted is numeric output; frequency, input S, references, one-way phase table, line recipe, mapping, and metadata are exact",
+                "justification": REFERENCE_PLANE_SHIFT_TOLERANCE_JUSTIFICATION,
+                "regeneration": "canonical UTF-8 JSON; public DefinedGammaZ0.line(..., s_def=power) followed by sequential public network.connect calls; generation-time D S D identity check",
+                "rtol": REFERENCE_PLANE_SHIFT_RTOL,
+            },
+            "units": {
+                "frequency": "Hz",
+                "one_way_phase": "rad",
+                "s": "dimensionless",
+                "z0": "ohm",
+            },
+            "wave_definition": "power",
+        },
+        "data": {
+            "frequency_hz": [float(value) for value in frequency_hz],
+            "one_way_phase_rad": [
+                [float(value) for value in row] for row in phase_rad
+            ],
+            "s_input": _complex_array(source_s),
+            "s_shifted": _complex_array(shifted_s),
+            "z0_input_ohm": _complex_array(source_z0),
+            "z0_output_ohm": _complex_array(shifted_z0),
+        },
+    }
+
+
 def _inverse_cascade_inputs(np: Any) -> tuple[Any, Any, Any]:
     """Build an independently seeded, usable four-port inverse fixture."""
 
@@ -8229,6 +8458,13 @@ _CASES = (
         _group_delay_secant_fixture,
         "numeric_output",
         "group_delay_seconds",
+    ),
+    _OracleCase(
+        REFERENCE_PLANE_SHIFT_CASE_ID,
+        REFERENCE_PLANE_SHIFT_FIXTURE,
+        _reference_plane_shift_fixture,
+        "numeric_output",
+        "s_shifted",
     ),
 )
 _CASES_BY_ID = {case.case_id: case for case in _CASES}
