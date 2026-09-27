@@ -31,7 +31,7 @@ metadata contracts, and strict `rtol=1e-12`, `atol=1e-12` comparison for only
 decoded S. Lower and Upper use unequal real references `[25,50,75]`, N=3,
 nonzero imaginary entries, and no random generation. The Rust oracle calls
 only the new public API. The focused workflow explicitly inspects a loaded
-triangular network, permutes ports, writes existing Full v2 text, and checks
+triangular network, selects/reorders ports, writes existing Full v2 text, and checks
 readback of S, reference order, and frequencies without renormalization.
 
 The pinned scikit-rf reader has a known two-port triangular `21_12` legacy
@@ -152,26 +152,45 @@ Touchstone, and extracts the analytical physical Y through the direct path.
 The existing composed renormalization and conversion paths remain separately
 regression-tested with their documented singular-stage behavior.
 
-Issue #82 adds the pure `Network::permute_ports` reindexing operation. The
-external Touchstone workflow test in
-`crates/rfkit-touchstone/tests/public_permutation_workflow.rs` parses an
-asymmetric three-port, two-frequency v1.0 S/RI/Hz input, applies the explicit
-non-involutive `[2, 0, 1]` new-to-old mapping, and independently spells out the
-expected S values after both row and column moves and the expected port-aligned
-z0 values. It also snapshots and compares the source network, fixes the exact
-writer text, and reparses that text to verify the exported physical order.
-The executable counterpart is
+Issue #82's pure full-port reindexing is retained as historical evidence.
+**Superseded by #116.** Issue #116's single public
+`Network::select_ports_zero_incident` operation. The external Touchstone
+workflow test in `crates/rfkit-touchstone/tests/public_permutation_workflow.rs`
+parses an asymmetric three-port, two-frequency v1.0 S/RI/Hz input, applies the
+explicit non-involutive `[2, 0, 1]` new-to-old mapping, and independently spells
+out the expected S values after both row and column moves and the expected
+port-aligned z0 values. It retains the exact full-reorder writer text and
+readback, then adds a real partial `[2, 0]` reduction and the corresponding
+two-port writer/readback. The executable counterpart is
 `crates/rfkit-touchstone/examples/permute_ports_touchstone.rs`.
 
-The Touchstone fixture uses the writer-supported common 50-ohm reference, so
-the workflow observes z0 alignment through an independently expected common
-vector while S proves both axes and the non-involutive direction. Core-level
-permutation coverage additionally exercises unequal complex and
-frequency-dependent references, identity/swap/cycle and inverse round trips,
-component preservation, malformed serde shapes, and structured mapping
-diagnostics. These checks characterize permutation as exact coordinate copying,
-not a wave conversion or renormalization, and leave the writer's separate
-common finite positive-real validation unchanged.
+Core-level coverage accepts every nonempty ordered distinct subset, including
+one-port and full selections, and exercises unequal complex and
+frequency-dependent references, identity/swap/cycle and inverse/composition
+round trips, exact component preservation, source/list immutability, malformed
+serde shapes, and structured empty/duplicate/out-of-range diagnostics. A
+nonstandard-owned-ndarray fixture retains the full-permutation regression and
+also selects a smaller ordered subset, checking exact NaN-payload and
+signed-zero bits while accepting a non-finite value in an omitted coordinate;
+the newly owned output layout is checked separately. The retained response is
+checked as `b_E=S_EE*a_E` with omitted `a_R=0`; the omitted-port boundary is
+independently reconstructed from the full `a,b` Kurokawa equations and checks
+both `V_R+z0_R I_R=0` and that the conjugate-reference expression is nonzero.
+A deterministic coupled omitted block independently establishes
+`det(I-S_RR)=0` and still must not trigger a fictitious feedback solve. These
+checks characterize selection as exact coordinate copying, not a wave
+conversion or physical termination, and leave each writer's separate
+reference validation unchanged.
+
+The pinned subset fixture
+`tools/oracle/fixtures/port_selection_zero_incident_five_port_complex_z0.json`
+uses public scikit-rf `Network.subnetwork([4,1,3])` behavior from version
+`2.0.1`, commit `bd651e923cac6020de49a096e1d7e9b5f949f884`, NumPy `2.5.1`,
+and seed `20260964`. It records an independently authored asymmetric
+five-port, three-frequency input with unequal complex frequency-dependent
+positive-real references, the retained/omitted mapping, `a_R=0` meaning,
+units, and exact canonical UTF-8 comparison. The Rust oracle calls only the
+new public method; no third-party source or fixture values are copied.
 
 The pinned direct S→Y differential case is independently specified as a
 non-reciprocal three-port with singular `I-S` and nonsingular direct `A`, plus
@@ -212,9 +231,9 @@ the strict metadata/input/reference checks and compares each public Rust
 method against its corresponding fixture S output.
 
 The end-to-end Touchstone test and executable parse an asymmetric five-port
-v1.0 S/RI/Hz input, apply explicit physical permutation `[2,0,3,1,4]`, check
+v1.0 S/RI/Hz input, apply explicit physical selection/reorder `[2,0,3,1,4]`, check
 differential/common and mode-conversion responses against an independently
-written `U S U^T` sum, apply the inverse and `[1,3,0,2,4]` permutation, then
+written `U S U^T` sum, apply the inverse and `[1,3,0,2,4]` selection, then
 write/read with the existing single-ended writer. The source uses common
 positive-real 50-ohm references for the format boundary. No mixed-mode
 Touchstone extension or implicit writer renormalization is involved.

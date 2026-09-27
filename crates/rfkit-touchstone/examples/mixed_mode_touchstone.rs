@@ -32,7 +32,7 @@ const INPUT: &str = r#"# Hz S RI R 50
 fn main() -> rfkit_touchstone::Result<()> {
     let source = parse_touchstone_v1_0_s(INPUT, 5)?;
     // New-port -> old-port: pair (old 2, old 0), pair (old 3, old 1), old 4.
-    let pair_ordered = source.permute_ports(&[2, 0, 3, 1, 4])?;
+    let pair_ordered = source.select_ports_zero_incident(&[2, 0, 3, 1, 4])?;
     let mixed = pair_ordered.to_mixed_mode_equal_pair_power(2)?;
     assert_eq!(mixed.z0()[[0, 0]], num_complex::Complex64::new(100.0, 0.0));
     assert_eq!(mixed.z0()[[0, 2]], num_complex::Complex64::new(25.0, 0.0));
@@ -47,7 +47,7 @@ fn main() -> rfkit_touchstone::Result<()> {
     // Restore it and undo the physical permutation before writing.
     let restored = mixed
         .to_single_ended_equal_pair_power(2)?
-        .permute_ports(&[1, 3, 0, 2, 4])?;
+        .select_ports_zero_incident(&[1, 3, 0, 2, 4])?;
     let text = write_touchstone_v1_0_s_ri_hz(&restored)?;
     let reread = parse_touchstone_v1_0_s(&text, 5)?;
     assert_eq!(reread.frequency(), restored.frequency());

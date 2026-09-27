@@ -659,7 +659,7 @@ Both inputs must have the same positive even port count `2N`, with ordered
 groups `[left_0..left_(N-1), right_0..right_(N-1)]`.  The operation connects
 every `self.right_k` to `other.left_k` simultaneously and returns surviving
 order `[self.left..., other.right...]`.  It does not infer a pairing or
-physical ordering; callers use `permute_ports` explicitly for another layout.
+physical ordering; callers use `select_ports_zero_incident` explicitly for another layout.
 
 For internal coordinates `i=[self.right...,other.left...]` and external
 coordinates `e=[self.left...,other.right...]`, the full source blocks satisfy
@@ -768,6 +768,90 @@ than a port-name or in-place renumbering API. No new wave definition,
 parameter-container hierarchy, dependency, or storage representation is
 implied.
 
+**Superseded by #116.**
+
+## Ordered zero-incident port selection (Issue #116 Yellow decision)
+
+The public name is a provisional generalizing replacement for the full-only
+operation above, so one coordinate operation covers both complete reorders and
+useful measured subsets:
+
+```rust
+impl Network {
+    pub fn select_ports_zero_incident(&self, ports: &[usize]) -> Result<Network>;
+}
+```
+
+`ports[new_port] = old_port` is a caller-ordered, zero-based, nonempty list of
+distinct source indices. Every size from one through the source port count is
+valid. `[4, 1, 3]` retains those coordinates in exactly that order; a complete
+list performs the former full permutation. For every frequency, the operation
+copies the same selected coordinates on both S axes and the aligned reference
+vector exactly; independent row/column selection is not part of this API:
+
+```text
+out.s[f, i, j] = source.s[f, ports[i], ports[j]]
+out.z0[f, i]   = source.z0[f, ports[i]]
+```
+
+For retained coordinates `E` and omitted coordinates `R`, this is the exact
+projection of `b = S a` under `a_R = 0`: `b_E = S_EE a_E`. Omitted ports may
+have nonzero outgoing waves. The selector is not an ideal open, short, finite
+load, conjugate match, Z/Y submatrix, Schur complement, gain optimization, or
+internal-feedback solve; no arithmetic, inversion, renormalization,
+regularization, tolerance, default reference, interpolation, sorting, or
+writer-domain validation is introduced. Where Kurokawa coordinates are valid,
+`a_R = 0` means `V_R + z0_R I_R = 0` with currents into the source. The stored
+`z0_R` is the boundary reference, not its conjugate and not an implicit 50 Ω.
+Complex references are supported; signed-negative-real references retain only
+the repository's algebraic extension and do not establish a passive-load
+claim.
+
+The source frequency axis (including negative, duplicate, descending,
+non-finite, and signed-zero labels) and copied S/z0 scalar bits (including NaN
+payloads) are preserved exactly. Nonstandard owned ndarray input layouts are
+supported without additional validity checks; returned arrays are newly owned
+standard-layout arrays, so input strides/layout are not preserved. Structural
+source validation still runs before selection indexing: frequency must be nonempty and
+match S, S must be square with a positive port count, and z0 must have exact
+`(nfreq,nport)` shape. Empty, duplicate, and out-of-range selections report
+structured context (position, offending index, and duplicate positions),
+including for identity and serde-created malformed values. The source and
+borrowed mapping remain unchanged, and all returned arrays are independently
+owned.
+
+Migration of the historical structured diagnostics is explicit:
+`EmptyPortPermutationFrequency` → `EmptyPortSelectionFrequency`;
+`PortPermutationFrequencyLengthMismatch` →
+`PortSelectionFrequencyLengthMismatch`;
+`InvalidPortPermutationSShape` → `InvalidPortSelectionSShape`;
+`InvalidPortPermutationZ0Shape` → `InvalidPortSelectionZ0Shape`;
+`PortPermutationOutOfRange` → `PortSelectionOutOfRange`; and
+`PortPermutationDuplicate` → `PortSelectionDuplicate`.
+`PortPermutationLengthMismatch` is retired because every nonempty distinct
+subset is now valid; an empty mapping is reported as `PortSelectionEmpty`.
+
+This replaces the full-only Issue #82 surface rather than adding an overlapping
+alias. Unpublished 0.x callers rename complete permutations; their successful
+domain and exact bytes remain covered by the canonical three-port fixture.
+Callers that require a full permutation can check the selection length before
+calling. `terminate_port_power` remains a distinct explicit physical-load
+operation and is not used by this selector. The change is Yellow, provisional,
+and reversible by one PR revert: no storage, serialization, dependency,
+publishing, or crate-boundary migration is implied. Alternatives (retaining a
+full-only method, silently allowing partial lists under its old name, adding a
+second subnetwork API, or terminating omitted ports at their references) were
+rejected because they either leave the measured-subset gap or duplicate/misname
+the same coordinate transform. The implementation is a Rust rewrite from the
+block scattering equation; the pinned scikit-rf fixture is behavior evidence,
+not copied code or copied values.
+
+The full and partial ingress/export workflow is exercised by
+`crates/rfkit-touchstone/tests/public_permutation_workflow.rs` and
+`crates/rfkit-touchstone/examples/permute_ports_touchstone.rs`: it preserves
+the historical full-reorder writer/readback bytes and adds a real `[2, 0]`
+two-port reduction followed by the same writer/readback boundary.
+
 ## Equal-pair mixed-mode power waves (Issue #84 Yellow decision)
 
 The provisional public surface adds one reversible forward/inverse slice:
@@ -795,7 +879,7 @@ S_mm = U S_se U^T        S_se = U^T S_mm U
 `(0,1), (2,3), ...`, where the first member is positive. The forward output
 coordinate order is `[d0..d(p-1), c0..c(p-1), unpaired...]`; the inverse
 requires that declared modal order and returns adjacent single-ended pairs.
-Use `permute_ports` explicitly for any other physical pairing or polarity; the
+Use `select_ports_zero_incident` explicitly for any other physical pairing or polarity; the
 methods infer no map. The transform is N-port and permits asymmetric,
 non-reciprocal, mode-converting, and singular S data.
 
@@ -1505,7 +1589,7 @@ impl Network {
 
     pub fn cascade_direct_power(&self, other: &Network) -> Result<Network>;
 
-    pub fn permute_ports(&self, order: &[usize]) -> Result<Network>;
+    pub fn select_ports_zero_incident(&self, ports: &[usize]) -> Result<Network>;
 
     pub fn to_mixed_mode_equal_pair_power(&self, pair_count: usize) -> Result<Network>;
 
@@ -1556,7 +1640,7 @@ The exact internal delegation remains an implementation detail. The semantic dis
   direct V/I cascade with `[self.left...,other.right...]` survivors and full
   within-group coupling; it does not imply sequential connection semantics,
   transfer/Z/Y composition, arbitrary pair maps, topology, or calibration;
-- `permute_ports` explicitly selects a complete new-to-old physical-port reindexing and carries S rows, S columns, and z0 together without wave arithmetic;
+- `select_ports_zero_incident` explicitly selects a nonempty ordered distinct new-to-old physical-port subset, including complete permutations, and carries S rows, S columns, and z0 together without wave arithmetic; its omitted-coordinate meaning is `a_R=0`, not a physical termination or Schur-complement solve;
 - `to_mixed_mode_equal_pair_power` and `to_single_ended_equal_pair_power` explicitly select the equal single-ended-reference adjacent-pair power-wave transform and its inverse, with modal layout `[d...,c...,unpaired...]`; they do not infer physical pairing or store mode metadata;
 - `interpolate_cartesian_linear` does not establish a vague interpolation default that would later need reinterpretation;
 - `connect_power` exposes one physical Kurokawa junction for the union of the

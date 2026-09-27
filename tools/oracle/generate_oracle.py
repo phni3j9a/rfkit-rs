@@ -58,9 +58,12 @@ The interpolation fixture uses the public
 ``Network.interpolate(..., basis="s", coords="cart", kind="linear")`` operation
 for both S and z0 outputs.  SciPy is pinned explicitly because scikit-rf
 delegates the interpolation numerics to it.
-The port-permutation fixture uses the public ``Network.renumbered`` operation
-with a non-involutive three-port order and compares frequency, S, and z0 by
-exact copy because the operation only reindexes values.
+The historical port-permutation fixture uses the public ``Network.renumbered``
+operation with a non-involutive three-port order and compares frequency, S, and
+z0 by exact copy because the operation only reindexes values.  Issue #116 adds
+an independently authored five-port ordered zero-incident subset fixture using
+public ``Network.subnetwork`` with retained order ``[4, 1, 3]``; it records the
+``a_R=0`` block-scattering meaning and uses the same exact-copy policy.
 The mixed-mode fixtures use two independently authored asymmetric five-port
 inputs: the forward case calls public ``Network.se2gmm`` and the inverse case
 calls public ``Network.gmm2se`` with an explicit adjacent ``z0_se`` target.
@@ -878,6 +881,31 @@ PORT_PERMUTATION_INPUT_RECIPE = (
 PORT_PERMUTATION_TOLERANCE_COMPARISON = (
     "exact canonical UTF-8 JSON bytes; frequency, S, and z0 are pure reindexing "
     "outputs and are copied exactly"
+)
+
+# Ordered zero-incident subnetwork selection is the generalized replacement
+# for the historical full permutation operation.  Keep this fixture separate
+# from the Issue #82 lineage so the old full-domain bytes remain a stable
+# migration witness while the new subset domain gets its own independently
+# authored five-port evidence.
+PORT_SELECTION_FIXTURE = (
+    Path(__file__).resolve().parent
+    / "fixtures"
+    / "port_selection_zero_incident_five_port_complex_z0.json"
+)
+PORT_SELECTION_CASE_ID = "port_selection_zero_incident_five_port_complex_z0"
+PORT_SELECTION_RANDOM_SEED = 20_260_964
+PORT_SELECTION_NFREQ = 3
+PORT_SELECTION_NPORTS = 5
+PORT_SELECTION_PORTS = (4, 1, 3)
+PORT_SELECTION_INPUT_RECIPE = (
+    "independent local NumPy default_rng input with seed 20260964, an "
+    "asymmetric complex five-port S stack, and unequal complex "
+    "frequency-dependent positive-real z0"
+)
+PORT_SELECTION_TOLERANCE_COMPARISON = (
+    "exact canonical UTF-8 JSON bytes; frequency, S, and z0 are pure ordered "
+    "coordinate copies under a_R=0 and require no arithmetic tolerance"
 )
 
 # Mixed-mode conversion is kept as two small, direction-specific fixtures.  The
@@ -2597,6 +2625,156 @@ def _port_permutation_fixture(np: Any, skrf: Any) -> dict[str, Any]:
             "s_input": _complex_array(network_s),
             "z0_input_ohm": _complex_array(network_z0),
             "z0_ohm": _complex_array(permuted_z0),
+        },
+    }
+
+
+def _port_selection_inputs(np: Any) -> tuple[Any, Any, Any]:
+    """Build the independently authored zero-incident subset input family."""
+
+    frequency_hz = np.array([0.91e9, 1.63e9, 2.87e9], dtype=np.float64)
+    rng = np.random.default_rng(PORT_SELECTION_RANDOM_SEED)
+    s = (
+        rng.normal(
+            loc=0.0,
+            scale=0.064,
+            size=(PORT_SELECTION_NFREQ, PORT_SELECTION_NPORTS, PORT_SELECTION_NPORTS),
+        )
+        + 1j
+        * rng.normal(
+            loc=0.0,
+            scale=0.047,
+            size=(PORT_SELECTION_NFREQ, PORT_SELECTION_NPORTS, PORT_SELECTION_NPORTS),
+        )
+    ).astype(np.complex128)
+    for frequency in range(PORT_SELECTION_NFREQ):
+        for port in range(PORT_SELECTION_NPORTS):
+            s[frequency, port, port] += complex(
+                0.11 + 0.021 * frequency + 0.013 * port,
+                -0.029 + 0.009 * frequency - 0.005 * port,
+            )
+
+    frequency_index = np.arange(PORT_SELECTION_NFREQ, dtype=np.float64)[:, None]
+    port_index = np.arange(PORT_SELECTION_NPORTS, dtype=np.float64)[None, :]
+    z0 = (
+        33.5
+        + 5.25 * port_index
+        + 1.65 * frequency_index
+        + 1j
+        * (
+            2.8
+            - 1.1 * port_index
+            + 0.37 * frequency_index
+            + 0.06 * port_index * frequency_index
+        )
+    ).astype(np.complex128)
+
+    if (
+        not np.isfinite(frequency_hz).all()
+        or not np.isfinite(s).all()
+        or not np.isfinite(z0).all()
+    ):
+        raise ValueError("port-selection inputs must be finite")
+    _assert_non_symmetric(np, s, name="port-selection S input")
+    if np.any(z0.real <= 0.0):
+        raise ValueError("port-selection z0 must have positive real parts")
+    if np.array_equal(z0[0], z0[1]) or np.array_equal(z0[:, 0], z0[:, 1]):
+        raise ValueError("port-selection z0 must vary by frequency and port")
+    if not np.any(z0.imag != 0.0):
+        raise ValueError("port-selection z0 must include complex values")
+
+    return frequency_hz, s, z0
+
+
+def _port_selection_fixture(np: Any, skrf: Any) -> dict[str, Any]:
+    """Build the ordered subset fixture through public scikit-rf behavior."""
+
+    frequency_hz, source_s, source_z0 = _port_selection_inputs(np)
+    case_id = PORT_SELECTION_CASE_ID
+    network = skrf.Network(
+        f=frequency_hz,
+        s=source_s,
+        z0=source_z0,
+        s_def="power",
+        name=case_id,
+    )
+
+    ports = list(PORT_SELECTION_PORTS)
+    selected = network.subnetwork(ports)
+    frequency = np.asarray(selected.f, dtype=np.float64)
+    network_s = np.asarray(network.s, dtype=np.complex128)
+    network_z0 = np.asarray(network.z0, dtype=np.complex128)
+    selected_s = np.asarray(selected.s, dtype=np.complex128)
+    selected_z0 = np.asarray(selected.z0, dtype=np.complex128)
+    expected_s = network_s[:, ports, :][:, :, ports]
+    expected_z0 = network_z0[:, ports]
+
+    if not np.array_equal(frequency, frequency_hz):
+        raise ValueError("port-selection output frequency changed")
+    if not np.array_equal(selected_s, expected_s):
+        raise ValueError("scikit-rf zero-incident S output is not an exact reindex")
+    if not np.array_equal(selected_z0, expected_z0):
+        raise ValueError("scikit-rf zero-incident z0 output is not an exact reindex")
+
+    source_shape = {
+        "frequency": list(frequency.shape),
+        "input_s": list(network_s.shape),
+        "input_z0": list(network_z0.shape),
+        "output_s": list(selected_s.shape),
+        "output_z0": list(selected_z0.shape),
+    }
+    source_mapping = [
+        {"new_port": new_port, "old_port": old_port}
+        for new_port, old_port in enumerate(ports)
+    ]
+    return {
+        "metadata": {
+            "case_id": case_id,
+            "input_recipe": PORT_SELECTION_INPUT_RECIPE,
+            "numpy_version": np.__version__,
+            "operation": "network_select_ports_zero_incident",
+            "port_selection": {
+                "description": "ports[new_port] = old_port",
+                "ports_new_to_old": ports,
+                "source_mapping": source_mapping,
+                "retained_ports": ports,
+                "omitted_ports": [
+                    port
+                    for port in range(PORT_SELECTION_NPORTS)
+                    if port not in ports
+                ],
+                "boundary": "a_R=0; b_E=S_EE*a_E",
+            },
+            "random_seed": PORT_SELECTION_RANDOM_SEED,
+            "reference_impedance": {
+                "complex": True,
+                "frequency_dependent": True,
+                "per_port": True,
+                "real_positive": True,
+                "unit": "ohm",
+            },
+            "schema": "rfkit-rs.oracle.fixture",
+            "schema_version": SCHEMA_VERSION,
+            "scikit_rf_commit": EXPECTED_SCIKIT_RF_COMMIT,
+            "scikit_rf_version": skrf.__version__,
+            "shape": source_shape,
+            "tolerance_policy": {
+                "comparison": PORT_SELECTION_TOLERANCE_COMPARISON,
+                "regeneration": "exact canonical UTF-8 JSON bytes",
+            },
+            "units": {
+                "frequency": "Hz",
+                "s": "dimensionless",
+                "z0": "ohm",
+            },
+            "wave_definition": network.s_def,
+        },
+        "data": {
+            "frequency_hz": [float(value) for value in frequency],
+            "s": _complex_array(selected_s),
+            "s_input": _complex_array(network_s),
+            "z0_input_ohm": _complex_array(network_z0),
+            "z0_ohm": _complex_array(selected_z0),
         },
     }
 
@@ -7701,6 +7879,12 @@ _CASES = (
         PORT_PERMUTATION_CASE_ID,
         PORT_PERMUTATION_FIXTURE,
         _port_permutation_fixture,
+        "exact",
+    ),
+    _OracleCase(
+        PORT_SELECTION_CASE_ID,
+        PORT_SELECTION_FIXTURE,
+        _port_selection_fixture,
         "exact",
     ),
     _OracleCase(

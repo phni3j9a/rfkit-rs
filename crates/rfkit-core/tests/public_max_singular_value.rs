@@ -231,7 +231,7 @@ fn port_permutation_and_unitary_coordinate_changes_preserve_sigma_max() {
         ],
     );
     let original = source.max_singular_value_power().unwrap();
-    let permuted = source.permute_ports(&[2, 0, 1]).unwrap();
+    let permuted = source.select_ports_zero_incident(&[2, 0, 1]).unwrap();
     let reordered = permuted.max_singular_value_power().unwrap();
     for (left, right) in original.iter().zip(reordered.iter()) {
         assert_relative_eq!(left, right, epsilon = 1.0e-13);

@@ -61,7 +61,7 @@ fn v2_parse_permute_write_read_preserves_physical_s_and_references() {
     .expect("expected z0 shape");
 
     let reordered = source
-        .permute_ports(&[2, 0, 1])
+        .select_ports_zero_incident(&[2, 0, 1])
         .expect("physical permutation succeeds");
     assert_eq!(reordered.s(), &expected_s);
     assert_eq!(reordered.z0(), &expected_z0);

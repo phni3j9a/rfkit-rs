@@ -16,7 +16,7 @@ const INPUT: &str = "[Version] 2.0\n\
 
 fn main() -> rfkit_touchstone::Result<()> {
     let source = parse_touchstone_v2_0_s(INPUT)?;
-    let reordered = source.permute_ports(&[2, 0, 1])?;
+    let reordered = source.select_ports_zero_incident(&[2, 0, 1])?;
 
     // The mapping is new-port -> old-port.  These independent checks make
     // both S axes and the reference-port alignment observable.

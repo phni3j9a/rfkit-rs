@@ -401,7 +401,7 @@ fn direct_inner_is_invariant_under_selected_exchange_and_port_permutation() {
     // coordinates are therefore [1, 3], while the output order maps to
     // original survivors [4, 0, 2].
     let order = [4, 1, 0, 3, 2];
-    let permuted = source.permute_ports(&order).unwrap();
+    let permuted = source.select_ports_zero_incident(&order).unwrap();
     let permuted_reduced = permuted.inner_connect_power(1, 3).unwrap();
     let survivor_order = [4, 0, 2];
     for f in 0..source.frequency().len() {

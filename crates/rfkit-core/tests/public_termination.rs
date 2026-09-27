@@ -527,11 +527,11 @@ fn termination_is_covariant_under_port_permutation_and_handles_direct_singular_s
     let direct = source
         .terminate_port_power(2, &finite_loads(&[c(33.0, -6.0)]))
         .unwrap();
-    let permuted = source.permute_ports(&[2, 0, 3, 1]).unwrap();
+    let permuted = source.select_ports_zero_incident(&[2, 0, 3, 1]).unwrap();
     let permuted_reduced = permuted
         .terminate_port_power(0, &finite_loads(&[c(33.0, -6.0)]))
         .unwrap()
-        .permute_ports(&[0, 2, 1])
+        .select_ports_zero_incident(&[0, 2, 1])
         .unwrap();
     assert_array3_close(direct.s(), permuted_reduced.s(), 2.0e-15, 2.0e-15);
     assert_eq!(direct.z0(), permuted_reduced.z0());
@@ -540,7 +540,7 @@ fn termination_is_covariant_under_port_permutation_and_handles_direct_singular_s
     let permuted_open = permuted
         .terminate_port_power(0, &[PortLoad::Open])
         .unwrap()
-        .permute_ports(&[0, 2, 1])
+        .select_ports_zero_incident(&[0, 2, 1])
         .unwrap();
     assert_array3_close(direct_open.s(), permuted_open.s(), 2.0e-15, 2.0e-15);
     assert_eq!(direct_open.z0(), permuted_open.z0());

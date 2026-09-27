@@ -74,6 +74,15 @@ frequency, S, and z0 values come from the pinned public
 `Network.renumbered(order, list(range(nport)))` call. Because this operation
 only reindexes opaque values, the fixture uses an exact-copy policy for all
 three outputs and records the source mapping explicitly.
+One ordered zero-incident subset case is also registered for Issue #116: an
+independently generated asymmetric five-port, three-frequency input with
+unequal complex frequency-dependent positive-real references retains
+`[4,1,3]`. Its expected values come from one public
+`Network.subnetwork([4,1,3])` call. The fixture records retained/omitted
+coordinates, `ports[new_port]=old_port`, the `a_R=0; b_E=S_EE*a_E` physical
+meaning, units, and pinned dependency metadata. Because this is exact
+coordinate copying, frequency, S, and z0 use an exact canonical comparison;
+no load, Schur-complement, feedback solve, or hidden default is involved.
 One Cartesian linear interpolation case is also registered: an independent
 three-port S/z0 input uses irregular source and target grids, exact endpoints
 and a source knot, nonreciprocal complex S data, and non-50 Ω complex,
@@ -685,6 +694,15 @@ changes.
 | --- | ---: | --- | --- | --- |
 | Network → permuted Network | 3 | `[2, 0, 1]` | complex, per-port, frequency-dependent | `port_permutation_three_port_complex_z0` |
 
+Issue #116 supersedes that full-only public name with one ordered selection
+operation. The subset fixture uses seed `20260964`, retains `[4,1,3]` from a
+five-port source, omits `[0,2]`, and records the block-scattering boundary
+`a_R=0` rather than a physical termination. It is checked exactly:
+
+| Direction | Input ports | Retained order | Omitted ports | z0 profile | Case id |
+| --- | ---: | --- | --- | --- | --- |
+| Network → zero-incident subset | 5 | `[4, 1, 3]` | `[0, 2]` | complex, per-port, frequency-dependent positive-real | `port_selection_zero_incident_five_port_complex_z0` |
+
 All registered cases are checked by default against a fresh scikit-rf run; the
 default command checks every case:
 
@@ -895,6 +913,10 @@ The JSON representation is deliberately machine-readable and byte-stable:
 - The `port_permutation_three_port_complex_z0` case also retains an exact
   canonical UTF-8 byte comparison: its expected frequency/S/z0 values are
   pure reindexing copies, so no numeric tolerance is appropriate.
+- The `port_selection_zero_incident_five_port_complex_z0` case also retains an
+  exact canonical UTF-8 byte comparison: its expected frequency/S/z0 values
+  are ordered coordinate copies under `a_R=0`, so no numeric tolerance is
+  appropriate.
 - Every operation case requires strict JSON parsing (including finite
   numbers), canonical encoding of the actual document, and exact canonical
   equality for metadata, schema, dependency versions, shapes, frequency,

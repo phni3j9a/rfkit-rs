@@ -84,7 +84,7 @@ fn touchstone_ingress_physical_permutation_mixed_mode_roundtrip_and_export() {
     // physical map is explicit and is applied before any mode arithmetic:
     // new pair coordinates [0,1,2,3,4] are old [2,0,3,1,4].
     let pair_ordered = source
-        .permute_ports(PHYSICAL_TO_PAIR_ORDER)
+        .select_ports_zero_incident(PHYSICAL_TO_PAIR_ORDER)
         .expect("complete physical port permutation succeeds");
     assert_eq!(
         pair_ordered.s()[[0, 0, 0]],
@@ -142,7 +142,7 @@ fn touchstone_ingress_physical_permutation_mixed_mode_roundtrip_and_export() {
         .to_single_ended_equal_pair_power(2)
         .expect("natural modal references restore single-ended coordinates");
     let restored = restored_pair_order
-        .permute_ports(PAIR_TO_PHYSICAL_ORDER)
+        .select_ports_zero_incident(PAIR_TO_PHYSICAL_ORDER)
         .expect("inverse physical permutation restores ingress order");
     assert_network_close(&restored, &source_snapshot);
 

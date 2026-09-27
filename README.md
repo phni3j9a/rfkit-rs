@@ -298,7 +298,7 @@ ingress-to-v1 executable demonstrates the renormalization workflow:
 cargo run -p rfkit-touchstone --example touchstone_v2_full_workflow
 ```
 
-The direct v2 preservation workflow (parse, permute physical ports, write and
+The direct v2 preservation workflow (parse, select/reorder physical ports, write and
 read without renormalization) is executable with:
 
 ```text
@@ -394,7 +394,7 @@ inputs unchanged.  Only an exactly zero evaluated joint pivot is singular;
 finite near-singular arithmetic remains eligible.
 
 The operation deliberately does not add arbitrary pair maps, topology or
-calibration semantics.  Use `permute_ports` when a fixture's physical order
+calibration semantics.  Use `select_ports_zero_incident` when a fixture's physical order
 differs, and explicitly call `renormalize_direct_power` before Touchstone
 export when the resulting references are not the writer's one common
 positive-real scalar.  A focused load → simultaneous cascade → inverse removal
@@ -425,13 +425,13 @@ diagnostics, fixture, tests, and documentation during 0.x requires no data
 migration; existing Network, connection, renormalization, and Touchstone APIs
 remain unchanged.
 
-## Reorder physical ports before Touchstone export
+## Select ordered zero-incident ports before analysis or Touchstone export
 
-`Network::permute_ports` is the explicit, wave-definition-independent way to
-put an owned network's physical ports into a caller's required order. Its
-mapping is deliberately written as `order[new_port] = old_port`: for example,
-`[2, 0, 1]` places original port 2 first, original port 0 second, and original
-port 1 third.
+`Network::select_ports_zero_incident` is the one explicit, wave-definition-
+independent coordinate operation for putting an owned network into a caller's
+ordered port layout or retaining a measured subset. Its mapping is written as
+`ports[new_port] = old_port`: `[2, 0, 1]` is the historical complete reorder,
+while `[2, 0]` produces a real two-port reduction.
 
 ```rust
 use rfkit_touchstone::{parse_touchstone_v1_0_s, write_touchstone_v1_0_s_ri_hz};
@@ -444,7 +444,7 @@ fn reorder_for_export() -> rfkit_touchstone::Result<String> {
          0.31 0.01 0.32 0.02 0.33 0.03\n",
         3,
     )?;
-    let reordered = source.permute_ports(&[2, 0, 1])?;
+    let reordered = source.select_ports_zero_incident(&[2, 0, 1])?;
     assert_eq!(
         reordered.s()[[0, 0, 0]],
         num_complex::Complex64::new(0.33, 0.03),
@@ -462,25 +462,31 @@ fn reorder_for_export() -> rfkit_touchstone::Result<String> {
 ```
 
 For every frequency, the returned network copies the source values according
-to `out.s[f, new_row, new_column] = source.s[f, order[new_row],
-order[new_column]]` and `out.z0[f, new_port] = source.z0[f, order[new_port]]`.
-The frequency samples and order are retained exactly, the source and mapping
-slice are not modified, and no conversion, renormalization, interpolation,
-finite-value check, or reference-impedance selection is performed. A complete
-mapping with exactly one occurrence of every port is required; wrong length,
-out-of-range indices, and duplicates return structured errors. This is a
-provisional additive 0.x operation, so its name and signature are not a 1.0
-stability promise.
+to `out.s[f, new_row, new_column] = source.s[f, ports[new_row],
+ports[new_column]]` and `out.z0[f, new_port] = source.z0[f, ports[new_port]]`.
+The frequency samples and scalar bits are retained exactly, the source and
+mapping slice are not modified, and no conversion, renormalization,
+interpolation, finite-value check, or reference-impedance selection is
+performed. Every nonempty list of distinct in-range ports is valid. Under
+`b=S*a`, omitted ports use `a_R=0`, so the retained response is exactly
+`b_E=S_EE*a_E`; this does not solve an omitted block or impose an open, short,
+conjugate match, or finite load. Empty, duplicate, and out-of-range entries
+return structured errors. The source's stored `z0_R` is the physical boundary
+reference where Kurokawa coordinates are valid, with no hidden 50-ohm default.
+This Yellow 0.x replacement of the historical Issue #82 full-only operation
+(Superseded by #116)
+is provisional and reversible; there is no alias or storage migration.
 
 The Touchstone writers remain separate format boundaries. The v1 writer accepts
 only one finite, strictly positive, real reference scalar shared by every
 frequency and port. The v2 writer accepts unequal finite positive-real
 references, but requires each physical port's value to remain exactly constant
 across frequency. Complex or frequency-varying references still require an
-explicit caller-selected transformation before either writer; port permutation
+explicit caller-selected transformation before either writer; port selection
 does not silently renormalize or otherwise satisfy a writer contract.
 
-Run the complete deterministic workflow example with:
+Run the complete deterministic full-reorder plus partial-reduction workflow
+example with:
 
 ```text
 cargo run -p rfkit-touchstone --example permute_ports_touchstone
@@ -501,7 +507,7 @@ and so on; the first member is positive. The forward output layout is
 `[d0..d(p-1), c0..c(p-1), unpaired...]`, and the inverse requires that same
 declared layout. The transform is the real orthogonal `U` with rows
 `(u-v)/sqrt(2)` and `(u+v)/sqrt(2)`, so `S_mm = U S_se U^T` and
-`S_se = U^T S_mm U`. Use `permute_ports` first when the physical measurement
+`S_se = U^T S_mm U`. Use `select_ports_zero_incident` first when the physical measurement
 order is different or a pair polarity must be reversed; no pair map is inferred.
 
 For each pair the two single-ended references must be exactly equal finite

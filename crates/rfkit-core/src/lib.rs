@@ -95,38 +95,36 @@ pub enum Error {
     #[error("reference-impedance shape must be (nfreq, nport)")]
     InvalidZ0Shape,
 
-    #[error("port permutation frequency axis must not be empty")]
-    EmptyPortPermutationFrequency,
+    #[error("port selection frequency axis must not be empty")]
+    EmptyPortSelectionFrequency,
 
     #[error(
-        "port permutation frequency length does not match the S-parameter frequency dimension: expected {expected}, got {actual}"
+        "port selection frequency length does not match the S-parameter frequency dimension: expected {expected}, got {actual}"
     )]
-    PortPermutationFrequencyLengthMismatch { expected: usize, actual: usize },
+    PortSelectionFrequencyLengthMismatch { expected: usize, actual: usize },
 
-    #[error("port permutation received an invalid S-parameter shape {shape:?}")]
-    InvalidPortPermutationSShape { shape: Vec<usize> },
+    #[error("port selection received an invalid S-parameter shape {shape:?}")]
+    InvalidPortSelectionSShape { shape: Vec<usize> },
 
-    #[error("port permutation received an invalid reference-impedance shape {shape:?}")]
-    InvalidPortPermutationZ0Shape { shape: Vec<usize> },
+    #[error("port selection received an invalid reference-impedance shape {shape:?}")]
+    InvalidPortSelectionZ0Shape { shape: Vec<usize> },
+
+    #[error("port selection must contain at least one source port")]
+    PortSelectionEmpty,
 
     #[error(
-        "port permutation length does not match the network port count: expected {expected}, got {actual}"
+        "port selection entry at position {position} refers to old port {port}, out of range for {nports} ports"
     )]
-    PortPermutationLengthMismatch { expected: usize, actual: usize },
-
-    #[error(
-        "port permutation entry at position {position} refers to old port {port}, out of range for {nports} ports"
-    )]
-    PortPermutationOutOfRange {
+    PortSelectionOutOfRange {
         position: usize,
         port: usize,
         nports: usize,
     },
 
     #[error(
-        "port permutation repeats old port {port} at positions {first_position} and {second_position}"
+        "port selection repeats old port {port} at positions {first_position} and {second_position}"
     )]
-    PortPermutationDuplicate {
+    PortSelectionDuplicate {
         port: usize,
         first_position: usize,
         second_position: usize,
@@ -1786,37 +1784,40 @@ impl Network {
         .map_err(map_group_delay_error)
     }
 
-    /// Returns an owned network with its ports in an explicitly requested
-    /// order.
+    /// Returns an owned network containing an explicitly ordered subset of
+    /// source ports with zero incident waves at omitted coordinates.
     ///
-    /// `order[new_port] = old_port` uses zero-based port indices.  For
-    /// example, `[2, 0, 1]` places the original port 2 first, the original
-    /// port 0 second, and the original port 1 third.  The argument must be a
-    /// complete bijection of all ports; it is not a port-selection or partial
-    /// renumbering operation.
+    /// `ports[new_port] = old_port` uses zero-based port indices.  For
+    /// example, `[4, 1, 3]` retains source ports 4, 1, and 3 in that order.
+    /// Every nonempty ordered list of distinct source ports is valid, from a
+    /// one-port selection through a complete permutation.
     ///
     /// For every frequency `f`, the returned values are copied according to
-    /// `out.s[f, i, j] = self.s[f, order[i], order[j]]` and
-    /// `out.z0[f, i] = self.z0[f, order[i]]`.  Frequency samples and every
+    /// `out.s[f, i, j] = self.s[f, ports[i], ports[j]]` and
+    /// `out.z0[f, i] = self.z0[f, ports[i]]`.  Frequency samples and every
     /// copied S/z0 scalar are retained exactly, including non-finite values,
     /// signed zero, and complex references that other RF operations may
     /// reject.  No RF arithmetic, normalization, interpolation, tolerance,
-    /// or implicit reference selection is performed.
+    /// omitted-port feedback solve, or implicit reference selection is
+    /// performed.  In the scattering relation `b = S a`, this is the exact
+    /// coordinate projection `b_E = S_EE a_E` under `a_R = 0`; outgoing waves
+    /// at omitted ports are not constrained to zero.
     ///
     /// The result owns independent copies of the frequency, S-parameter, and
-    /// reference arrays.  Neither this network nor `order` is modified.
+    /// reference arrays.  Neither this network nor `ports` is modified.
     /// Downstream operations continue to apply their own validation rules.
     ///
-    /// This additive operation is provisional while `rfkit-core` is in the
-    /// `0.x` series; its name and signature are not a `1.0` stability promise.
+    /// This provisional `0.x` operation generalizes and replaces the prior
+    /// full-only port-permutation operation; its name and signature are not a
+    /// `1.0` stability promise.
     ///
     /// # Errors
     ///
     /// Returns a structured [`enum@Error`] when a serde-created network has
     /// an empty or mismatched frequency axis, a non-square/zero-port S array,
-    /// or a mismatched z0 array.  A permutation with the wrong length, an
-    /// out-of-range old-port index, or a duplicate old-port index is rejected
-    /// before any array indexing occurs.
+    /// or a mismatched z0 array.  An empty selection, an out-of-range old-port
+    /// index, or a duplicate old-port index is rejected before any array
+    /// indexing occurs.
     ///
     /// # Example
     ///
@@ -1837,55 +1838,52 @@ impl Network {
     /// )?;
     ///
     /// // New port 0 is old port 2; new port 1 is old port 0; new port 2 is old port 1.
-    /// let reordered = network.permute_ports(&[2, 0, 1])?;
+    /// let reordered = network.select_ports_zero_incident(&[2, 0, 1])?;
     /// assert_eq!(reordered.s()[[0, 0, 0]], network.s()[[0, 2, 2]]);
     /// assert_eq!(reordered.z0()[[0, 0]], network.z0()[[0, 2]]);
     /// # Ok(())
     /// # }
     /// # example().unwrap();
     /// ```
-    pub fn permute_ports(&self, order: &[usize]) -> Result<Network> {
+    pub fn select_ports_zero_incident(&self, ports: &[usize]) -> Result<Network> {
         if self.frequency.is_empty() {
-            return Err(Error::EmptyPortPermutationFrequency);
+            return Err(Error::EmptyPortSelectionFrequency);
         }
 
         let (parameter_frequency_length, nport_rows, nport_columns) = self.s.dim();
         if parameter_frequency_length != self.frequency.len() {
-            return Err(Error::PortPermutationFrequencyLengthMismatch {
+            return Err(Error::PortSelectionFrequencyLengthMismatch {
                 expected: self.frequency.len(),
                 actual: parameter_frequency_length,
             });
         }
         if nport_rows == 0 || nport_rows != nport_columns {
-            return Err(Error::InvalidPortPermutationSShape {
+            return Err(Error::InvalidPortSelectionSShape {
                 shape: vec![parameter_frequency_length, nport_rows, nport_columns],
             });
         }
         if self.z0.dim() != (parameter_frequency_length, nport_rows) {
             let (z0_frequencies, z0_ports) = self.z0.dim();
-            return Err(Error::InvalidPortPermutationZ0Shape {
+            return Err(Error::InvalidPortSelectionZ0Shape {
                 shape: vec![z0_frequencies, z0_ports],
             });
         }
 
-        if order.len() != nport_rows {
-            return Err(Error::PortPermutationLengthMismatch {
-                expected: nport_rows,
-                actual: order.len(),
-            });
+        if ports.is_empty() {
+            return Err(Error::PortSelectionEmpty);
         }
 
         let mut first_positions = vec![None; nport_rows];
-        for (position, &port) in order.iter().enumerate() {
+        for (position, &port) in ports.iter().enumerate() {
             if port >= nport_rows {
-                return Err(Error::PortPermutationOutOfRange {
+                return Err(Error::PortSelectionOutOfRange {
                     position,
                     port,
                     nports: nport_rows,
                 });
             }
             if let Some(first_position) = first_positions[port] {
-                return Err(Error::PortPermutationDuplicate {
+                return Err(Error::PortSelectionDuplicate {
                     port,
                     first_position,
                     second_position: position,
@@ -1895,12 +1893,12 @@ impl Network {
         }
 
         let output_s = Array3::from_shape_fn(
-            (parameter_frequency_length, nport_rows, nport_rows),
-            |(frequency, row, column)| self.s[[frequency, order[row], order[column]]],
+            (parameter_frequency_length, ports.len(), ports.len()),
+            |(frequency, row, column)| self.s[[frequency, ports[row], ports[column]]],
         );
         let output_z0 = Array2::from_shape_fn(
-            (parameter_frequency_length, nport_rows),
-            |(frequency, port)| self.z0[[frequency, order[port]]],
+            (parameter_frequency_length, ports.len()),
+            |(frequency, port)| self.z0[[frequency, ports[port]]],
         );
 
         Ok(Network {
@@ -1918,7 +1916,7 @@ impl Network {
     /// coordinate order is `[d0, ..., d(p-1), c0, ..., c(p-1), unpaired]`,
     /// where `p == pair_count`; ports from `2*p` onward are copied in their
     /// original order.  Other physical pairings or polarity choices are not
-    /// inferred.  Call [`Network::permute_ports`] explicitly before this
+    /// inferred.  Call [`Network::select_ports_zero_incident`] explicitly before this
     /// method when a different pairing or positive-port polarity is wanted.
     ///
     /// For each selected pair whose equal single-ended reference is `z`, the
@@ -1983,7 +1981,7 @@ impl Network {
     /// with the first member positive, followed by the unchanged unpaired
     /// ports.  This is the exact inverse coordinate convention of
     /// [`Network::to_mixed_mode_equal_pair_power`]; use
-    /// [`Network::permute_ports`] when the physical source ordering or
+    /// [`Network::select_ports_zero_incident`] when the physical source ordering or
     /// polarity differs.
     ///
     /// For each mode pair the input references must satisfy the natural
@@ -2513,7 +2511,7 @@ impl Network {
     /// The source ports are interpreted as two equal ordered groups,
     /// `[left_0..left_(N-1), right_0..right_(N-1)]`.  The returned network
     /// uses the fixed reversed group order `[old right, old left]`; use
-    /// [`Network::permute_ports`] first when the physical fixture uses another
+    /// [`Network::select_ports_zero_incident`] first when the physical fixture uses another
     /// ordering.  With `P` the group-exchange matrix, the S-parameters are
     /// evaluated as `S_inverse = P S⁻¹ P`, and the references are exactly
     /// `P conj(z0)`.
@@ -2577,7 +2575,7 @@ impl Network {
     /// ports ordered `[left_0..left_(N-1), right_0..right_(N-1)]`.  Every
     /// `self.right_k` is connected to `other.left_k` in one joint solve.  The
     /// returned order is `[self.left..., other.right...]`; use
-    /// [`Network::permute_ports`] when a physical fixture uses a different
+    /// [`Network::select_ports_zero_incident`] when a physical fixture uses a different
     /// arrangement.  The complete within-group coupling blocks are retained,
     /// so this operation is not implemented as repeated one-port connections.
     ///
