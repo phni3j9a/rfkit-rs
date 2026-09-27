@@ -2,11 +2,15 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use ndarray::{Array2, Array3};
 use num_complex::Complex64;
-use rfkit_core::{ConnectionInput, Error, Frequency, Network};
+use rfkit_core::{ConnectionInput, Error, Frequency, Network, PortLoad};
 use serde_json::json;
 
 fn c(real: f64, imag: f64) -> Complex64 {
     Complex64::new(real, imag)
+}
+
+fn finite_loads(loads: &[Complex64]) -> Vec<PortLoad> {
+    loads.iter().copied().map(PortLoad::ImpedanceOhm).collect()
 }
 
 fn network(frequency: &[f64], s: Array3<Complex64>, z0: Array2<Complex64>) -> Network {
@@ -621,7 +625,9 @@ fn direct_connection_agrees_with_physical_one_port_termination() {
     let load_network = network(&frequency, load_s, load_z0);
 
     let connected = source.connect_power(0, &load_network, 0).unwrap();
-    let terminated = source.terminate_port_impedance_power(0, &load).unwrap();
+    let terminated = source
+        .terminate_port_power(0, &finite_loads(&load))
+        .unwrap();
     assert_eq!(connected.z0(), terminated.z0());
     assert_array3_close(connected.s(), terminated.s(), 3.0e-12);
 }

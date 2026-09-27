@@ -846,7 +846,13 @@ outputs use the recorded strict binary64 tolerance, while metadata, shapes,
 frequencies, inputs, and references are exact contract fields. The Rust
 implementation is a REWRITE from the coordinate equations.
 
-## Finite physical-load port termination (Issue #86 Yellow decision)
+## Finite physical-load port termination (Issue #86 Yellow decision) — Superseded by #114
+
+This is the historical Issue #86 finite-only decision record. Its
+`terminate_port_impedance_power` name and finite-only contract were retired by
+Issue #114; the current sole termination operation and migration are recorded
+in the section that follows. The mathematical and conformance details below
+are retained so the finite-domain lineage remains reviewable.
 
 The provisional public surface adds one borrowing, owned-result operation:
 
@@ -923,6 +929,124 @@ loads and references are in ohms and survivors are `[0,1,3,4]`. Only S
 output uses the fixture's strict `rtol=1e-12`, `atol=1e-12` policy; metadata,
 inputs, frequency labels, loads, references, and ordering are exact contract
 fields. The Rust operation is a REWRITE from the physical boundary equations.
+
+## Explicit physical-load port termination (Issue #114 Yellow decision)
+
+Issue #114 generalizes and replaces the finite-only operation above with one
+public load type and one borrowing method:
+
+```rust
+#[non_exhaustive]
+pub enum PortLoad {
+    ImpedanceOhm(Complex64),
+    Open,
+}
+
+impl Network {
+    pub fn terminate_port_power(
+        &self,
+        port: usize,
+        loads: &[PortLoad],
+    ) -> Result<Network>;
+}
+```
+
+`ImpedanceOhm` is an explicitly finite physical impedance in ohms. It retains
+the entire Issue #86 finite domain, including zero (ideal short), purely
+reactive, and negative-resistance values. `Open` is the exact physical
+boundary `I_k=0`; it is not infinity, NaN, a large finite impedance, a
+reflection sentinel supplied by the caller, or a fallback to another
+operation. The slice contains exactly one load for each stored source
+frequency, so Open and finite values may be mixed sample by sample. There is
+no scalar broadcast, default reference, frequency-grid selection, sorting,
+interpolation, renormalization, load excitation, or hidden writer behavior.
+
+The selected-port boundary uses currents directed into the source network and
+the existing Kurokawa power-wave convention. For a finite
+`PortLoad::ImpedanceOhm(Z_L)`, with source reference `z_k`,
+`c=Z_L-z_k`, `d=Z_L+conj(z_k)`, and `den=d-c*S[k,k]`, it evaluates:
+
+```text
+S_out = S[E,E] + S[E,k] * (c/den) * S[k,E]
+```
+
+For `PortLoad::Open`, `I_k=q_k(a_k-b_k)=0` gives `a_k=b_k` and the direct
+boundary factor:
+
+```text
+S_out = S[E,E] + S[E,k] * (1/(1-S[k,k])) * S[k,E]
+```
+
+The load variant selects this boundary before arithmetic, with one evaluation
+per sample and no failure-based fallback. The finite calculation keeps the
+existing checked sequence, including support for `d==0` whenever `den!=0`.
+An exactly zero evaluated denominator is a structured singular-termination
+error, including when external coupling is zero; finite nonzero near-singular
+values remain eligible when checked arithmetic stays finite. Non-finite
+finite-impedance values remain errors and are never interpreted as Open.
+
+The source must have a nonempty matching frequency/S axis, positive square S,
+exact `(nfreq,nport)` references, at least two ports, a valid selected port,
+and exact load cardinality. All S/reference components must be finite and
+source references must have nonzero real parts, including for Open. Complex,
+unequal, per-port, frequency-dependent, and negative-real references retain
+the existing algebraic `abs(Re(z0))` domain. Frequency labels, survivor order,
+and survivor references are copied exactly. Both the source network and the
+borrowed load slice remain unchanged; the returned network owns its data.
+
+This is a Yellow, provisional 0.x generalization/replacement. Alternatives
+were retaining finite-only behavior and requiring a separate one-port Network
+for each open, adding a second `terminate_port_open_power` method, encoding
+Open as infinity/NaN or a large finite impedance, or introducing a generic
+impedance/admittance/load-network hierarchy. The selected enum keeps one
+operation explicit, preserves the old finite domain, permits mixed profiles,
+and closes the Touchstone workflow without a new canonical model or hidden
+policy. `connect_power` remains a separate operation because it joins two
+caller-supplied Networks; `terminate_port_power` imposes one physical boundary
+without requiring a synthetic load Network. No overlap-inventory row is added:
+this is the required generalize/replace consolidation of the Issue #86
+operation, not a coexisting public variant.
+
+### Migrating from Issue #86
+
+The crate is unpublished 0.x software, so the retired name has no deprecated
+alias. Rename the call and wrap each finite value in the explicit variant:
+
+```rust
+use num_complex::Complex64;
+use rfkit_core::PortLoad;
+
+let old_loads = [Complex64::new(38.0, 12.0), Complex64::new(0.0, 0.0)];
+let loads = old_loads.map(PortLoad::ImpedanceOhm);
+let reduced = network.terminate_port_power(selected_port, &loads)?;
+```
+
+Callers with an open sample use `PortLoad::Open` at that exact array position;
+they must not use an infinity/NaN sentinel. There is no stored-data migration.
+Rollback during 0.x is one PR revert: restore the historical finite-only name
+and signature and remove the enum, Open branch, migrated callers, fixture,
+tests, and documentation. The rollback changes no serialized representation,
+frequency grid, wave convention, dependency, crate boundary, or writer
+contract, so the decision remains reversible before stabilization.
+
+The canonical finite fixture
+`power_wave_terminate_port_impedance_five_port_complex_z0.json` is run through
+`PortLoad::ImpedanceOhm` unchanged, preserving its metadata and
+`rtol=1e-12`, `atol=1e-12` output-only policy. Issue #114 additionally pins
+`power_wave_terminate_port_mixed_open_five_port_complex_z0.json`: seed
+`20260963`, four-frequency asymmetric five-port input, selected middle port
+`2`, unequal complex frequency-dependent positive-real references, and the
+tagged load profile `[Open, 31+7j, Open, -17+4j]` ohm. Its expected response is
+generated through public scikit-rf `2.0.1` (commit
+`bd651e923cac6020de49a096e1d7e9b5f949f884`) and NumPy `2.5.1`; public
+`connect` output is explicitly restored/checked as power waves before reading
+the expected S. Frequency, source S/z0, tagged loads, survivor references,
+ordering, wave-definition metadata, and operation are exact contract fields;
+only reduced S uses strict `rtol=1e-12`, `atol=1e-12` comparison. The focused
+Touchstone example/test extends the same ingress → mixed termination →
+independent physical boundary → writer/read path with a local
+`[Open, 38+12j, 0]` profile under the writer's unchanged common 50-ohm
+reference contract.
 
 ## Sampled two-port power-wave stability metrics (Issue #92 Yellow decision)
 
@@ -1356,6 +1480,12 @@ delay.
 The implemented shape is:
 
 ```rust
+#[non_exhaustive]
+pub enum PortLoad {
+    ImpedanceOhm(Complex64),
+    Open,
+}
+
 impl Network {
     pub fn to_z_power(&self) -> Result<Array3<Complex64>>;
     pub fn to_y_power(&self) -> Result<Array3<Complex64>>;
@@ -1399,10 +1529,10 @@ impl Network {
         port_b: usize,
     ) -> Result<Network>;
 
-    pub fn terminate_port_impedance_power(
+    pub fn terminate_port_power(
         &self,
         port: usize,
-        load_ohm: &[Complex64],
+        loads: &[PortLoad],
     ) -> Result<Network>;
     pub fn two_port_stability_power(&self) -> Result<Vec<TwoPortStability>>;
 
@@ -1440,9 +1570,11 @@ The exact internal delegation remains an implementation detail. The semantic dis
 - Explicit target-grid connection is caller composition:
   `interpolate_cartesian_linear` on both inputs, then `connect_power`; there is
   no hidden interpolation or renormalization.
-- `terminate_port_impedance_power` applies a finite physical impedance boundary directly at one
-  selected port, removes that port, and retains the original survivor order and references without
-  selecting a new frequency grid or renormalizing the source.
+- `terminate_port_power` applies one explicit `PortLoad` per source-frequency
+  sample, including the exact `Open` boundary and finite impedance values
+  (zero is an ideal short), removes the selected port, and retains the
+  original survivor order and references without selecting a new frequency
+  grid or renormalizing the source.
 - `max_singular_value_power` reports the full dense sampled largest singular
   value of each stored S matrix in the existing power-wave coordinates.  It
   returns an amplitude diagnostic rather than a passivity verdict and does

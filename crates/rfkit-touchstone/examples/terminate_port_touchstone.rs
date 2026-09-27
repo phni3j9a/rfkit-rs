@@ -1,4 +1,4 @@
-//! Touchstone ingress → finite physical-load termination → writer/read.
+//! Touchstone ingress → explicit physical-load termination → writer/read.
 //!
 //! The expected reduced response is evaluated independently from the direct
 //! boundary formula.  The output retains the source's surviving common 50 Ω
@@ -7,6 +7,7 @@
 
 use ndarray::Array3;
 use num_complex::Complex64;
+use rfkit_core::PortLoad;
 use rfkit_touchstone::{parse_touchstone_v1_0_s, write_touchstone_v1_0_s_ri_hz};
 
 const INPUT: &str = r#"# Hz S RI R 50
@@ -42,23 +43,48 @@ const INPUT: &str = r#"# Hz S RI R 50
 0.65 0.15
 "#;
 
-const LOAD_OHM: [Complex64; 3] = [
-    Complex64::new(0.0, 0.0),
-    Complex64::new(38.0, 12.0),
-    Complex64::new(73.0, -9.0),
+const LOADS: [PortLoad; 3] = [
+    PortLoad::Open,
+    PortLoad::ImpedanceOhm(Complex64::new(38.0, 12.0)),
+    PortLoad::ImpedanceOhm(Complex64::new(0.0, 0.0)),
 ];
 
-fn independently_expected(source_s: &Array3<Complex64>) -> Array3<Complex64> {
+fn feedback(
+    source_s: &Array3<Complex64>,
+    source_z0: Complex64,
+    frequency: usize,
+    selected: usize,
+    load: &PortLoad,
+) -> Complex64 {
+    let s_kk = source_s[[frequency, selected, selected]];
+    match load {
+        PortLoad::Open => Complex64::new(1.0, 0.0) / (Complex64::new(1.0, 0.0) - s_kk),
+        PortLoad::ImpedanceOhm(load_ohm) => {
+            let c = *load_ohm - source_z0;
+            let d = *load_ohm + source_z0.conj();
+            c / (d - c * s_kk)
+        }
+        _ => unreachable!("the example must handle every supported load variant"),
+    }
+}
+
+fn independently_expected(
+    source_s: &Array3<Complex64>,
+    source_z0: &ndarray::Array2<Complex64>,
+    loads: &[PortLoad],
+) -> Array3<Complex64> {
     let survivors = [0_usize, 1, 3, 4];
     Array3::from_shape_fn(
         (3, survivors.len(), survivors.len()),
         |(frequency, row, column)| {
             let selected = 2;
-            let source_reference = Complex64::new(50.0, 0.0);
-            let c = LOAD_OHM[frequency] - source_reference;
-            let d = LOAD_OHM[frequency] + source_reference.conj();
-            let denominator = d - c * source_s[[frequency, selected, selected]];
-            let feedback = c / denominator;
+            let feedback = feedback(
+                source_s,
+                source_z0[[frequency, selected]],
+                frequency,
+                selected,
+                &loads[frequency],
+            );
             source_s[[frequency, survivors[row], survivors[column]]]
                 + source_s[[frequency, survivors[row], selected]]
                     * feedback
@@ -67,11 +93,82 @@ fn independently_expected(source_s: &Array3<Complex64>) -> Array3<Complex64> {
     )
 }
 
+fn assert_physical_boundary(
+    source_s: &Array3<Complex64>,
+    source_z0: &ndarray::Array2<Complex64>,
+    reduced_s: &Array3<Complex64>,
+    loads: &[PortLoad],
+) {
+    let survivors = [0_usize, 1, 3, 4];
+    let external_incident = [
+        Complex64::new(0.20, 0.10),
+        Complex64::new(-0.30, 0.05),
+        Complex64::new(0.15, -0.08),
+        Complex64::new(0.05, 0.02),
+    ];
+    let zero = Complex64::new(0.0, 0.0);
+
+    for frequency in 0..source_s.dim().0 {
+        let selected = 2;
+        let source_reference = source_z0[[frequency, selected]];
+        let selected_feedback = feedback(
+            source_s,
+            source_reference,
+            frequency,
+            selected,
+            &loads[frequency],
+        );
+        let selected_from_survivors = survivors
+            .iter()
+            .zip(external_incident.iter())
+            .map(|(&port, &incident)| source_s[[frequency, selected, port]] * incident)
+            .fold(zero, |sum, value| sum + value);
+
+        let mut incident = [zero; 5];
+        for (&port, &value) in survivors.iter().zip(external_incident.iter()) {
+            incident[port] = value;
+        }
+        incident[selected] = selected_feedback * selected_from_survivors;
+
+        let mut response = [zero; 5];
+        for row in 0..5 {
+            response[row] = (0..5)
+                .map(|column| source_s[[frequency, row, column]] * incident[column])
+                .fold(zero, |sum, value| sum + value);
+        }
+
+        for (output_row, &row) in survivors.iter().enumerate() {
+            let expected = external_incident
+                .iter()
+                .enumerate()
+                .map(|(output_column, &value)| {
+                    reduced_s[[frequency, output_row, output_column]] * value
+                })
+                .fold(zero, |sum, value| sum + value);
+            assert!((response[row] - expected).norm() <= 1.0e-14);
+        }
+
+        let q = (source_reference.re.abs()).sqrt() / source_reference.re;
+        let selected_current = q * (incident[selected] - response[selected]);
+        let selected_voltage = q
+            * (source_reference.conj() * incident[selected]
+                + source_reference * response[selected]);
+        match &loads[frequency] {
+            PortLoad::Open => assert!(selected_current.norm() <= 1.0e-14),
+            PortLoad::ImpedanceOhm(load_ohm) => {
+                assert!((selected_voltage + *load_ohm * selected_current).norm() <= 1.0e-14)
+            }
+            _ => unreachable!("the example must handle every supported load variant"),
+        }
+    }
+}
+
 fn main() -> rfkit_touchstone::Result<()> {
     let source = parse_touchstone_v1_0_s(INPUT, 5)?;
     let source_s = source.s().clone();
-    let expected = independently_expected(&source_s);
-    let terminated = source.terminate_port_impedance_power(2, &LOAD_OHM)?;
+    let source_z0 = source.z0().clone();
+    let expected = independently_expected(&source_s, &source_z0, &LOADS);
+    let terminated = source.terminate_port_power(2, &LOADS)?;
 
     assert_eq!(terminated.frequency(), source.frequency());
     assert_eq!(terminated.z0().dim(), (3, 4));
@@ -84,6 +181,17 @@ fn main() -> rfkit_touchstone::Result<()> {
     for (actual, expected) in terminated.s().iter().zip(expected.iter()) {
         assert!((*actual - *expected).norm() <= 1.0e-14);
     }
+    assert_physical_boundary(&source_s, &source_z0, terminated.s(), &LOADS);
+
+    assert!(matches!(&LOADS[0], PortLoad::Open));
+    assert!(matches!(
+        &LOADS[1],
+        PortLoad::ImpedanceOhm(load) if *load == Complex64::new(38.0, 12.0)
+    ));
+    assert!(matches!(
+        &LOADS[2],
+        PortLoad::ImpedanceOhm(load) if *load == Complex64::new(0.0, 0.0)
+    ));
 
     let text = write_touchstone_v1_0_s_ri_hz(&terminated)?;
     let reread = parse_touchstone_v1_0_s(&text, 4)?;

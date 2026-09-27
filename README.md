@@ -539,14 +539,15 @@ layout. The oracle uses independently authored five-port forward and inverse
 fixtures generated through pinned public scikit-rf 2.0.1 APIs, not copied
 instrument material or a broad scikit-rf compatibility claim.
 
-## Apply a finite physical load to one port
+## Apply an explicit physical load to one port
 
-`Network::terminate_port_impedance_power` applies one finite complex physical
-load impedance in ohms per source-frequency sample and removes the selected
-port:
+`Network::terminate_port_power` applies one explicit physical load per
+source-frequency sample and removes the selected port. `PortLoad::Open` is the
+exact ideal-open boundary (`I_k = 0`); finite loads use
+`PortLoad::ImpedanceOhm`, including zero for an ideal short:
 
 ```rust
-use num_complex::Complex64;
+use rfkit_core::PortLoad;
 use rfkit_touchstone::parse_touchstone_v1_0_s;
 
 fn load_port() -> rfkit_touchstone::Result<rfkit_core::Network> {
@@ -557,23 +558,27 @@ fn load_port() -> rfkit_touchstone::Result<rfkit_core::Network> {
          0.31 0.01 0.32 0.02 0.33 0.03\n",
         3,
     )?;
-    let load_ohm = [Complex64::new(0.0, 0.0)]; // ideal short at the sample
-    Ok(source.terminate_port_impedance_power(1, &load_ohm)?)
+    let loads = [PortLoad::Open];
+    Ok(source.terminate_port_power(1, &loads)?)
 }
 ```
 
-The method uses the source network's Kurokawa power-wave boundary directly:
-`V_k=-Z_L I_k`, `den=(Z_L+conj(z_k))-(Z_L-z_k)*S_kk`, and
-`S_out=S_EE+S_Ek*((Z_L-z_k)/den)*S_kE`. It does not model an independent
-load excitation, invert S/Z/Y, renormalize, choose a frequency grid, or hide a
+The method uses the source network's Kurokawa power-wave boundary directly. For
+`ImpedanceOhm(Z_L)`, it evaluates
+`den=(Z_L+conj(z_k))-(Z_L-z_k)*S_kk` and
+`S_out=S_EE+S_Ek*((Z_L-z_k)/den)*S_kE`. For `Open`, it evaluates the physical
+boundary `I_k=0` directly, giving
+`S_out=S_EE+S_Ek*(1/(1-S_kk))*S_kE`; it never substitutes infinity, NaN, or a
+large finite impedance. The method does not model an independent load
+excitation, invert S/Z/Y, renormalize, choose a frequency grid, or hide a
 matched-connection policy. The selected port must be valid in a source with at
-least two ports, and `load_ohm.len()` must equal the source frequency count.
+least two ports, and `loads.len()` must equal the source frequency count.
 Finite complex source references with nonzero real parts are supported,
-including the repository's negative-real extension. Loads may be positive,
-zero, or negative resistance; an ideal short is valid, while non-finite open
-sentinels are outside this finite-only API. Exact zero `den` is rejected, but
-finite nonzero near-singular values are not rejected by an arbitrary cutoff;
-`d=Z_L+conj(z_k)==0` remains valid when `den` is nonzero.
+including the repository's negative-real extension. Finite impedance values may
+have positive, zero, or negative resistance, and mixed Open/finite profiles are
+valid. There is no scalar broadcast, default reference, interpolation, sorting,
+or implicit behavior. Exact zero evaluated denominators are rejected, while
+finite nonzero near-singular values remain eligible.
 
 The returned frequency axis, survivor S coordinates, and survivor references
 retain source order exactly. The writer remains its own format boundary: a
@@ -586,14 +591,28 @@ writer/read workflow is:
 cargo run -p rfkit-touchstone --example terminate_port_touchstone
 ```
 
-This is a provisional additive Yellow decision for `0.x`, with no general
-scikit-rf compatibility promise. A canonical differential fixture uses pinned
+This is a provisional Yellow generalization/replacement decision for `0.x`,
+with no general scikit-rf compatibility promise. The unpublished 0.x migration
+from the retired finite-only call is to rename it to `terminate_port_power` and wrap
+each old `Complex64` value in `PortLoad::ImpedanceOhm`; no stored-data
+migration is needed. The retained finite-load differential fixture uses pinned
 scikit-rf `2.0.1` (commit
 `bd651e923cac6020de49a096e1d7e9b5f949f884`), NumPy `2.5.1`, seed `20260950`,
-selected port `2`, loads `[0, 38+12j, 73-9j]` ohm, and survivor order
-`[0,1,3,4]`. Its expected S is obtained through public `z2s`/`Network` load
-construction followed by public `connect`; only floating S output uses the
-recorded strict tolerance.
+selected port `2`, and survivor order `[0,1,3,4]`; it continues to use explicit
+`[0, 38+12j, 73-9j]` ohm values through `PortLoad::ImpedanceOhm`. The new
+mixed-boundary differential fixture uses seed `20260963` and
+`[Open, 31+7j, Open, -17+4j]`: finite loads are constructed with public `z2s`,
+ideal opens use their exact unit reflection, public `connect` performs the
+termination, and the result is explicitly restored to the power-wave definition
+before output-only S comparison at the recorded strict tolerance. Separately,
+the focused Touchstone workflow uses `[Open, 38+12j, 0]` with the writer
+contract's common real `50 Ω` references. It checks an independent local
+boundary equation and reconstructs physical voltage/current, including exact
+zero current at the open, before writer/read-back verification.
+The selected enum and sole generalized method are reversible by one PR revert
+during 0.x: remove the enum/open branch and migrate callers back to the
+historical finite-only method, with no storage, dependency, wave-convention, or
+writer-contract change.
 
 ## Inspect sampled two-port power-wave stability metrics
 

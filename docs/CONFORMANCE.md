@@ -224,8 +224,9 @@ Kurokawa equations. Negative-real and complex references remain covered by
 core mixed-mode boundary/invariant tests, but the scikit-rf differential claim
 is limited to the pinned positive-real-compatible fixture domain.
 
-Issue #86 adds the direct finite physical-load operation
-`Network::terminate_port_impedance_power`. The canonical fixture
+Issue #86's historical direct finite physical-load operation is superseded by
+Issue #114's generalized `Network::terminate_port_power` and
+`PortLoad`. The canonical finite fixture
 `power_wave_terminate_port_impedance_five_port_complex_z0.json` is an
 independently generated asymmetric five-port, three-frequency case with the
 middle source port `2` removed. It uses unequal, frequency-dependent complex
@@ -245,21 +246,43 @@ reconstruction, finite-load/short metadata, and input/output drift.
 The external Rust oracle test
 `crates/rfkit-core/tests/oracle_termination.rs` repeats those strict metadata,
 input, reference, load, frequency, and survivor-order checks, then compares
-only the public method's reduced S against the fixture tolerance. It derives
-the expected survivor references by slicing the source reference array rather
-than treating output z0 as a floating oracle. Core edge coverage separately
-handles negative/zero load resistance, complex and negative-real source
-references, d=0 with nonzero denominator, exact singularity, finite
-near-singularity, malformed shapes, non-finite inputs, and arithmetic failure.
+only `terminate_port_power`'s reduced S against the fixture tolerance, wrapping
+each finite fixture value as `PortLoad::ImpedanceOhm`. It derives the expected
+survivor references by slicing the source reference array rather than treating
+output z0 as a floating oracle. Core edge coverage separately handles
+negative/zero load resistance, complex and negative-real source references,
+d=0 with nonzero denominator, exact singularity, finite near-singularity,
+malformed shapes, non-finite inputs, and arithmetic failure.
+
+Issue #114 adds the pinned mixed-boundary fixture
+`power_wave_terminate_port_mixed_open_five_port_complex_z0.json`. It is an
+independently generated, asymmetric five-port/four-frequency case with middle
+port `2`, seed `20260963`, unequal complex frequency-dependent positive-real
+references, and tagged physical loads `[Open, 31+7j, Open, -17+4j]` ohm. The
+fixture records `operation=terminate_port_power`, explicit
+`PortLoad::Open` tags (never an infinity/NaN sentinel), source/output order,
+survivor references, scikit-rf `2.0.1` commit
+`bd651e923cac6020de49a096e1d7e9b5f949f884`, NumPy `2.5.1`, the observed raw
+and restored wave definitions, and strict output-only `rtol=1e-12`,
+`atol=1e-12`. Its expected response is generated via public `z2s`/Network
+load construction followed by one public `connect`; complex-reference output
+is explicitly restored and checked as power waves before extracting S. All
+metadata, source arrays, tagged loads, frequencies, references, shapes, and
+ordering are exact contract fields. The new oracle registration and Rust test
+must compare only the reduced S within that tolerance.
 
 The focused Touchstone workflow in
 `crates/rfkit-touchstone/tests/public_termination_workflow.rs` and executable
 `crates/rfkit-touchstone/examples/terminate_port_touchstone.rs` parse an
-asymmetric five-port v1.0 S/RI/Hz input, apply the three finite loads, check
-the reduced response independently from the direct boundary equation, and
-write/read the four-port result with unchanged common 50-ohm survivor
-references. No writer-side renormalization, open sentinel, load excitation,
-or mixed-mode/file-format extension is involved.
+asymmetric five-port v1.0 S/RI/Hz input, apply a mixed
+`[Open, 38+12j, 0]` profile (exact open, finite complex load, and ideal short),
+check the reduced response independently from the direct physical boundary,
+verify `I_k=0` for the open sample plus `V_k=-Z_L I_k` for finite samples,
+check source/load immutability, and write/read the four-port result with
+unchanged common 50-ohm survivor references. No writer-side renormalization,
+open sentinel, load excitation, or mixed-mode/file-format extension is
+involved. The sole public termination method is the generalized operation;
+there is no open-only or finite-only companion.
 
 Issue #92 adds the sampled two-port power-wave stability operation
 `Network::two_port_stability_power`. Core tests cover direct analytic values

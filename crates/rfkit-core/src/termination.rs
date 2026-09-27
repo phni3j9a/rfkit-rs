@@ -1,4 +1,4 @@
-//! Direct finite-impedance termination for frequency-major S-parameter data.
+//! Direct physical-load termination for frequency-major S-parameter data.
 //!
 //! The selected port uses currents directed into the source network and the
 //! repository's Kurokawa power-wave convention.  For a finite physical load
@@ -11,20 +11,22 @@
 //! S_out   = S[E,E] + S[E,k]*(c/den)*S[k,E]
 //! ```
 //!
-//! The direct `den` form is intentional: `d` may be exactly zero while the
-//! termination remains valid, so this kernel never forms `c/d`.  Only an
-//! exactly zero evaluated denominator is singular; finite non-zero
+//! The finite-load `den` form is intentional: `d` may be exactly zero while
+//! the termination remains valid, so this kernel never forms `c/d`.  An ideal
+//! open is selected as a separate physical boundary and uses `den = 1-Skk`.
+//! Only an exactly zero evaluated denominator is singular; finite non-zero
 //! near-singular values remain in domain.
 
 use ndarray::{Array2, Array3};
 use num_complex::Complex64;
 use thiserror::Error;
 
-use crate::linalg;
+use crate::{PortLoad, linalg};
 
 const ZERO: Complex64 = Complex64::new(0.0, 0.0);
+const ONE: Complex64 = Complex64::new(1.0, 0.0);
 
-/// Failure modes for the private direct finite-impedance termination kernel.
+/// Failure modes for the private direct physical-load termination kernel.
 #[derive(Debug, Error, PartialEq)]
 pub(crate) enum TerminationError {
     #[error("source S-parameter shape must be (nfreq, nport, nport), got {shape:?}")]
@@ -84,7 +86,7 @@ pub(crate) enum TerminationError {
     },
 }
 
-/// Result of a direct finite-impedance termination.
+/// Result of a direct physical-load termination.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct TerminatedNetwork {
     pub(crate) frequency_hz: Vec<f64>,
@@ -92,19 +94,20 @@ pub(crate) struct TerminatedNetwork {
     pub(crate) z0: Array2<Complex64>,
 }
 
-/// Apply one finite complex load to one source port and remove that port.
+/// Apply one physical load per source sample to one source port and remove
+/// that port.
 ///
 /// This is a raw-array kernel so malformed serde-created `Network` values can
 /// be rejected before any indexing.  The output survivor order is the input
 /// order with `port` omitted, and surviving references are copied exactly.
-pub(crate) fn terminate_port_impedance_power(
+pub(crate) fn terminate_port_power(
     frequency: &[f64],
     s: &Array3<Complex64>,
     z0: &Array2<Complex64>,
     port: usize,
-    load_ohm: &[Complex64],
+    loads: &[PortLoad],
 ) -> Result<TerminatedNetwork, TerminationError> {
-    let shape = validate_input(frequency, s, z0, load_ohm)?;
+    let shape = validate_input(frequency, s, z0, loads)?;
 
     if port >= shape.nports {
         return Err(TerminationError::InvalidPort {
@@ -144,35 +147,60 @@ pub(crate) fn terminate_port_impedance_power(
         }
 
         let source_reference = z0[[frequency_index, port]];
-        let load = load_ohm[frequency_index];
-        let c = checked_sub(load, source_reference, frequency_index, port, port, port)?;
-        let d = checked_add(
-            load,
-            source_reference.conj(),
-            frequency_index,
-            port,
-            port,
-            port,
-        )?;
-        let c_times_skk = checked_mul(
-            c,
-            s[[frequency_index, port, port]],
-            frequency_index,
-            port,
-            port,
-            port,
-        )?;
-        let denominator = checked_sub(d, c_times_skk, frequency_index, port, port, port)?;
-        if denominator == ZERO {
-            return Err(TerminationError::Singular {
-                frequency: frequency_index,
-                port,
-            });
-        }
+        let feedback = match loads[frequency_index] {
+            PortLoad::ImpedanceOhm(load) => {
+                // Keep the historical finite-impedance arithmetic sequence
+                // unchanged.  In particular, d == 0 is valid when the
+                // evaluated denominator is nonzero; do not form c/d.
+                let c = checked_sub(load, source_reference, frequency_index, port, port, port)?;
+                let d = checked_add(
+                    load,
+                    source_reference.conj(),
+                    frequency_index,
+                    port,
+                    port,
+                    port,
+                )?;
+                let c_times_skk = checked_mul(
+                    c,
+                    s[[frequency_index, port, port]],
+                    frequency_index,
+                    port,
+                    port,
+                    port,
+                )?;
+                let denominator = checked_sub(d, c_times_skk, frequency_index, port, port, port)?;
+                if denominator == ZERO {
+                    return Err(TerminationError::Singular {
+                        frequency: frequency_index,
+                        port,
+                    });
+                }
 
-        // This is the only division in the boundary equation.  In
-        // particular, do not form c/d: d == 0 is a valid finite-load case.
-        let feedback = checked_div(c, denominator, frequency_index, port, port, port)?;
+                checked_div(c, denominator, frequency_index, port, port, port)?
+            }
+            PortLoad::Open => {
+                // For I_k = q_k(a_k-b_k) = 0, a_k = b_k and the external
+                // elimination factor is exactly 1/(1-S[k,k]).  Selecting the
+                // boundary here avoids any infinity sentinel or finite-load
+                // fallback, including when external coupling is zero.
+                let denominator = checked_sub(
+                    ONE,
+                    s[[frequency_index, port, port]],
+                    frequency_index,
+                    port,
+                    port,
+                    port,
+                )?;
+                if denominator == ZERO {
+                    return Err(TerminationError::Singular {
+                        frequency: frequency_index,
+                        port,
+                    });
+                }
+                checked_div(ONE, denominator, frequency_index, port, port, port)?
+            }
+        };
 
         for (output_row, &row) in survivors.iter().enumerate() {
             for (output_column, &column) in survivors.iter().enumerate() {
@@ -234,7 +262,7 @@ fn validate_input(
     frequency: &[f64],
     s: &Array3<Complex64>,
     z0: &Array2<Complex64>,
-    load_ohm: &[Complex64],
+    loads: &[PortLoad],
 ) -> Result<InputShape, TerminationError> {
     let shape = s.dim();
     if shape.1 == 0 || shape.1 != shape.2 {
@@ -253,10 +281,10 @@ fn validate_input(
     if z0_shape != (shape.0, shape.1) {
         return Err(TerminationError::InvalidZ0Shape { shape: z0_shape });
     }
-    if load_ohm.len() != shape.0 {
+    if loads.len() != shape.0 {
         return Err(TerminationError::LoadLengthMismatch {
             expected: shape.0,
-            actual: load_ohm.len(),
+            actual: loads.len(),
         });
     }
 
@@ -277,9 +305,11 @@ fn validate_input(
             });
         }
     }
-    for (frequency, &value) in load_ohm.iter().enumerate() {
-        if !is_finite(value) {
-            return Err(TerminationError::NonFiniteLoad { frequency });
+    for (frequency, load) in loads.iter().enumerate() {
+        if let PortLoad::ImpedanceOhm(value) = load {
+            if !is_finite(*value) {
+                return Err(TerminationError::NonFiniteLoad { frequency });
+            }
         }
     }
 
@@ -383,8 +413,8 @@ mod tests {
         )
         .unwrap();
         let z0 = Array2::from_shape_vec((1, 2), vec![c(50.0, 10.0), c(70.0, -4.0)]).unwrap();
-        let load = [c(-50.0, 10.0)]; // d = ZL + conj(z_k) = 0
-        let result = terminate_port_impedance_power(&frequency, &s, &z0, 0, &load)
+        let load = [PortLoad::ImpedanceOhm(c(-50.0, 10.0))]; // d = ZL + conj(z_k) = 0
+        let result = terminate_port_power(&frequency, &s, &z0, 0, &load)
             .expect("finite non-zero den remains valid when d is zero");
         assert_eq!(result.s.dim(), (1, 1, 1));
         assert!(is_finite(result.s[[0, 0, 0]]));
@@ -397,7 +427,13 @@ mod tests {
         let mut s = Array3::zeros((1, 2, 2));
         s[[0, 0, 0]] = c(-1.0, 0.0);
         assert_eq!(
-            terminate_port_impedance_power(&frequency, &s, &z0, 0, &[c(0.0, 0.0)]),
+            terminate_port_power(
+                &frequency,
+                &s,
+                &z0,
+                0,
+                &[PortLoad::ImpedanceOhm(c(0.0, 0.0))],
+            ),
             Err(TerminationError::Singular {
                 frequency: 0,
                 port: 0,
@@ -405,8 +441,14 @@ mod tests {
         );
 
         s[[0, 0, 0]] = c(-1.0 + 1.0e-15, 0.0);
-        let result = terminate_port_impedance_power(&frequency, &s, &z0, 0, &[c(0.0, 0.0)])
-            .expect("finite near-singular denominator must stay in domain");
+        let result = terminate_port_power(
+            &frequency,
+            &s,
+            &z0,
+            0,
+            &[PortLoad::ImpedanceOhm(c(0.0, 0.0))],
+        )
+        .expect("finite near-singular denominator must stay in domain");
         assert!(is_finite(result.s[[0, 0, 0]]));
     }
 
@@ -417,7 +459,13 @@ mod tests {
         let mut z0 = Array2::from_elem((1, 2), c(50.0, 0.0));
         z0[[0, 1]] = c(f64::NAN, 0.0);
         assert_eq!(
-            terminate_port_impedance_power(&frequency, &s, &z0, 0, &[c(1.0, 0.0)]),
+            terminate_port_power(
+                &frequency,
+                &s,
+                &z0,
+                0,
+                &[PortLoad::ImpedanceOhm(c(1.0, 0.0))],
+            ),
             Err(TerminationError::NonFiniteZ0 {
                 frequency: 0,
                 port: 1,
