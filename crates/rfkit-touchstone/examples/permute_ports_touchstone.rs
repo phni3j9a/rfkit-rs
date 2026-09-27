@@ -1,5 +1,6 @@
-//! Load an asymmetric Touchstone multiport, put its physical ports in an
-//! explicit order, and export the result through the supported v1.0 writer.
+//! Load an asymmetric Touchstone multiport, reorder or reduce its physical
+//! ports in an explicit order, and export each result through the supported
+//! v1.0 writer.
 
 use rfkit_touchstone::{parse_touchstone_v1_0_s, write_touchstone_v1_0_s_ri_hz};
 
@@ -16,7 +17,7 @@ fn main() -> rfkit_touchstone::Result<()> {
 
     // The mapping is new-port -> old-port.  Thus [2, 0, 1] puts the source's
     // physical port 2 first, followed by ports 0 and 1.
-    let reordered = source.permute_ports(&[2, 0, 1])?;
+    let reordered = source.select_ports_zero_incident(&[2, 0, 1])?;
     assert_eq!(
         source.s()[[0, 0, 0]],
         num_complex::Complex64::new(0.11, 0.01)
@@ -43,5 +44,15 @@ fn main() -> rfkit_touchstone::Result<()> {
     assert_eq!(reread.s(), reordered.s());
     assert_eq!(reread.z0(), reordered.z0());
     print!("{text}");
+
+    // A proper subnetwork selection is the same exact coordinate-copy
+    // operation with a nonempty subset.  Here the output keeps source ports
+    // 2 and 0 in that order and therefore becomes a two-port network.
+    let reduced = source.select_ports_zero_incident(&[2, 0])?;
+    assert_eq!(reduced.nports(), 2);
+    let reduced_text = write_touchstone_v1_0_s_ri_hz(&reduced)?;
+    let reduced_reread = parse_touchstone_v1_0_s(&reduced_text, 2)?;
+    assert_eq!(reduced_reread.s(), reduced.s());
+    assert_eq!(reduced_reread.z0(), reduced.z0());
     Ok(())
 }

@@ -205,7 +205,7 @@ fn port_exchange_preserves_delta_and_k_state() {
         ],
         vec![c(50.0, 5.0), c(71.0, -3.0), c(55.0, 1.0), c(63.0, 7.0)],
     );
-    let exchanged = source.permute_ports(&[1, 0]).unwrap();
+    let exchanged = source.select_ports_zero_incident(&[1, 0]).unwrap();
     let left = source.two_port_stability_power().unwrap();
     let right = exchanged.two_port_stability_power().unwrap();
     for (left, right) in left.iter().zip(right.iter()) {

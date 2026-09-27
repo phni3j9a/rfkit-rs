@@ -840,6 +840,18 @@ PORT_PERMUTATION_CASE_SPECS = {
 }
 
 
+PORT_SELECTION_CASE_SPECS = {
+    oracle.PORT_SELECTION_CASE_ID: {
+        "operation": "network_select_ports_zero_incident",
+        "ports": 5,
+        "frequencies": 3,
+        "seed": oracle.PORT_SELECTION_RANDOM_SEED,
+        "selection": [4, 1, 3],
+        "omitted": [0, 2],
+    },
+}
+
+
 class PortPermutationRegistrationAndCheckerTests(unittest.TestCase):
     """Protect the exact public port-renumbering oracle contract."""
 
@@ -992,6 +1004,146 @@ class PortPermutationRegistrationAndCheckerTests(unittest.TestCase):
             path.write_bytes(oracle._canonical_bytes(changed_contract))
             self.assertEqual(oracle._check_fixture(path, expected), 1)
 
+
+class PortSelectionRegistrationAndCheckerTests(unittest.TestCase):
+    """Protect the exact ordered zero-incident subset oracle contract."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.np, cls.skrf = oracle._load_dependencies()
+        cls.fixture_path = oracle.PORT_SELECTION_FIXTURE
+        cls.fixture = oracle._read_canonical_json(cls.fixture_path)
+
+    def test_case_is_registered_with_exact_subset_contract(self) -> None:
+        case_id = oracle.PORT_SELECTION_CASE_ID
+        spec = PORT_SELECTION_CASE_SPECS[case_id]
+        registered = {case.case_id: case for case in oracle._CASES}
+        self.assertIn(case_id, registered)
+        case = registered[case_id]
+        self.assertEqual(case.path, oracle.PORT_SELECTION_FIXTURE)
+        self.assertEqual(case.comparison, "exact")
+        self.assertIsNone(case.numeric_output_key)
+
+        metadata = self.fixture["metadata"]
+        self.assertEqual(metadata["case_id"], case_id)
+        self.assertEqual(metadata["operation"], spec["operation"])
+        self.assertEqual(metadata["random_seed"], spec["seed"])
+        self.assertEqual(metadata["numpy_version"], oracle.EXPECTED_NUMPY_VERSION)
+        self.assertEqual(metadata["scikit_rf_version"], oracle.EXPECTED_SCIKIT_RF_VERSION)
+        self.assertEqual(metadata["scikit_rf_commit"], oracle.EXPECTED_SCIKIT_RF_COMMIT)
+        self.assertEqual(metadata["wave_definition"], "power")
+        self.assertEqual(
+            metadata["port_selection"]["ports_new_to_old"], spec["selection"]
+        )
+        self.assertEqual(
+            metadata["port_selection"]["omitted_ports"], spec["omitted"]
+        )
+        self.assertEqual(
+            metadata["port_selection"]["source_mapping"],
+            [
+                {"new_port": 0, "old_port": 4},
+                {"new_port": 1, "old_port": 1},
+                {"new_port": 2, "old_port": 3},
+            ],
+        )
+        self.assertEqual(
+            metadata["reference_impedance"],
+            {
+                "complex": True,
+                "frequency_dependent": True,
+                "per_port": True,
+                "real_positive": True,
+                "unit": "ohm",
+            },
+        )
+        self.assertEqual(
+            metadata["shape"],
+            {
+                "frequency": [3],
+                "input_s": [3, 5, 5],
+                "input_z0": [3, 5],
+                "output_s": [3, 3, 3],
+                "output_z0": [3, 3],
+            },
+        )
+        self.assertEqual(
+            metadata["tolerance_policy"]["comparison"],
+            oracle.PORT_SELECTION_TOLERANCE_COMPARISON,
+        )
+
+    def test_builder_calls_public_subnetwork_with_ordered_subset(self) -> None:
+        case = next(
+            case
+            for case in oracle._CASES
+            if case.case_id == oracle.PORT_SELECTION_CASE_ID
+        )
+        with mock.patch.object(
+            self.skrf.Network,
+            "subnetwork",
+            autospec=True,
+            side_effect=self.skrf.Network.subnetwork,
+        ) as subnetwork:
+            generated = case.builder(self.np, self.skrf)
+
+        self.assertEqual(subnetwork.call_count, 1)
+        self.assertEqual(subnetwork.call_args.args[1], [4, 1, 3])
+        self.assertEqual(
+            generated["metadata"]["operation"],
+            "network_select_ports_zero_incident",
+        )
+        source_s = generated["data"]["s_input"]
+        output_s = generated["data"]["s"]
+        source_z0 = generated["data"]["z0_input_ohm"]
+        output_z0 = generated["data"]["z0_ohm"]
+        selection = [4, 1, 3]
+        for frequency in range(3):
+            for new_row, old_row in enumerate(selection):
+                for new_column, old_column in enumerate(selection):
+                    self.assertEqual(
+                        output_s[frequency][new_row][new_column],
+                        source_s[frequency][old_row][old_column],
+                    )
+                self.assertEqual(
+                    output_z0[frequency][new_row], source_z0[frequency][old_row]
+                )
+
+        self.assertTrue(
+            any(
+                source_s[frequency][row][column]
+                != source_s[frequency][column][row]
+                for frequency in range(3)
+                for row in range(5)
+                for column in range(row + 1, 5)
+            )
+        )
+        self.assertTrue(
+            any(
+                source_z0[frequency][port]["imag"] != 0.0
+                for frequency in range(3)
+                for port in range(5)
+            )
+        )
+
+    def test_exact_checker_rejects_subset_output_or_contract_drift(self) -> None:
+        expected = oracle._canonical_bytes(self.fixture)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / self.fixture_path.name
+            path.write_bytes(expected)
+            self.assertEqual(oracle._check_fixture(path, expected), 0)
+
+            changed_output = copy.deepcopy(self.fixture)
+            changed_output["data"]["s"][0][0][0]["real"] += 1e-13
+            path.write_bytes(oracle._canonical_bytes(changed_output))
+            self.assertEqual(oracle._check_fixture(path, expected), 1)
+
+            changed_contract = copy.deepcopy(self.fixture)
+            changed_contract["metadata"]["port_selection"]["ports_new_to_old"] = [
+                3,
+                1,
+                4,
+            ]
+            path.write_bytes(oracle._canonical_bytes(changed_contract))
+            self.assertEqual(oracle._check_fixture(path, expected), 1)
 
 MIXED_MODE_CASE_SPECS = {
     oracle.MIXED_MODE_FORWARD_CASE_ID: {
@@ -1870,6 +2022,7 @@ class MatrixRegistrationAndCheckerTests(unittest.TestCase):
             len(registered),
             3
             + len(PORT_PERMUTATION_CASE_SPECS)
+            + len(PORT_SELECTION_CASE_SPECS)
             + len(MIXED_MODE_CASE_SPECS)
             + len(INTERPOLATION_CASE_SPECS)
             + len(MATRIX_CASE_SPECS)

@@ -18,6 +18,10 @@ const EXPECTED_OUTPUT: &str = "# Hz S RI R 50\n\
 0.43 0.03 0.41 0.01 0.42 0.02\n\
 0.53 0.03 0.51 0.01 0.52 0.02\n";
 
+const EXPECTED_PARTIAL_OUTPUT: &str = "# Hz S RI R 50\n\
+1000000000 0.33 0.03 0.13 0.03 0.31 0.01 0.11 0.01\n\
+2000000000 0.63 0.03 0.43 0.03 0.61 0.01 0.41 0.01\n";
+
 #[test]
 fn touchstone_ingress_permute_export_reload_preserves_physical_order() {
     let source = parse_touchstone_v1_0_s(INPUT, 3).expect("asymmetric 3-port input parses");
@@ -27,7 +31,7 @@ fn touchstone_ingress_permute_export_reload_preserves_physical_order() {
 
     // `order[new_port] = old_port`: new port 0 is old port 2, new port 1 is
     // old port 0, and new port 2 is old port 1.  These values are written out
-    // independently instead of being obtained from `permute_ports`, so both
+    // independently instead of being obtained from `select_ports_zero_incident`, so both
     // S axes and the mapping direction are observable in the assertion.
     let expected_s = Array3::from_shape_vec(
         (2, 3, 3),
@@ -56,7 +60,7 @@ fn touchstone_ingress_permute_export_reload_preserves_physical_order() {
     let expected_z0 = Array2::from_elem((2, 3), Complex64::new(50.0, 0.0));
 
     let permuted = source
-        .permute_ports(&[2, 0, 1])
+        .select_ports_zero_incident(&[2, 0, 1])
         .expect("a complete non-involutive permutation succeeds");
     assert_eq!(permuted.frequency(), &source_frequency);
     assert_eq!(permuted.s(), &expected_s);
@@ -79,4 +83,21 @@ fn touchstone_ingress_permute_export_reload_preserves_physical_order() {
     assert_eq!(reloaded.frequency(), &source_frequency);
     assert_eq!(reloaded.s(), &expected_s);
     assert_eq!(reloaded.z0(), &expected_z0);
+
+    // The generalized operation also supports a genuine ordered reduction.
+    // Retain old ports 2 and 0 in that order, then exercise the same writer
+    // and readback boundary on the resulting two-port network.
+    let partial = source
+        .select_ports_zero_incident(&[2, 0])
+        .expect("a nonempty ordered subset succeeds");
+    assert_eq!(partial.s().dim(), (2, 2, 2));
+    assert_eq!(partial.z0().dim(), (2, 2));
+    let partial_text = write_touchstone_v1_0_s_ri_hz(&partial)
+        .expect("writer accepts the reduced common-reference network");
+    assert_eq!(partial_text, EXPECTED_PARTIAL_OUTPUT);
+    let partial_reloaded =
+        parse_touchstone_v1_0_s(&partial_text, 2).expect("reduced exported text parses");
+    assert_eq!(partial_reloaded.frequency(), partial.frequency());
+    assert_eq!(partial_reloaded.s(), partial.s());
+    assert_eq!(partial_reloaded.z0(), partial.z0());
 }

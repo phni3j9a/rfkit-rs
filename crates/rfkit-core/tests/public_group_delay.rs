@@ -215,7 +215,7 @@ fn amplitude_and_constant_phase_offset_invariants_and_port_permutation_covarianc
     let right = scaled.group_delay_secant_power(2, 1).unwrap();
     assert_delays(&left, &right);
 
-    let permuted = source.permute_ports(&[2, 0, 1]).unwrap();
+    let permuted = source.select_ports_zero_incident(&[2, 0, 1]).unwrap();
     let covariance = permuted.group_delay_secant_power(0, 2).unwrap();
     assert_delays(&left, &covariance);
 }

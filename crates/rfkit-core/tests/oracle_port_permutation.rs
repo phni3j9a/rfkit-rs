@@ -253,7 +253,7 @@ fn public_port_permutation_matches_pinned_scikit_rf_fixture_exactly() {
         }
     }
 
-    let permuted = network.permute_ports(EXPECTED_ORDER).unwrap();
+    let permuted = network.select_ports_zero_incident(EXPECTED_ORDER).unwrap();
     assert_eq!(permuted.nports(), EXPECTED_ORDER.len());
     assert_eq!(permuted.frequency().len(), EXPECTED_FREQUENCY_SHAPE[0]);
 

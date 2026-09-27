@@ -514,8 +514,8 @@ fn direct_connection_is_covariant_under_port_permutation_and_ab_exchange() {
     let original = a.connect_power(1, &b, 2).unwrap();
     let order_a = [2, 0, 1];
     let order_b = [3, 1, 0, 2];
-    let permuted_a = a.permute_ports(&order_a).unwrap();
-    let permuted_b = b.permute_ports(&order_b).unwrap();
+    let permuted_a = a.select_ports_zero_incident(&order_a).unwrap();
+    let permuted_b = b.select_ports_zero_incident(&order_b).unwrap();
     let permuted = permuted_a.connect_power(2, &permuted_b, 3).unwrap();
     assert_network_finite(&permuted);
     // New A survivors [old 2, old 0], then new B survivors [old 3, old 1, old 0].
