@@ -729,6 +729,71 @@ comparison on samples comfortably away from one.  Only scalar SVD outputs use
 the recorded `rtol=1e-12`, `atol=1e-12` tolerance; inputs, references,
 frequency labels, classes, and Boolean evidence are exact contract fields.
 
+## Inspect active reflection for an explicit coherent drive
+
+`Network::active_reflection_power` evaluates sampled per-port active
+reflection for a caller-owned incident power-wave table:
+
+```rust
+use ndarray::Array2;
+use num_complex::Complex64;
+use rfkit_touchstone::parse_touchstone_v1_0_s;
+
+fn inspect() -> rfkit_touchstone::Result<()> {
+    let network = parse_touchstone_v1_0_s(
+        "# Hz S RI R 50\n\
+         1000000000 0.10 0.0 0.25 0.0 0.0 0.0\n\
+         0.40 0.0 0.10 0.0 0.20 0.0\n\
+         0.15 0.0 0.35 0.0 0.05 0.0\n",
+        3,
+    )?;
+    let incident = Array2::from_shape_vec(
+        (1, 3),
+        vec![
+            Complex64::new(1.0, 0.0),
+            Complex64::new(-1.0, 0.0),
+            Complex64::new(0.0, 0.0),
+        ],
+    )
+    .expect("incident shape");
+    let active = network.active_reflection_power(&incident)?;
+    assert_eq!(active[[0, 2]], None);
+    assert!((active[[0, 0]].unwrap().re + 0.15).abs() < 1.0e-14);
+    Ok(())
+}
+```
+
+The input has exact shape `(nfreq,nport)` and contains one complex incident
+Kurokawa power-wave amplitude per stored sample and physical port.  The method
+forms `b[f,i] = sum_j S[f,i,j] * incident[f,j]` without conjugation and
+returns `b[f,i] / incident[f,i]` as an owned
+`Array2<Option<Complex64>>`.  An exact zero incident coordinate returns
+`None`, even when coupling produces a nonzero outgoing wave there; other
+coordinates remain `Some`, and an all-zero row is valid and returns all
+`None`.  A common nonzero complex scale of one excitation row leaves the
+ratios unchanged within the documented binary64 domain.  The operation does
+not clip, classify passivity, calculate VSWR/dB, optimize a drive, or rewrite
+the source.
+
+Validation is performed before indexing: finite nonempty frequency/S axes,
+positive square S, finite exact `(nfreq,nport)` references and incident data,
+and strictly positive-real references are required.  Unequal,
+frequency-dependent, per-port references are supported, including complex
+references with positive real parts; frequency labels remain pointwise labels.
+Nonstandard owned ndarray layouts are valid.  The implementation uses one
+fixed frequency/row/column summation order and scale-safe complex division
+without forming a squared denominator norm.  A finite input whose ratio is
+outside the representable binary64 domain returns a contextual arithmetic
+error rather than `None`, NaN, Inf, clipping, or an epsilon fallback.
+
+The focused Touchstone workflow demonstrates in-phase versus phase-opposed
+drives, a coherent ratio differing from `Sii`, coupled `None` semantics, and
+all-zero rows without changing the writer:
+
+```text
+cargo run -p rfkit-touchstone --example active_reflection_power_touchstone
+```
+
 ## Inspect adjacent-interval group delay of a selected S entry
 
 `Network::group_delay_secant_power` selects one stored power-wave coordinate

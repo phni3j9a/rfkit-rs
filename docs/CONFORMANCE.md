@@ -734,6 +734,50 @@ cargo test -p rfkit-touchstone --test public_reference_plane_shift_workflow
 cargo run -p rfkit-touchstone --example reference_plane_shift_touchstone
 ```
 
+## Active-reflection conformance (Issue #120)
+
+Issue #120 adds `Network::active_reflection_power`, which evaluates the
+actual per-port coherent response for an explicit `(nfreq,nport)` incident
+power-wave table. The canonical N=4 fixture
+`tools/oracle/fixtures/active_reflection_power_four_port_real_z0.json` uses
+NumPy `2.5.1`, scikit-rf `2.0.1` at commit
+`bd651e923cac6020de49a096e1d7e9b5f949f884`, seed `20260966`, three frequency
+samples, asymmetric S data, unequal real-positive frequency-dependent
+references, and independently varying nonzero complex drive rows. The
+generator calls public `Network.s_active` once per frequency on a fresh
+power-defined Network and checks the output independently against
+`S @ a / a`; each drive is compared before and after the public call to guard
+against mutation. Only `data.active_reflection` uses `rtol=1e-12`,
+`atol=1e-12`; frequency, S, z0, incident rows, metadata, and shapes are exact.
+
+The Python checker tests registration/schema/metadata, deterministic
+regeneration, public-helper call count, mutation protection, independent
+superposition/division, output-only tolerance, and wrong input/order/value
+detection. Core local tests cover exact zero/`None` behavior, all-zero rows,
+coupled nonzero outgoing waves at undriven ports, complex positive-real
+reference reconstruction, common complex scaling, physical port permutation,
+nonstandard ndarray layouts, finite extreme scales, and contextual arithmetic
+errors. `None` is never used for arithmetic failure and canonical oracle data
+contains no epsilon-derived zero values.
+
+The focused Touchstone workflow in
+`crates/rfkit-touchstone/tests/public_active_reflection_power_workflow.rs` and
+`crates/rfkit-touchstone/examples/active_reflection_power_touchstone.rs` loads
+an independently authored three-port v1.0 RI/Hz sweep, compares in-phase and
+phase-opposed drives, demonstrates `Some`/`None` at an undriven coupled port,
+checks that the coherent ratio differs from `Sii`, preserves the source and
+incident tables, and leaves the writer boundary unchanged.
+
+Reproducible checks are:
+
+```text
+/home/server/.cache/rfkit-rs-oracle-venv/bin/python tools/oracle/generate_oracle.py check --case active_reflection_power_four_port_real_z0
+cd tools/oracle && /home/server/.cache/rfkit-rs-oracle-venv/bin/python -m unittest test_generate_oracle.ActiveReflectionPowerRegistrationAndCheckerTests
+cargo test -p rfkit-core --test oracle_active_reflection_power
+cargo test -p rfkit-touchstone --test public_active_reflection_power_workflow
+cargo run -p rfkit-touchstone --example active_reflection_power_touchstone
+```
+
 ## Reporting
 
 Eventually CI should publish a machine-generated coverage report such as:

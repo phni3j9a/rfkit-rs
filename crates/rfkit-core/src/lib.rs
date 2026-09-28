@@ -49,6 +49,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use thiserror::Error;
 
+mod active_reflection;
 mod cascade;
 mod connection;
 mod direct_connection;
@@ -1187,6 +1188,66 @@ pub enum Error {
         stage: MaxSingularValuePowerArithmetic,
     },
 
+    #[error("active-reflection power frequency axis must not be empty")]
+    EmptyActiveReflectionPowerFrequency,
+
+    #[error(
+        "active-reflection power frequency length does not match the S-parameter frequency dimension: expected {expected}, got {actual}"
+    )]
+    ActiveReflectionPowerFrequencyLengthMismatch { expected: usize, actual: usize },
+
+    #[error(
+        "active-reflection power requires a square positive-port S-parameter shape, got {shape:?}"
+    )]
+    InvalidActiveReflectionPowerSShape { shape: Vec<usize> },
+
+    #[error(
+        "active-reflection power reference-impedance shape must be (nfreq, nport), got {shape:?}"
+    )]
+    InvalidActiveReflectionPowerZ0Shape { shape: Vec<usize> },
+
+    #[error("active-reflection power incident-wave shape must be (nfreq, nport), got {shape:?}")]
+    InvalidActiveReflectionPowerIncidentShape { shape: Vec<usize> },
+
+    #[error("active-reflection power frequency is non-finite at index {index}: {value:?}")]
+    NonFiniteActiveReflectionPowerFrequency { index: usize, value: f64 },
+
+    #[error(
+        "active-reflection power received a non-finite S-parameter at frequency {frequency}, row {row}, column {column}"
+    )]
+    NonFiniteActiveReflectionPowerS {
+        frequency: usize,
+        row: usize,
+        column: usize,
+    },
+
+    #[error(
+        "active-reflection power received a non-finite reference impedance at frequency {frequency}, port {port}"
+    )]
+    NonFiniteActiveReflectionPowerZ0 { frequency: usize, port: usize },
+
+    #[error(
+        "active-reflection power reference impedance must have a strictly positive real part at frequency {frequency}, port {port}: {value:?}"
+    )]
+    NonPositiveRealActiveReflectionPowerReferenceImpedance {
+        frequency: usize,
+        port: usize,
+        value: Complex64,
+    },
+
+    #[error(
+        "active-reflection power received a non-finite incident wave at frequency {frequency}, port {port}"
+    )]
+    NonFiniteActiveReflectionPowerIncident { frequency: usize, port: usize },
+
+    #[error(
+        "active-reflection power arithmetic became non-finite or unrepresentable at frequency {frequency}, output port {output_port}"
+    )]
+    NonFiniteActiveReflectionPowerComputation {
+        frequency: usize,
+        output_port: usize,
+    },
+
     #[error("group-delay frequency axis must contain at least two samples, got {actual}")]
     GroupDelayTooFewFrequencySamples { actual: usize },
 
@@ -1827,6 +1888,67 @@ impl Network {
     pub fn max_singular_value_power(&self) -> Result<Vec<f64>> {
         max_singular_value::max_singular_value_power(&self.frequency.hz, &self.s, &self.z0)
             .map_err(map_max_singular_value_error)
+    }
+
+    /// Computes per-port active reflection for an explicitly supplied
+    /// frequency-major incident power-wave table.
+    ///
+    /// `incident[f, j]` is the complex Kurokawa incident-wave amplitude at
+    /// stored sample `f` and port `j`, in this network's reference
+    /// coordinates. For every output port `i`, the operation evaluates
+    ///
+    /// ```text
+    /// b[f, i] = sum_j S[f, i, j] * incident[f, j]
+    /// Gamma_active[f, i] = b[f, i] / incident[f, i]
+    /// ```
+    ///
+    /// The S-parameter axes remain `[port_out, port_in]`; the returned owned
+    /// array has exact shape `(nfreq, nport)` and the original frequency and
+    /// port order. There is no conjugation, implicit frequency broadcasting,
+    /// reference renormalization, load interpretation, passivity clipping, or
+    /// stability classification. A common nonzero complex scaling of one
+    /// incident row leaves the ratios invariant within the documented
+    /// binary64 numerical domain.
+    ///
+    /// An exactly complex-zero incident coordinate produces `None` at that
+    /// coordinate, even when coupling produces a nonzero outgoing wave there.
+    /// Other coordinates in the same row are still evaluated normally, and an
+    /// all-zero row is valid. `None` represents only this undefined
+    /// zero-denominator case; it is never used to hide arithmetic failure.
+    ///
+    /// The method requires finite frequency labels, finite square S data,
+    /// finite incident data with exact shape `(nfreq, nport)`, and finite
+    /// stored references with strictly positive real parts. Unequal,
+    /// frequency-dependent, complex references are validated and retained as
+    /// the network's wave-coordinate metadata; no 50-ohm default is assumed.
+    /// Frequency labels remain pointwise data and may be negative, duplicate,
+    /// descending, or signed zero.
+    ///
+    /// The coherent sum is accumulated in ascending input-port order using
+    /// scale-separated binary64 mantissas and exponents. The quotient is
+    /// formed once with a scale-safe complex division, so the implementation
+    /// does not form a squared denominator norm that can overflow or
+    /// underflow. This deterministic arithmetic domain does not promise
+    /// correctly rounded exact dot products, order-independent summation,
+    /// arbitrary precision, or recovery after a genuinely unrepresentable
+    /// quotient.
+    ///
+    /// This additive operation is provisional during the `0.x` series; its
+    /// name and signature are not a `1.0` compatibility promise.
+    ///
+    /// # Errors
+    ///
+    /// Returns operation-specific structured errors for malformed
+    /// serde-created axes or shapes, non-finite labels/data, non-positive-real
+    /// references, and non-finite or unrepresentable arithmetic. Validation
+    /// completes before any sampled indexing, so malformed deserialized
+    /// networks and incident tables never panic.
+    pub fn active_reflection_power(
+        &self,
+        incident: &Array2<Complex64>,
+    ) -> Result<Array2<Option<Complex64>>> {
+        active_reflection::active_reflection_power(&self.frequency.hz, &self.s, &self.z0, incident)
+            .map_err(map_active_reflection_power_error)
     }
 
     /// Computes adjacent-interval secant group delay for one stored
@@ -4067,6 +4189,69 @@ fn map_max_singular_value_error(error: max_singular_value::MaxSingularValueError
         max_singular_value::MaxSingularValueError::Arithmetic { frequency, stage } => {
             Error::NonFiniteMaxSingularValuePowerComputation { frequency, stage }
         }
+    }
+}
+
+fn map_active_reflection_power_error(
+    error: active_reflection::ActiveReflectionPowerError,
+) -> Error {
+    match error {
+        active_reflection::ActiveReflectionPowerError::EmptyFrequency => {
+            Error::EmptyActiveReflectionPowerFrequency
+        }
+        active_reflection::ActiveReflectionPowerError::FrequencyLengthMismatch {
+            expected,
+            actual,
+        } => Error::ActiveReflectionPowerFrequencyLengthMismatch { expected, actual },
+        active_reflection::ActiveReflectionPowerError::InvalidSShape { shape } => {
+            Error::InvalidActiveReflectionPowerSShape {
+                shape: vec![shape.0, shape.1, shape.2],
+            }
+        }
+        active_reflection::ActiveReflectionPowerError::InvalidZ0Shape { shape } => {
+            Error::InvalidActiveReflectionPowerZ0Shape {
+                shape: vec![shape.0, shape.1],
+            }
+        }
+        active_reflection::ActiveReflectionPowerError::InvalidIncidentShape { shape } => {
+            Error::InvalidActiveReflectionPowerIncidentShape {
+                shape: vec![shape.0, shape.1],
+            }
+        }
+        active_reflection::ActiveReflectionPowerError::NonFiniteFrequency { index, value } => {
+            Error::NonFiniteActiveReflectionPowerFrequency { index, value }
+        }
+        active_reflection::ActiveReflectionPowerError::NonFiniteS {
+            frequency,
+            row,
+            column,
+        } => Error::NonFiniteActiveReflectionPowerS {
+            frequency,
+            row,
+            column,
+        },
+        active_reflection::ActiveReflectionPowerError::NonFiniteZ0 { frequency, port } => {
+            Error::NonFiniteActiveReflectionPowerZ0 { frequency, port }
+        }
+        active_reflection::ActiveReflectionPowerError::NonPositiveRealZ0 {
+            frequency,
+            port,
+            value,
+        } => Error::NonPositiveRealActiveReflectionPowerReferenceImpedance {
+            frequency,
+            port,
+            value,
+        },
+        active_reflection::ActiveReflectionPowerError::NonFiniteIncident { frequency, port } => {
+            Error::NonFiniteActiveReflectionPowerIncident { frequency, port }
+        }
+        active_reflection::ActiveReflectionPowerError::Arithmetic {
+            frequency,
+            output_port,
+        } => Error::NonFiniteActiveReflectionPowerComputation {
+            frequency,
+            output_port,
+        },
     }
 }
 
