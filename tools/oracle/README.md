@@ -164,6 +164,18 @@ tolerant; source arrays, frequency/reference metadata, sample classes, and
 public pinned scikit-rf `Network.is_passive(tol=1e-12)` call per sample solely
 as limited Boolean evidence away from sigma=1; it is not the Rust API or a
 broad passivity compatibility claim.
+One sampled active-reflection case is also registered:
+`active_reflection_power_four_port_real_z0` is an independently seeded
+three-frequency, asymmetric four-port fixture using NumPy `default_rng` seed
+`20260966`, unequal real-positive frequency-dependent references, and a
+different nonzero complex incident row at every frequency. Expected ratios
+come from one public scikit-rf `Network.s_active` call per frequency on a
+fresh power-defined Network; the builder checks each result against an
+independent `S @ a / a` evaluation and compares the drive bit-for-bit before
+and after the call. Only `data.active_reflection` uses strict
+`rtol=1e-12`, `atol=1e-12`; all input arrays and metadata are exact. The
+fixture deliberately contains no zero drive coordinates, so Rust `None`
+semantics remain local evidence rather than epsilon-derived oracle data.
 One adjacent-interval group-delay case is also registered:
 `group_delay_secant_power_three_port_branch_crossing` uses the public pinned
 `Network.s_rad_unwrap` property followed by explicit interval differencing.
@@ -252,7 +264,7 @@ this check after the canonical fixture checker and runs the checker unit tests.
 
 ## Generate and verify
 
-The harness has forty-nine registered canonical cases. The original three cases
+The harness has fifty-four registered canonical cases. The original three cases
 remain unchanged:
 
 - `three_port_complex_z0` — the representative four-frequency, three-port
@@ -373,6 +385,18 @@ The sampled two-port stability case is:
   supplies delta, and only `data.delta`/`data.rollet_k` use strict
   `rtol=1e-12`, `atol=1e-12` tolerance. The Rust `Option` undefined policy is
   exercised by local unilateral/isolated tests rather than a JSON infinity.
+
+The sampled active-reflection case is:
+
+- `active_reflection_power_four_port_real_z0` — an independently seeded
+  three-frequency asymmetric four-port input with seed `20260966`, unequal
+  real-positive frequency-dependent references, and one nonzero complex
+  incident row per frequency. Public `Network.s_active` is called once per
+  sample on a fresh power-defined Network and checked against independent
+  `S @ a / a`; the drive is guarded against public-helper mutation. Only
+  `data.active_reflection` uses strict `rtol=1e-12`, `atol=1e-12`; all
+  contract inputs and metadata are exact. Zero/`None` behavior is intentionally
+  local Rust evidence.
 
 The inverse-cascade case is:
 

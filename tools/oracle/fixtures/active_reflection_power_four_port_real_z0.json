@@ -1,0 +1,460 @@
+{
+  "data": {
+    "active_reflection": [
+      [
+        {
+          "imag": -0.03505766238742891,
+          "real": 0.24669730201135018
+        },
+        {
+          "imag": 0.0455189163187538,
+          "real": 0.038827988779597894
+        },
+        {
+          "imag": 0.1235837869695015,
+          "real": 0.20000711024217432
+        },
+        {
+          "imag": -0.1301206511077858,
+          "real": 0.15615715001885022
+        }
+      ],
+      [
+        {
+          "imag": -0.017054538001008826,
+          "real": 0.10806621790854014
+        },
+        {
+          "imag": -0.25853729256943336,
+          "real": -0.39747612263776766
+        },
+        {
+          "imag": 0.04217734998221012,
+          "real": -0.061244279259524706
+        },
+        {
+          "imag": -0.02620964665979263,
+          "real": 0.007655107395432556
+        }
+      ],
+      [
+        {
+          "imag": 0.1044573167630917,
+          "real": -0.10510383207880127
+        },
+        {
+          "imag": 0.06354675281360213,
+          "real": 0.026342248798677505
+        },
+        {
+          "imag": 0.908585266733912,
+          "real": -0.026711018916415294
+        },
+        {
+          "imag": -0.04539797195568865,
+          "real": 0.06564540494416377
+        }
+      ]
+    ],
+    "frequency_hz": [
+      900000000.0,
+      1600000000.0,
+      2800000000.0
+    ],
+    "incident": [
+      [
+        {
+          "imag": 0.9692343864861805,
+          "real": -0.5004756894776936
+        },
+        {
+          "imag": 0.36673016249603924,
+          "real": -1.541589879470623
+        },
+        {
+          "imag": -0.30704606074647695,
+          "real": -0.16510655152795592
+        },
+        {
+          "imag": 0.6952055978819282,
+          "real": 0.6127324878220973
+        }
+      ],
+      [
+        {
+          "imag": 1.1897538400056873,
+          "real": 0.17034975570932842
+        },
+        {
+          "imag": -0.2419875531428734,
+          "real": 0.33346775373905263
+        },
+        {
+          "imag": 0.4251363075826867,
+          "real": -0.6761198847566301
+        },
+        {
+          "imag": -1.4553379483549358,
+          "real": 1.089627343968952
+        }
+      ],
+      [
+        {
+          "imag": -0.6642361793629835,
+          "real": 1.4677351220936938
+        },
+        {
+          "imag": -0.6602652200145014,
+          "real": -0.45408855642797097
+        },
+        {
+          "imag": -0.10022153354285523,
+          "real": -0.19907005631977692
+        },
+        {
+          "imag": 0.3990727707207748,
+          "real": -0.4543762264590263
+        }
+      ]
+    ],
+    "s_input": [
+      [
+        [
+          {
+            "imag": 0.0379005419019016,
+            "real": 0.09221958785396613
+          },
+          {
+            "imag": -0.051195117528799475,
+            "real": 0.02352196121745585
+          },
+          {
+            "imag": -0.07416062673654092,
+            "real": -0.04517617181491617
+          },
+          {
+            "imag": 0.030573626612631365,
+            "real": 0.07744731531881592
+          }
+        ],
+        [
+          {
+            "imag": -0.06823637361335544,
+            "real": 0.035742769622601867
+          },
+          {
+            "imag": 0.07168560882754674,
+            "real": -0.009823276011567983
+          },
+          {
+            "imag": 0.023429730494522596,
+            "real": 0.08277951576300753
+          },
+          {
+            "imag": 0.10009017638040454,
+            "real": -0.06135817893896476
+          }
+        ],
+        [
+          {
+            "imag": 0.026271792544984993,
+            "real": -0.009757087679073925
+          },
+          {
+            "imag": 0.03227791682565255,
+            "real": -0.0015716896181293437
+          },
+          {
+            "imag": 0.04704790866000139,
+            "real": 0.04201938796333727
+          },
+          {
+            "imag": -0.013773977373547755,
+            "real": 0.02910603000498486
+          }
+        ],
+        [
+          {
+            "imag": -0.029991612180281374,
+            "real": -0.020292425695187667
+          },
+          {
+            "imag": -0.018361919873252468,
+            "real": -0.07635485142010767
+          },
+          {
+            "imag": 0.004924148961402224,
+            "real": -0.03254224921708815
+          },
+          {
+            "imag": 0.004506502922803202,
+            "real": 0.030559384048052026
+          }
+        ]
+      ],
+      [
+        [
+          {
+            "imag": 0.003719117865769549,
+            "real": 0.09640773036058546
+          },
+          {
+            "imag": -0.07660687769176934,
+            "real": -0.007846005950777987
+          },
+          {
+            "imag": -0.068311609615386,
+            "real": 0.07687798918196027
+          },
+          {
+            "imag": 0.016371545251632414,
+            "real": 0.04310346936696114
+          }
+        ],
+        [
+          {
+            "imag": 0.06465631525948165,
+            "real": -0.09364750639357956
+          },
+          {
+            "imag": 0.056639565473898944,
+            "real": 0.004015407627927851
+          },
+          {
+            "imag": -0.006056370946425482,
+            "real": 0.031020616555960265
+          },
+          {
+            "imag": -0.01875352365023145,
+            "real": -0.06569570732955606
+          }
+        ],
+        [
+          {
+            "imag": -0.0054719093952966934,
+            "real": 0.030145897354928508
+          },
+          {
+            "imag": -0.027547845870678173,
+            "real": -0.020166295234016897
+          },
+          {
+            "imag": 0.07647702029254286,
+            "real": 0.015228870209384777
+          },
+          {
+            "imag": 0.01678556848832243,
+            "real": 0.04001721428227173
+          }
+        ],
+        [
+          {
+            "imag": -0.007685432404102548,
+            "real": -0.06416335477797039
+          },
+          {
+            "imag": -0.051196432734582346,
+            "real": 0.10258045978116562
+          },
+          {
+            "imag": -0.08029453438162083,
+            "real": -0.03246248394834731
+          },
+          {
+            "imag": -0.0336625956081505,
+            "real": -0.05224613372001865
+          }
+        ]
+      ],
+      [
+        [
+          {
+            "imag": 0.08002078249912464,
+            "real": -0.05530444752464089
+          },
+          {
+            "imag": -0.09662384554221874,
+            "real": -0.08692511389156445
+          },
+          {
+            "imag": 0.017367041208176823,
+            "real": 0.014049127137000671
+          },
+          {
+            "imag": 0.06846594286279838,
+            "real": 0.009146402636197495
+          }
+        ],
+        [
+          {
+            "imag": 0.04491393123814527,
+            "real": 0.0557350335192944
+          },
+          {
+            "imag": -0.0583697315100406,
+            "real": 0.09248109270298883
+          },
+          {
+            "imag": 0.06124296403209045,
+            "real": -0.041273816045555085
+          },
+          {
+            "imag": 0.0572970622673613,
+            "real": -0.016294503294552367
+          }
+        ],
+        [
+          {
+            "imag": -0.0484593540096885,
+            "real": 0.054033954190459026
+          },
+          {
+            "imag": 0.07365271745910254,
+            "real": -0.008308530347935338
+          },
+          {
+            "imag": 0.08134934748372177,
+            "real": 0.004443331639059566
+          },
+          {
+            "imag": 0.04438660984628123,
+            "real": -0.016066037920034006
+          }
+        ],
+        [
+          {
+            "imag": 0.03486712882684176,
+            "real": -0.04396443452456313
+          },
+          {
+            "imag": 0.005530280249596089,
+            "real": 0.03351204020531352
+          },
+          {
+            "imag": -0.021558283771650377,
+            "real": -0.05803289984290848
+          },
+          {
+            "imag": -0.011099937756706929,
+            "real": -0.06030643478018066
+          }
+        ]
+      ]
+    ],
+    "z0_input_ohm": [
+      [
+        {
+          "imag": 0.0,
+          "real": 41.0
+        },
+        {
+          "imag": 0.0,
+          "real": 58.0
+        },
+        {
+          "imag": 0.0,
+          "real": 73.0
+        },
+        {
+          "imag": 0.0,
+          "real": 66.0
+        }
+      ],
+      [
+        {
+          "imag": 0.0,
+          "real": 43.5
+        },
+        {
+          "imag": 0.0,
+          "real": 61.0
+        },
+        {
+          "imag": 0.0,
+          "real": 70.0
+        },
+        {
+          "imag": 0.0,
+          "real": 68.0
+        }
+      ],
+      [
+        {
+          "imag": 0.0,
+          "real": 47.0
+        },
+        {
+          "imag": 0.0,
+          "real": 64.0
+        },
+        {
+          "imag": 0.0,
+          "real": 76.0
+        },
+        {
+          "imag": 0.0,
+          "real": 69.0
+        }
+      ]
+    ]
+  },
+  "metadata": {
+    "case_id": "active_reflection_power_four_port_real_z0",
+    "drive_definition": "complex incident Kurokawa power-wave amplitudes in sqrt(W), one row per stored frequency and one column per physical port; a common nonzero complex row scale is immaterial",
+    "input_recipe": "independent asymmetric four-port S stack and frequency-varying complex drive rows from NumPy default_rng seed 20260966; three frequencies [0.9,1.6,2.8] GHz; unequal real-positive per-port references varying by frequency; every incident component is finite and nonzero; no prior fixture values reused",
+    "numpy_version": "2.5.1",
+    "operation": "network_active_reflection_power",
+    "order": "frequency-major; S axes [port_out,port_in]; incident and output columns use physical port order",
+    "random_seed": 20260966,
+    "reference_impedance": {
+      "complex": false,
+      "frequency_dependent": true,
+      "per_port": true,
+      "real_part": "strictly positive",
+      "unit": "ohm"
+    },
+    "schema": "rfkit-rs.oracle.fixture",
+    "schema_version": 1,
+    "scikit_rf_commit": "bd651e923cac6020de49a096e1d7e9b5f949f884",
+    "scikit_rf_version": "2.0.1",
+    "shape": {
+      "frequency": [
+        3
+      ],
+      "input_incident": [
+        3,
+        4
+      ],
+      "input_s": [
+        3,
+        4,
+        4
+      ],
+      "input_z0": [
+        3,
+        4
+      ],
+      "output_active_reflection": [
+        3,
+        4
+      ]
+    },
+    "tolerance_policy": {
+      "atol": 1e-12,
+      "comparison": "only data.active_reflection is numeric output; frequency, S, z0, incident, metadata, and shapes are exact",
+      "justification": "Strict binary64 mixed tolerance for the dimensionless per-port active reflection ratios.  Expected values come from one public scikit-rf Network.s_active call per frequency on a fresh nonzero drive vector and are independently checked against S @ a / a.  Only data.active_reflection is numeric output; frequency, S, z0, incident rows, metadata, and shapes are exact canonical contract fields.",
+      "mutation_guard": "each public Network.s_active call receives a fresh copy of one nonzero incident row; the row is compared bitwise before and after the call",
+      "regeneration": "canonical UTF-8 JSON; public Network.s_active once per frequency on a fresh power-defined Network, independently checked against NumPy einsum S @ a / a",
+      "rtol": 1e-12
+    },
+    "units": {
+      "active_reflection": "dimensionless",
+      "frequency": "Hz",
+      "incident": "sqrt(W), common arbitrary normalization",
+      "s": "dimensionless",
+      "z0": "ohm"
+    },
+    "wave_definition": "power",
+    "zero_policy": "exact complex-zero incident coordinate -> None; all-zero rows are valid; canonical incident rows contain no exact zero"
+  }
+}

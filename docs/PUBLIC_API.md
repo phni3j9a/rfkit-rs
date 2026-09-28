@@ -1482,6 +1482,98 @@ this bounded sampled workflow.  The selected dependency and adapter are
 reversible before stabilization: rollback removes the method, diagnostics,
 tests, fixture, dependency, and documentation without storage migration.
 
+## Active reflection for an explicit coherent drive (Issue #120 Yellow decision)
+
+The provisional public surface adds one borrowing, owned-result diagnostic:
+
+```rust
+impl Network {
+    pub fn active_reflection_power(
+        &self,
+        incident: &Array2<Complex64>,
+    ) -> Result<Array2<Option<Complex64>>>;
+}
+```
+
+`incident` has exact shape `(nfreq,nport)` and contains the complex incident
+Kurokawa power-wave amplitude at every stored sample and physical port, in the
+network's own reference coordinates. With S axes `[port_out,port_in]`, the
+method evaluates:
+
+```text
+b[f,i] = sum_j S[f,i,j] * incident[f,j]
+active[f,i] = b[f,i] / incident[f,i]
+```
+
+The sum has no conjugation. The result preserves frequency/port order and
+owns an exact `(nfreq,nport)` array. An exactly complex-zero incident
+coordinate returns `None`, even if coupling makes `b[f,i]` nonzero; other
+coordinates remain `Some`, and an all-zero row is valid and returns all
+`None`. A common nonzero complex scale of one excitation row leaves the
+dimensionless ratios unchanged within the documented binary64 domain. A zero
+numerator with nonzero incident amplitude is `Some(0)`.
+
+Before indexing, the operation validates a nonempty finite frequency axis with
+matching S cardinality, positive square finite S, exact finite `(nfreq,nport)`
+z0 and incident shapes, and finite references with strictly positive real
+parts. Unequal, per-port, frequency-dependent, and complex positive-real
+references are supported. Negative, duplicate, descending, and signed-zero
+frequency labels remain pointwise labels. Nonstandard owned ndarray layouts
+are valid. S may be singular, active, nonreciprocal, or non-passive. The
+operation does not insert a default 50 ohm reference, renormalize, sort,
+interpolate, optimize the excitation, clip `|active|`, classify passivity or
+stability, or return VSWR/dB/accepted-power values. The source network and
+incident table are borrowed and unchanged.
+
+The implementation uses one deterministic frequency/row/column summation
+order and checked binary64 complex arithmetic. Complex division is
+scale-safe and does not form an avoidably overflowing or underflowing squared
+denominator norm. Finite inputs with a genuinely unrepresentable quotient,
+non-finite intermediate, or other checked arithmetic failure return a
+contextual operation/sample/output-port error. The method does not promise
+correctly rounded exact dot products, order-independent summation, arbitrary
+precision, or a fallback after arithmetic failure.
+
+The selected Yellow boundary is deliberately one explicit per-sample drive
+table and an `Option`-valued array. Rejecting a complete sweep on any zero,
+nudging zeros to epsilon, returning NaN/Inf sentinels, accepting one
+frequency-shared vector, exposing a pseudo-wave name, returning only a
+worst-case norm, or making callers reproduce the sum/division would either
+hide undefined coordinates or lose the actual coherent-drive workflow. This
+is additive/provisional 0.x behavior with no serialization or dependency
+compatibility change. Rollback removes the method, diagnostics, tests,
+fixture, Touchstone workflow, and documentation in one revert; no data
+migration is required.
+
+There is no public overlap with `max_singular_value_power`,
+`terminate_port_power`, or stored diagonal `Sii`: the first maximizes a
+whole-vector norm, the second imposes a physical unexcited load and removes a
+port, and `Sii` equals an active ratio only when all other incident entries
+are zero. The implementation is a `REWRITE` from the repository scattering
+equation `b=S*a` and established Kurokawa wave coordinates. Pinned public
+scikit-rf `Network.s_active` is a finite real-positive-reference behavior
+oracle only; its implicit frequency broadcast, pseudo-wave wording, epsilon
+zero replacement, and possible input mutation are not Rust semantics.
+
+The canonical fixture
+`tools/oracle/fixtures/active_reflection_power_four_port_real_z0.json` uses
+NumPy `2.5.1`, scikit-rf `2.0.1` at commit
+`bd651e923cac6020de49a096e1d7e9b5f949f884`, seed `20260966`, three samples,
+an asymmetric N=4 S stack, unequal real-positive references, and independently
+varying nonzero complex incident rows. Expected output uses one fresh public
+`Network.s_active` call per frequency and an independent `S @ a / a` guard;
+only the active-reflection output uses `rtol=1e-12`, `atol=1e-12`. Zero/`None`,
+complex-reference V/I reconstruction, scale invariance, permutation, and
+arithmetic boundaries are local Rust evidence rather than serialized
+scikit-rf compatibility claims.
+
+The focused Touchstone path is
+`crates/rfkit-touchstone/examples/active_reflection_power_touchstone.rs` and
+`crates/rfkit-touchstone/tests/public_active_reflection_power_workflow.rs`.
+It compares in-phase and phase-opposed drives, displays `Some`/`None`, checks
+coupled outgoing response at an undriven port, and verifies all-zero rows
+without changing the writer boundary.
+
 ## Adjacent-interval power-wave group delay (Issue #100 Yellow decision)
 
 The provisional public surface adds one borrowing, owned-result diagnostic:
@@ -1702,6 +1794,11 @@ impl Network {
         &self,
         one_way_phase_rad: &Array2<f64>,
     ) -> Result<Network>;
+
+    pub fn active_reflection_power(
+        &self,
+        incident: &Array2<Complex64>,
+    ) -> Result<Array2<Option<Complex64>>>;
 }
 ```
 
@@ -1750,6 +1847,12 @@ The exact internal delegation remains an implementation detail. The semantic dis
   transformation.  It keeps phase sign, radians, frequency samples, and
   positive-real references explicit; it does not infer a distance/delay model,
   perform hidden renormalization, or imply all-frequency realizability.
+- `active_reflection_power` reports the actual coherent per-port
+  `b[f,i] / incident[f,i]` ratio for one explicit `(nfreq,nport)` incident
+  power-wave table, returning `None` only for exact zero incident
+  coordinates.  It is distinct from the whole-vector maximum singular value,
+  physical port termination, and stored diagonal `Sii`; it does not optimize
+  the drive, classify passivity, or hide an epsilon/NaN zero policy.
 
 Do not shorten these to broad names such as `connect`, `interpolate`, or `renormalize` until the library has enough supported semantics and evidence to justify what those names mean. Introducing such a default is at least Yellow and becomes Red when reasonable conventions conflict or the choice would freeze hidden policy.
 
