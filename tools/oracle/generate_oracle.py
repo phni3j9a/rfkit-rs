@@ -908,6 +908,31 @@ PORT_SELECTION_TOLERANCE_COMPARISON = (
     "coordinate copies under a_R=0 and require no arithmetic tolerance"
 )
 
+# Frequency-sample selection is a data-reindexing operation distinct from
+# interpolation: the caller supplies observation identities, including their
+# order, rather than a target grid.  Keep this fixture separate from the port
+# selection lineage so its integer-array scikit-rf path and sample mapping are
+# independently auditable.
+FREQUENCY_SELECTION_FIXTURE = (
+    Path(__file__).resolve().parent
+    / "fixtures"
+    / "frequency_sample_selection_three_port_complex_z0.json"
+)
+FREQUENCY_SELECTION_CASE_ID = "frequency_sample_selection_three_port_complex_z0"
+FREQUENCY_SELECTION_RANDOM_SEED = 20_260_967
+FREQUENCY_SELECTION_NFREQ = 4
+FREQUENCY_SELECTION_NPORTS = 3
+FREQUENCY_SELECTION_SAMPLES = (3, 1)
+FREQUENCY_SELECTION_INPUT_RECIPE = (
+    "independent local NumPy default_rng input with seed 20260967, an "
+    "asymmetric complex three-port S stack, four irregular frequency samples, "
+    "and unequal complex frequency-dependent per-port z0"
+)
+FREQUENCY_SELECTION_TOLERANCE_COMPARISON = (
+    "exact canonical UTF-8 JSON bytes; frequency, S, and z0 are pure ordered "
+    "observation copies and require no arithmetic tolerance"
+)
+
 # Mixed-mode conversion is kept as two small, direction-specific fixtures.  The
 # input arrays are authored independently for each direction: the inverse case
 # does not reuse the forward output.  This is important because a forward
@@ -2799,6 +2824,158 @@ def _port_selection_fixture(np: Any, skrf: Any) -> dict[str, Any]:
         },
         "data": {
             "frequency_hz": [float(value) for value in frequency],
+            "s": _complex_array(selected_s),
+            "s_input": _complex_array(network_s),
+            "z0_input_ohm": _complex_array(network_z0),
+            "z0_ohm": _complex_array(selected_z0),
+        },
+    }
+
+
+def _frequency_selection_inputs(np: Any) -> tuple[Any, Any, Any]:
+    """Build the independent measured-network sample-selection input family."""
+
+    frequency_hz = np.array(
+        [0.77e9, 1.19e9, 2.31e9, 3.47e9],
+        dtype=np.float64,
+    )
+    rng = np.random.default_rng(FREQUENCY_SELECTION_RANDOM_SEED)
+    s = (
+        rng.normal(
+            loc=0.0,
+            scale=0.061,
+            size=(
+                FREQUENCY_SELECTION_NFREQ,
+                FREQUENCY_SELECTION_NPORTS,
+                FREQUENCY_SELECTION_NPORTS,
+            ),
+        )
+        + 1j
+        * rng.normal(
+            loc=0.0,
+            scale=0.043,
+            size=(
+                FREQUENCY_SELECTION_NFREQ,
+                FREQUENCY_SELECTION_NPORTS,
+                FREQUENCY_SELECTION_NPORTS,
+            ),
+        )
+    ).astype(np.complex128)
+    for frequency in range(FREQUENCY_SELECTION_NFREQ):
+        for port in range(FREQUENCY_SELECTION_NPORTS):
+            s[frequency, port, port] += complex(
+                0.12 + 0.018 * frequency + 0.014 * port,
+                -0.031 + 0.011 * frequency - 0.006 * port,
+            )
+
+    frequency_index = np.arange(FREQUENCY_SELECTION_NFREQ, dtype=np.float64)[:, None]
+    port_index = np.arange(FREQUENCY_SELECTION_NPORTS, dtype=np.float64)[None, :]
+    z0 = (
+        35.0
+        + 4.75 * port_index
+        + 1.9 * frequency_index
+        + 1j
+        * (
+            2.4
+            - 0.95 * port_index
+            + 0.31 * frequency_index
+            + 0.07 * port_index * frequency_index
+        )
+    ).astype(np.complex128)
+
+    if (
+        not np.isfinite(frequency_hz).all()
+        or not np.isfinite(s).all()
+        or not np.isfinite(z0).all()
+    ):
+        raise ValueError("frequency-selection inputs must be finite")
+    _assert_non_symmetric(np, s, name="frequency-selection S input")
+    if np.array_equal(z0[0], z0[1]) or np.array_equal(z0[:, 0], z0[:, 1]):
+        raise ValueError("frequency-selection z0 must vary by frequency and port")
+    if not np.any(z0.imag != 0.0):
+        raise ValueError("frequency-selection z0 must include complex values")
+
+    return frequency_hz, s, z0
+
+
+def _frequency_selection_fixture(np: Any, skrf: Any) -> dict[str, Any]:
+    """Build the ordered sample fixture through scikit-rf integer-array indexing."""
+
+    frequency_hz, source_s, source_z0 = _frequency_selection_inputs(np)
+    case_id = FREQUENCY_SELECTION_CASE_ID
+    network = skrf.Network(
+        f=frequency_hz,
+        s=source_s,
+        z0=source_z0,
+        s_def="power",
+        name=case_id,
+    )
+
+    samples = np.asarray(FREQUENCY_SELECTION_SAMPLES, dtype=np.int64)
+    selected = network[samples]
+    frequency = np.asarray(selected.f, dtype=np.float64)
+    network_s = np.asarray(network.s, dtype=np.complex128)
+    network_z0 = np.asarray(network.z0, dtype=np.complex128)
+    selected_s = np.asarray(selected.s, dtype=np.complex128)
+    selected_z0 = np.asarray(selected.z0, dtype=np.complex128)
+    expected_s = network_s[samples, :, :]
+    expected_z0 = network_z0[samples, :]
+
+    if not np.array_equal(frequency, frequency_hz[samples]):
+        raise ValueError("frequency-selection output frequency changed")
+    if not np.array_equal(selected_s, expected_s):
+        raise ValueError("scikit-rf integer-array S output is not an exact reindex")
+    if not np.array_equal(selected_z0, expected_z0):
+        raise ValueError("scikit-rf integer-array z0 output is not an exact reindex")
+
+    source_shape = {
+        "frequency": list(frequency_hz.shape),
+        "input_s": list(network_s.shape),
+        "input_z0": list(network_z0.shape),
+        "output_s": list(selected_s.shape),
+        "output_z0": list(selected_z0.shape),
+    }
+    source_mapping = [
+        {"new_sample": new_sample, "old_sample": int(old_sample)}
+        for new_sample, old_sample in enumerate(samples)
+    ]
+    return {
+        "metadata": {
+            "case_id": case_id,
+            "frequency_selection": {
+                "description": "samples[new_sample] = old_sample",
+                "samples_new_to_old": [int(sample) for sample in samples],
+                "source_mapping": source_mapping,
+            },
+            "input_recipe": FREQUENCY_SELECTION_INPUT_RECIPE,
+            "numpy_version": np.__version__,
+            "operation": "network_select_frequency_samples",
+            "random_seed": FREQUENCY_SELECTION_RANDOM_SEED,
+            "reference_impedance": {
+                "complex": True,
+                "frequency_dependent": True,
+                "per_port": True,
+                "unit": "ohm",
+            },
+            "schema": "rfkit-rs.oracle.fixture",
+            "schema_version": SCHEMA_VERSION,
+            "scikit_rf_commit": EXPECTED_SCIKIT_RF_COMMIT,
+            "scikit_rf_version": skrf.__version__,
+            "shape": source_shape,
+            "tolerance_policy": {
+                "comparison": FREQUENCY_SELECTION_TOLERANCE_COMPARISON,
+                "regeneration": "exact canonical UTF-8 JSON bytes",
+            },
+            "units": {
+                "frequency": "Hz",
+                "s": "dimensionless",
+                "z0": "ohm",
+            },
+            "wave_definition": network.s_def,
+        },
+        "data": {
+            "frequency_hz": [float(value) for value in frequency],
+            "frequency_input_hz": [float(value) for value in frequency_hz],
             "s": _complex_array(selected_s),
             "s_input": _complex_array(network_s),
             "z0_input_ohm": _complex_array(network_z0),
@@ -8362,6 +8539,12 @@ _CASES = (
         PORT_SELECTION_CASE_ID,
         PORT_SELECTION_FIXTURE,
         _port_selection_fixture,
+        "exact",
+    ),
+    _OracleCase(
+        FREQUENCY_SELECTION_CASE_ID,
+        FREQUENCY_SELECTION_FIXTURE,
+        _frequency_selection_fixture,
         "exact",
     ),
     _OracleCase(

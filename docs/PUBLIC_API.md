@@ -326,6 +326,7 @@ A change that adds a public operation overlapping an existing one must either co
 | S→Y extraction | `to_y_power`, `to_y_direct_power` | Same Y. The composed path needs invertible `I-S` and Z; the direct path needs only its `A` system, so its domain is expected to contain the composed domain. | One `to_y_power` using the direct path. |
 | Y ingress | `from_y_via_z_power`, `from_y_direct_power` | Same S. The composed path fails on singular Y, which the direct path accepts. | One `from_y_power` using the direct path. |
 | Power-wave renormalization | `renormalize_power`, `renormalize_direct_power` | Same S. The composed path fails at singular Z; the direct path does not need Z. | One `renormalize_power` using the direct path. First confirm whether any composed-only validation is a semantic contract rather than a domain limitation. |
+| Stored frequency observations vs. Cartesian interpolation | `select_frequency_samples`, `interpolate_cartesian_linear` | They agree on some exact finite knots, but selection identifies and copies stored observations (including repeated labels and caller order), while interpolation accepts an explicit target grid and may synthesize values. | Coexist until a reviewed replacement can express both observation identity and synthesized-grid semantics without hidden matching or narrowing either domain. |
 The following are **not** overlaps, because their qualifiers are semantic: `cascade_direct_power`, which keeps within-group coupling in one simultaneous solve and differs from repeated connection; `inverse_cascade_power`; the `equal_pair` mixed-mode pair; and the `_power` wave suffix itself.
 
 ## Consolidated physical power-wave connection (Issue #109 Yellow decision)
@@ -851,6 +852,61 @@ The full and partial ingress/export workflow is exercised by
 `crates/rfkit-touchstone/examples/permute_ports_touchstone.rs`: it preserves
 the historical full-reorder writer/readback bytes and adds a real `[2, 0]`
 two-port reduction followed by the same writer/readback boundary.
+
+## Exact ordered frequency-sample selection (Issue #122 Yellow decision)
+
+The provisional public method selects stored frequency observations by their
+zero-based identities:
+
+```rust
+impl Network {
+    pub fn select_frequency_samples(&self, samples: &[usize]) -> Result<Network>;
+}
+```
+
+`samples[new_sample] = old_sample` is a nonempty, ordered list of distinct
+source indices. Every size from one through the source sample count is valid,
+including a complete reorder or identity. Frequency labels are not lookup
+keys: duplicate values remain distinct observations. For every selected
+sample, the operation copies frequency, both S axes, and the aligned z0 row
+exactly. It performs no RF arithmetic, finite-value/reference policy,
+interpolation, sorting, deduplication, matching, averaging, or metadata
+change. Signed zero and NaN payloads are copied as stored; unselected
+non-finite data does not block a structurally valid selection, while selected
+non-finite data remains for downstream validation.
+
+The source is fully shape-validated before any selection index is accessed,
+including malformed serde-created values: the frequency axis is nonempty and
+matches S, S is square with a positive port count, and z0 has exact
+`(nfreq,nport)` shape. Empty, out-of-range, and duplicate selections produce
+operation-specific structured errors with selection position, offending index,
+source count, and duplicate positions. Identity does not bypass validation.
+The result owns new standard-layout arrays and accepts nonstandard owned
+ndarray source layouts; neither source nor the borrowed index slice changes.
+
+This is intentionally separate from `interpolate_cartesian_linear`. On the
+shared finite, strictly increasing exact-knot domain their copied values may
+agree, but the caller-visible meanings differ: selection preserves stored
+observation identity/order (including repeated labels), whereas interpolation
+defines a target frequency grid and can synthesize samples. The overlap row in
+the inventory records coexistence; retirement would require a reviewed
+replacement expressing both semantics without hidden matching or narrowing
+either successful domain.
+
+The additive 0.x Yellow choice is provisional and reversible by one PR revert;
+there is no storage, serialization, dependency, or compatibility migration.
+The implementation is a REWRITE from the canonical frequency-major indexing
+equations. The pinned differential fixture
+`tools/oracle/fixtures/frequency_sample_selection_three_port_complex_z0.json`
+uses public scikit-rf integer-array selection with version `2.0.1`, commit
+`bd651e923cac6020de49a096e1d7e9b5f949f884`, NumPy `2.5.1`, and seed
+`20260967`; frequency, S, and z0 are exact-copy contract fields. Core tests
+cover composition, inverse reorder, port-selection commutation, exact knots,
+special values, malformed shapes, and structured diagnostics. The focused
+Touchstone workflow is
+`crates/rfkit-touchstone/tests/public_frequency_selection_workflow.rs` with
+executable counterpart
+`crates/rfkit-touchstone/examples/select_frequency_samples_touchstone.rs`.
 
 ## Equal-pair mixed-mode power waves (Issue #84 Yellow decision)
 
@@ -1752,6 +1808,8 @@ impl Network {
     pub fn cascade_direct_power(&self, other: &Network) -> Result<Network>;
 
     pub fn select_ports_zero_incident(&self, ports: &[usize]) -> Result<Network>;
+
+    pub fn select_frequency_samples(&self, samples: &[usize]) -> Result<Network>;
 
     pub fn to_mixed_mode_equal_pair_power(&self, pair_count: usize) -> Result<Network>;
 
