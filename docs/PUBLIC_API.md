@@ -1258,6 +1258,76 @@ also uses unequal real/complex positive-real references and strict
 `rtol=1e-12`, `atol=1e-12` output-only comparison. The external Touchstone workflow is
 `cargo run -p rfkit-touchstone --example two_port_stability_touchstone`.
 
+## Two-port transducer power gain (Issue #124 Yellow decision)
+
+The provisional public surface adds one borrowing, owned-result diagnostic:
+
+```rust
+impl Network {
+    pub fn two_port_transducer_gain_power(
+        &self,
+        source_impedance_ohm: &[Complex64],
+        load_impedance_ohm: &[Complex64],
+    ) -> Result<Vec<f64>>;
+}
+```
+
+The network must be exactly a two-port, with stored frequency-major S shape
+`(nfreq,2,2)` and z0 shape `(nfreq,2)`. Port 0 is the source/input and port 1
+is the load/output. Each borrowed slice has exactly `nfreq` finite complex
+ohm entries with strictly positive real parts. Stored S/z0 and frequency
+labels are validated completely before indexing: S/z0 are finite, stored z0
+has strictly positive real parts, the frequency axis is nonempty and finite,
+and no ordering, uniqueness, sign, interpolation, or sorting policy is
+added. Complex, unequal, and frequency-dependent references are supported.
+
+For each sample the method builds target references exactly as `[Zs,Zl]`,
+re-expresses the physical network through the checked direct Kurokawa
+power-wave change, and returns the linear dimensionless ratio
+`G_T=|S_new[1,0]|²`. The target entries are not conjugated. In the equivalent
+RMS-phasor definition, currents point into the network and
+
+```text
+a=(V+ZI)/(2 sqrt(Re(Z))),  b=(V-conj(Z)I)/(2 sqrt(Re(Z))),  b=S a.
+```
+
+The direct wave-change solve is the sole evaluation path and is completed for
+all samples before S21 extraction. Exact singularity therefore errors even
+when forward transmission is exactly zero. Exact complex-zero S21 returns
+`0.0`; a finite nonzero amplitude whose square overflows or rounds to zero is
+an operation-specific arithmetic error, while a representable positive
+subnormal gain is retained. The source network and both slices remain
+unchanged. The operation does not claim scikit-rf dedicated-API compatibility
+and does not provide stability, maximum/available/operating gain,
+optimization, gain circles, noise, dB, tolerance verdicts, or all-frequency
+realization.
+
+The Yellow alternatives were caller composition through
+`renormalize_direct_power`, Gamma-valued inputs, a 50-ohm-only helper, or a
+generic gain/impedance hierarchy. The selected explicit impedance tables,
+fixed physical ports, power-wave qualifier, linear result, and checked
+positive-real domain make source/load semantics visible with one public
+entrypoint. This is additive provisional 0.x behavior with no compatibility
+guarantee; rollback is one PR revert removing the method/module, tests,
+fixture, Touchstone workflow, and docs, with no stored-data or dependency
+migration. The implementation is a REWRITE from the RMS V/I/Thevenin/load
+equations while reusing the existing checked direct-renormalization kernel.
+There is no new public-surface overlap entry: the method exposes a distinct
+caller-facing physical diagnostic, not another renormalization strategy.
+
+The canonical fixture
+`two_port_transducer_gain_power_four_frequency.json` uses pinned public
+scikit-rf `Network.renormalize(column_stack((Zs,Zl)), s_def="power")`, NumPy
+`2.5.1`, scikit-rf `2.0.1` at commit
+`bd651e923cac6020de49a096e1d7e9b5f949f884`, and seed `20261015`. It contains
+an independently authored non-reciprocal four-frequency two-port with unequal
+complex positive-real stored z0 and varying complex positive-real Zs/Zl.
+Only linear gain output uses strict `rtol=1e-12`, `atol=1e-12`; all inputs,
+mapping, shapes, and metadata are exact. Generation and the Rust checker also
+perform an independent original-coordinate V/I/Thevenin/load solve. The
+focused Touchstone workflow is
+`cargo run -p rfkit-touchstone --example transducer_gain_touchstone`.
+
 ## Direct physical power-wave connection (Issue #88 Yellow decision)
 
 Superseded by #109
@@ -1840,6 +1910,12 @@ impl Network {
     ) -> Result<Network>;
     pub fn two_port_stability_power(&self) -> Result<Vec<TwoPortStability>>;
 
+    pub fn two_port_transducer_gain_power(
+        &self,
+        source_impedance_ohm: &[Complex64],
+        load_impedance_ohm: &[Complex64],
+    ) -> Result<Vec<f64>>;
+
     pub fn max_singular_value_power(&self) -> Result<Vec<f64>>;
 
     pub fn group_delay_secant_power(
@@ -1894,6 +1970,13 @@ The exact internal delegation remains an implementation detail. The semantic dis
   returns an amplitude diagnostic rather than a passivity verdict and does
   not imply an all-frequency, internal-pole, stability, or scikit-rf API
   compatibility promise.
+- `two_port_transducer_gain_power` reports a two-port's sampled linear
+  transducer power ratio for explicit source/load positive-real impedance
+  tables.  It is a physical diagnostic built on the checked direct
+  power-wave re-expression, not a second renormalization strategy or a
+  dedicated scikit-rf API compatibility promise; source/load drive and load
+  semantics, zero/singularity behavior, and arithmetic errors remain explicit
+  in its contract above.
 - `group_delay_secant_power` reports shortest-principal-phase secants on
   adjacent source-frequency intervals for one selected stored power-wave S
   coordinate.  It is explicitly interval-aligned and seconds-valued, unlike

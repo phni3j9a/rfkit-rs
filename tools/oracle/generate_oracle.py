@@ -1025,6 +1025,39 @@ TWO_PORT_STABILITY_TOLERANCE_JUSTIFICATION = (
     "allow rtol=1e-12 and atol=1e-12 cross-language rounding."
 )
 
+# The transducer-gain fixture is an independently seeded two-port workflow.
+# scikit-rf's public Network.renormalize at the caller's explicit [Zs, Zl]
+# table supplies the expected power-wave S21; a separate original-coordinate
+# V/I/Thevenin/load solve is checked during generation so the fixture does not
+# merely certify the same direct wave-change expression twice.
+TWO_PORT_TRANSDUCER_GAIN_POWER_FIXTURE = (
+    Path(__file__).resolve().parent
+    / "fixtures"
+    / "two_port_transducer_gain_power_four_frequency.json"
+)
+TWO_PORT_TRANSDUCER_GAIN_POWER_CASE_ID = (
+    "two_port_transducer_gain_power_four_frequency"
+)
+TWO_PORT_TRANSDUCER_GAIN_POWER_RANDOM_SEED = 20_261_015
+TWO_PORT_TRANSDUCER_GAIN_POWER_NFREQ = 4
+TWO_PORT_TRANSDUCER_GAIN_POWER_NPORTS = 2
+TWO_PORT_TRANSDUCER_GAIN_POWER_RTOL = 1e-12
+TWO_PORT_TRANSDUCER_GAIN_POWER_ATOL = 1e-12
+TWO_PORT_TRANSDUCER_GAIN_POWER_INPUT_RECIPE = (
+    "independent four-frequency non-reciprocal two-port S stack from NumPy "
+    "default_rng seed 20261015 with deterministic diagonal terms; unequal "
+    "complex positive-real frequency-dependent stored z0 and varying complex "
+    "positive-real source/load impedance tables; no prior fixture values reused"
+)
+TWO_PORT_TRANSDUCER_GAIN_POWER_TOLERANCE_JUSTIFICATION = (
+    "Strict binary64 mixed tolerance for dimensionless linear transducer power "
+    "ratios.  Only data.transducer_gain is numeric-tolerance output; frequency, "
+    "S, stored references, source/load tables, metadata, and shapes are exact. "
+    "The expected path is pinned public Network.renormalize(..., s_def=power) "
+    "followed by |S21|² and is independently guarded with an original-coordinate "
+    "V/I/Thevenin/load solve."
+)
+
 # The maximum-singular-value case is an independently seeded four-port,
 # multi-frequency diagnostic.  NumPy's public scalar SVD output is the numeric
 # oracle; pinned scikit-rf ``Network.is_passive(tol=1e-12)`` is recorded only
@@ -7264,6 +7297,238 @@ def _two_port_stability_fixture(np: Any, skrf: Any) -> dict[str, Any]:
     }
 
 
+def _two_port_transducer_gain_power_inputs(np: Any) -> tuple[Any, Any, Any, Any, Any]:
+    """Build the independently seeded transducer-gain input family."""
+
+    frequency_hz = np.asarray([0.8e9, 1.7e9, 2.65e9, 4.2e9], dtype=np.float64)
+    rng = np.random.default_rng(TWO_PORT_TRANSDUCER_GAIN_POWER_RANDOM_SEED)
+    source_s = (
+        rng.normal(
+            loc=0.0,
+            scale=0.04,
+            size=(
+                TWO_PORT_TRANSDUCER_GAIN_POWER_NFREQ,
+                TWO_PORT_TRANSDUCER_GAIN_POWER_NPORTS,
+                TWO_PORT_TRANSDUCER_GAIN_POWER_NPORTS,
+            ),
+        )
+        + 1j
+        * rng.normal(
+            loc=0.0,
+            scale=0.035,
+            size=(
+                TWO_PORT_TRANSDUCER_GAIN_POWER_NFREQ,
+                TWO_PORT_TRANSDUCER_GAIN_POWER_NPORTS,
+                TWO_PORT_TRANSDUCER_GAIN_POWER_NPORTS,
+            ),
+        )
+    ).astype(np.complex128)
+    source_s += np.asarray(
+        [
+            [[0.08 + 0.02j, 0.0j], [0.0j, 0.12 - 0.01j]],
+            [[0.10 - 0.01j, 0.0j], [0.0j, 0.15 + 0.03j]],
+            [[0.12 + 0.01j, 0.0j], [0.0j, 0.18 - 0.02j]],
+            [[0.14 - 0.02j, 0.0j], [0.0j, 0.20 + 0.01j]],
+        ],
+        dtype=np.complex128,
+    )
+    source_z0 = np.asarray(
+        [
+            [43.0 + 5.0j, 71.0 - 4.0j],
+            [47.0 + 6.0j, 76.0 + 3.0j],
+            [51.0 + 4.0j, 81.0 - 5.0j],
+            [56.0 + 7.0j, 88.0 + 2.0j],
+        ],
+        dtype=np.complex128,
+    )
+    source_impedance = np.asarray(
+        [32.0 + 7.0j, 46.0 - 5.0j, 59.0 + 8.0j, 67.0 - 3.0j],
+        dtype=np.complex128,
+    )
+    load_impedance = np.asarray(
+        [83.0 - 9.0j, 64.0 + 6.0j, 97.0 - 7.0j, 72.0 + 11.0j],
+        dtype=np.complex128,
+    )
+    expected_shapes = {
+        "frequency": (TWO_PORT_TRANSDUCER_GAIN_POWER_NFREQ,),
+        "s": (
+            TWO_PORT_TRANSDUCER_GAIN_POWER_NFREQ,
+            TWO_PORT_TRANSDUCER_GAIN_POWER_NPORTS,
+            TWO_PORT_TRANSDUCER_GAIN_POWER_NPORTS,
+        ),
+        "z0": (
+            TWO_PORT_TRANSDUCER_GAIN_POWER_NFREQ,
+            TWO_PORT_TRANSDUCER_GAIN_POWER_NPORTS,
+        ),
+        "source": (TWO_PORT_TRANSDUCER_GAIN_POWER_NFREQ,),
+        "load": (TWO_PORT_TRANSDUCER_GAIN_POWER_NFREQ,),
+    }
+    actual_shapes = {
+        "frequency": frequency_hz.shape,
+        "s": source_s.shape,
+        "z0": source_z0.shape,
+        "source": source_impedance.shape,
+        "load": load_impedance.shape,
+    }
+    if actual_shapes != expected_shapes:
+        raise ValueError(f"transducer-gain input shape drifted: {actual_shapes}")
+    if not np.isfinite(frequency_hz).all() or not np.isfinite(source_s).all():
+        raise ValueError("transducer-gain frequency/S inputs must be finite")
+    for name, values in (
+        ("stored z0", source_z0),
+        ("source impedance", source_impedance),
+        ("load impedance", load_impedance),
+    ):
+        if not np.isfinite(values).all() or not np.all(values.real > 0.0):
+            raise ValueError(f"transducer-gain {name} must be finite positive-real")
+    if np.array_equal(source_s, source_s.swapaxes(1, 2)):
+        raise ValueError("transducer-gain S input must be non-reciprocal")
+    return frequency_hz, source_s, source_z0, source_impedance, load_impedance
+
+
+def _two_port_transducer_gain_power_fixture(np: Any, skrf: Any) -> dict[str, Any]:
+    """Generate |S21|² from public renormalization and guard with V/I solve."""
+
+    (
+        frequency_hz,
+        source_s,
+        source_z0,
+        source_impedance,
+        load_impedance,
+    ) = _two_port_transducer_gain_power_inputs(np)
+    case_id = TWO_PORT_TRANSDUCER_GAIN_POWER_CASE_ID
+    network = skrf.Network(
+        f=frequency_hz,
+        s=source_s,
+        z0=source_z0,
+        s_def="power",
+        name=case_id,
+    )
+    input_s = np.asarray(network.s, dtype=np.complex128).copy()
+    input_z0 = np.asarray(network.z0, dtype=np.complex128).copy()
+    if not np.array_equal(input_s, source_s) or not np.array_equal(input_z0, source_z0):
+        raise ValueError("transducer-gain Network construction changed exact inputs")
+    target_z0 = np.column_stack((source_impedance, load_impedance))
+    network.renormalize(target_z0, s_def="power")
+    network_s = np.asarray(network.s, dtype=np.complex128)
+    transducer_gain = np.asarray(np.abs(network_s[:, 1, 0]) ** 2, dtype=np.float64)
+
+    # Independent original-coordinate V/I/Thevenin/load guard.  First derive
+    # Z from the stored wave relation by explicitly solving the V/I equations,
+    # then solve [Z11+Zs, Z12; Z21, Z22+Zl] I=[Vs,0].  For RMS Vs=1,
+    # P_av=1/(4 Re(Zs)) and P_load=Re(Zl)|I2|².
+    impedance = np.empty_like(source_s)
+    identity = np.eye(TWO_PORT_TRANSDUCER_GAIN_POWER_NPORTS, dtype=np.complex128)
+    for frequency in range(TWO_PORT_TRANSDUCER_GAIN_POWER_NFREQ):
+        normalization = np.diag(
+            1.0 / (2.0 * np.sqrt(np.abs(source_z0[frequency].real)))
+        )
+        g = np.diag(source_z0[frequency])
+        impedance[frequency] = np.linalg.solve(
+            (identity - source_s[frequency]) @ normalization,
+            (source_s[frequency] @ g + np.conj(g)) @ normalization,
+        )
+    independent_gain = np.empty(TWO_PORT_TRANSDUCER_GAIN_POWER_NFREQ, dtype=np.float64)
+    for frequency in range(TWO_PORT_TRANSDUCER_GAIN_POWER_NFREQ):
+        z = impedance[frequency]
+        loaded_system = np.asarray(
+            [
+                [z[0, 0] + source_impedance[frequency], z[0, 1]],
+                [z[1, 0], z[1, 1] + load_impedance[frequency]],
+            ],
+            dtype=np.complex128,
+        )
+        currents = np.linalg.solve(loaded_system, np.asarray([1.0, 0.0j]))
+        independent_gain[frequency] = (
+            4.0
+            * source_impedance[frequency].real
+            * load_impedance[frequency].real
+            * np.abs(currents[1]) ** 2
+        )
+    if not np.isfinite(transducer_gain).all() or not np.isfinite(independent_gain).all():
+        raise ValueError("transducer-gain outputs must be finite")
+    if not np.allclose(
+        transducer_gain,
+        independent_gain,
+        rtol=5.0e-12,
+        atol=5.0e-15,
+    ):
+        raise ValueError(
+            "public renormalization gain disagrees with independent V/I solve: "
+            f"public={transducer_gain.tolist()!r}, independent={independent_gain.tolist()!r}"
+        )
+
+    return {
+        "metadata": {
+            "case_id": case_id,
+            "input_recipe": TWO_PORT_TRANSDUCER_GAIN_POWER_INPUT_RECIPE,
+            "numpy_version": np.__version__,
+            "operation": "network_two_port_transducer_gain_power",
+            "physical_definition": {
+                "available_source_power": "abs(Vs)^2/(4*Re(Zs))",
+                "current_direction": "into the network",
+                "load_power": "Re(Zl)*abs(I1)^2",
+                "phasors": "RMS",
+                "ratio": "P_load/P_available_source",
+            },
+            "port_orientation": {
+                "forward_s_entry": {
+                    "column_input_zero_based": 0,
+                    "row_output_zero_based": 1,
+                },
+                "load_output_port_zero_based": 1,
+                "source_input_port_zero_based": 0,
+                "target_reference_columns": [
+                    "source_impedance_ohm",
+                    "load_impedance_ohm",
+                ],
+            },
+            "random_seed": TWO_PORT_TRANSDUCER_GAIN_POWER_RANDOM_SEED,
+            "reference_impedance": {
+                "complex": True,
+                "frequency_dependent": True,
+                "per_port": True,
+                "real_part": "strictly positive",
+                "unit": "ohm",
+            },
+            "schema": "rfkit-rs.oracle.fixture",
+            "schema_version": SCHEMA_VERSION,
+            "scikit_rf_commit": EXPECTED_SCIKIT_RF_COMMIT,
+            "scikit_rf_version": skrf.__version__,
+            "shape": {
+                "frequency": list(frequency_hz.shape),
+                "input_s": list(input_s.shape),
+                "input_z0": list(input_z0.shape),
+                "source_impedance": list(source_impedance.shape),
+                "load_impedance": list(load_impedance.shape),
+                "output_transducer_gain": list(transducer_gain.shape),
+            },
+            "tolerance_policy": {
+                "atol": TWO_PORT_TRANSDUCER_GAIN_POWER_ATOL,
+                "comparison": "only data.transducer_gain is numeric output; all input, frequency, references, and metadata contract fields are exact",
+                "justification": TWO_PORT_TRANSDUCER_GAIN_POWER_TOLERANCE_JUSTIFICATION,
+                "regeneration": "canonical UTF-8 JSON; public Network.renormalize(column_stack((Zs,Zl)), s_def=power), abs(S21)**2, and an independent original-coordinate V/I/Thevenin/load solve guard",
+                "rtol": TWO_PORT_TRANSDUCER_GAIN_POWER_RTOL,
+            },
+            "units": {
+                "frequency": "Hz",
+                "impedance": "ohm",
+                "s": "dimensionless",
+                "transducer_gain": "dimensionless linear power ratio",
+            },
+            "wave_definition": "power",
+        },
+        "data": {
+            "frequency_hz": [float(value) for value in frequency_hz],
+            "load_impedance_ohm": _complex_array(load_impedance),
+            "s_input": _complex_array(input_s),
+            "source_impedance_ohm": _complex_array(source_impedance),
+            "transducer_gain": [float(value) for value in transducer_gain],
+            "z0_input_ohm": _complex_array(input_z0),
+        },
+    }
+
+
 def _max_singular_value_power_inputs(np: Any) -> tuple[Any, Any, Any]:
     """Build exact seeded inputs without calling a numerical SVD."""
 
@@ -8875,6 +9140,13 @@ _CASES = (
         _two_port_stability_fixture,
         "numeric_output",
         ("delta", "rollet_k"),
+    ),
+    _OracleCase(
+        TWO_PORT_TRANSDUCER_GAIN_POWER_CASE_ID,
+        TWO_PORT_TRANSDUCER_GAIN_POWER_FIXTURE,
+        _two_port_transducer_gain_power_fixture,
+        "numeric_output",
+        "transducer_gain",
     ),
     _OracleCase(
         MAX_SINGULAR_VALUE_POWER_CASE_ID,

@@ -99,6 +99,74 @@ class NumericFixtureCheckerTests(unittest.TestCase):
             )
 
 
+class TwoPortTransducerGainNumericFixtureCheckerTests(unittest.TestCase):
+    """Keep the source/load mapping and linear-gain tolerance contract visible."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.fixture_path = oracle.TWO_PORT_TRANSDUCER_GAIN_POWER_FIXTURE
+        cls.fixture = oracle._read_canonical_json(cls.fixture_path)
+
+    def _check_document(self, document: dict[str, object]) -> int:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / self.fixture_path.name
+            path.write_bytes(oracle._canonical_bytes(document))
+            return oracle._check_numeric_fixture(path, self.fixture, "transducer_gain")
+
+    def test_gain_within_recorded_tolerance_passes(self) -> None:
+        document = copy.deepcopy(self.fixture)
+        document["data"]["transducer_gain"][0] += 1e-13
+        self.assertEqual(self._check_document(document), 0)
+
+    def test_gain_outside_recorded_tolerance_fails(self) -> None:
+        document = copy.deepcopy(self.fixture)
+        document["data"]["transducer_gain"][0] += 1e-3
+        self.assertEqual(self._check_document(document), 1)
+
+    def test_source_load_mapping_and_metadata_drift_fail(self) -> None:
+        document = copy.deepcopy(self.fixture)
+        document["data"]["source_impedance_ohm"][0]["real"] += 1.0
+        self.assertEqual(self._check_document(document), 1)
+
+        document = copy.deepcopy(self.fixture)
+        document["data"]["load_impedance_ohm"][1]["imag"] += 1.0
+        self.assertEqual(self._check_document(document), 1)
+
+        document = copy.deepcopy(self.fixture)
+        document["metadata"]["operation"] = "network_renormalize_direct_power"
+        self.assertEqual(self._check_document(document), 1)
+
+        document = copy.deepcopy(self.fixture)
+        document["metadata"]["port_orientation"]["source_input_port_zero_based"] = 1
+        self.assertEqual(self._check_document(document), 1)
+
+        document = copy.deepcopy(self.fixture)
+        document["metadata"]["physical_definition"]["current_direction"] = "out of network"
+        self.assertEqual(self._check_document(document), 1)
+
+    def test_overflowed_json_number_fails_finite_check(self) -> None:
+        target = self.fixture["data"]["s_input"][0][0][0]["real"]
+        needle = f'"real": {target}'.encode("utf-8")
+        raw = oracle._canonical_bytes(self.fixture).replace(needle, b'"real": 1e999', 1)
+        self.assertNotEqual(raw, oracle._canonical_bytes(self.fixture))
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / self.fixture_path.name
+            path.write_bytes(raw)
+            self.assertEqual(
+                oracle._check_numeric_fixture(path, self.fixture, "transducer_gain"),
+                1,
+            )
+
+    def test_non_canonical_document_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / self.fixture_path.name
+            path.write_bytes(oracle._canonical_bytes(self.fixture) + b"\n")
+            self.assertEqual(
+                oracle._check_numeric_fixture(path, self.fixture, "transducer_gain"),
+                1,
+            )
+
+
 class GroupDelaySecantNumericFixtureCheckerTests(unittest.TestCase):
     """Keep the interval-seconds output and selected-trace contract visible."""
 
@@ -779,6 +847,17 @@ TWO_PORT_STABILITY_CASE_SPECS = {
         "frequencies": 4,
         "seed": oracle.TWO_PORT_STABILITY_RANDOM_SEED,
         "output": ("delta", "rollet_k"),
+    },
+}
+
+
+TWO_PORT_TRANSDUCER_GAIN_POWER_CASE_SPECS = {
+    oracle.TWO_PORT_TRANSDUCER_GAIN_POWER_CASE_ID: {
+        "operation": "network_two_port_transducer_gain_power",
+        "ports": 2,
+        "frequencies": 4,
+        "seed": oracle.TWO_PORT_TRANSDUCER_GAIN_POWER_RANDOM_SEED,
+        "output": "transducer_gain",
     },
 }
 
@@ -2219,6 +2298,7 @@ class MatrixRegistrationAndCheckerTests(unittest.TestCase):
             + len(TOUCHSTONE_V2_CASE_SPECS)
             + len(TERMINATION_CASE_SPECS)
             + len(TWO_PORT_STABILITY_CASE_SPECS)
+            + len(TWO_PORT_TRANSDUCER_GAIN_POWER_CASE_SPECS)
             + len(MAX_SINGULAR_VALUE_POWER_CASE_SPECS)
             + len(GROUP_DELAY_SECANT_CASE_SPECS)
             + len(ACTIVE_REFLECTION_POWER_CASE_SPECS)
@@ -2235,6 +2315,9 @@ class MatrixRegistrationAndCheckerTests(unittest.TestCase):
         )
         self.assertTrue(set(TERMINATION_CASE_SPECS).issubset(registered))
         self.assertTrue(set(TWO_PORT_STABILITY_CASE_SPECS).issubset(registered))
+        self.assertTrue(
+            set(TWO_PORT_TRANSDUCER_GAIN_POWER_CASE_SPECS).issubset(registered)
+        )
         self.assertTrue(set(MAX_SINGULAR_VALUE_POWER_CASE_SPECS).issubset(registered))
         self.assertTrue(set(GROUP_DELAY_SECANT_CASE_SPECS).issubset(registered))
         self.assertTrue(

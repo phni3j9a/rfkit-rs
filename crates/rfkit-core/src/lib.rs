@@ -65,6 +65,7 @@ mod power_waves;
 mod reference_plane;
 mod stability;
 mod termination;
+mod transducer_gain;
 
 /// Errors produced while constructing or manipulating RF network data.
 #[non_exhaustive]
@@ -1283,6 +1284,129 @@ pub enum Error {
         output_port: usize,
     },
 
+    #[error("two-port transducer power gain frequency axis must not be empty")]
+    EmptyTwoPortTransducerGainPowerFrequency,
+
+    #[error(
+        "two-port transducer power gain frequency length does not match the S-parameter frequency dimension: expected {expected}, got {actual}"
+    )]
+    TwoPortTransducerGainPowerFrequencyLengthMismatch { expected: usize, actual: usize },
+
+    #[error(
+        "two-port transducer power gain requires S-parameter shape (nfreq, 2, 2), got {shape:?}"
+    )]
+    InvalidTwoPortTransducerGainPowerSShape { shape: Vec<usize> },
+
+    #[error(
+        "two-port transducer power gain reference-impedance shape must be (nfreq, 2), got {shape:?}"
+    )]
+    InvalidTwoPortTransducerGainPowerZ0Shape { shape: Vec<usize> },
+
+    #[error(
+        "two-port transducer power gain source-impedance length does not match the frequency axis: expected {expected}, got {actual}"
+    )]
+    TwoPortTransducerGainPowerSourceImpedanceLengthMismatch { expected: usize, actual: usize },
+
+    #[error(
+        "two-port transducer power gain load-impedance length does not match the frequency axis: expected {expected}, got {actual}"
+    )]
+    TwoPortTransducerGainPowerLoadImpedanceLengthMismatch { expected: usize, actual: usize },
+
+    #[error("two-port transducer power gain frequency is non-finite at index {index}: {value:?}")]
+    NonFiniteTwoPortTransducerGainPowerFrequency { index: usize, value: f64 },
+
+    #[error(
+        "two-port transducer power gain received a non-finite S-parameter at frequency {frequency}, row {row}, column {column}"
+    )]
+    NonFiniteTwoPortTransducerGainPowerS {
+        frequency: usize,
+        row: usize,
+        column: usize,
+    },
+
+    #[error(
+        "two-port transducer power gain received a non-finite stored reference impedance at frequency {frequency}, port {port}"
+    )]
+    NonFiniteTwoPortTransducerGainPowerZ0 { frequency: usize, port: usize },
+
+    #[error(
+        "two-port transducer power gain stored reference impedance must have a strictly positive real part at frequency {frequency}, port {port}: {value:?}"
+    )]
+    NonPositiveRealTwoPortTransducerGainPowerZ0 {
+        frequency: usize,
+        port: usize,
+        value: Complex64,
+    },
+
+    #[error(
+        "two-port transducer power gain source impedance is non-finite at frequency {frequency}"
+    )]
+    NonFiniteTwoPortTransducerGainPowerSourceImpedance { frequency: usize },
+
+    #[error(
+        "two-port transducer power gain source impedance must have a strictly positive real part at frequency {frequency}: {value:?}"
+    )]
+    NonPositiveRealTwoPortTransducerGainPowerSourceImpedance { frequency: usize, value: Complex64 },
+
+    #[error("two-port transducer power gain load impedance is non-finite at frequency {frequency}")]
+    NonFiniteTwoPortTransducerGainPowerLoadImpedance { frequency: usize },
+
+    #[error(
+        "two-port transducer power gain load impedance must have a strictly positive real part at frequency {frequency}: {value:?}"
+    )]
+    NonPositiveRealTwoPortTransducerGainPowerLoadImpedance { frequency: usize, value: Complex64 },
+
+    #[error(
+        "two-port transducer power gain direct wave-change received an invalid S-parameter shape {shape:?}"
+    )]
+    InvalidTwoPortTransducerGainPowerWaveChangeSShape { shape: Vec<usize> },
+
+    #[error(
+        "two-port transducer power gain direct wave-change received an invalid reference-impedance shape {shape:?}"
+    )]
+    InvalidTwoPortTransducerGainPowerWaveChangeZ0Shape { shape: Vec<usize> },
+
+    #[error(
+        "two-port transducer power gain direct wave-change received a non-finite S-parameter at frequency {frequency}, row {row}, column {column}"
+    )]
+    NonFiniteTwoPortTransducerGainPowerWaveChangeS {
+        frequency: usize,
+        row: usize,
+        column: usize,
+    },
+
+    #[error(
+        "two-port transducer power gain direct wave-change received a non-finite reference impedance at frequency {frequency}, port {port}"
+    )]
+    NonFiniteTwoPortTransducerGainPowerWaveChangeZ0 { frequency: usize, port: usize },
+
+    #[error(
+        "two-port transducer power gain direct wave-change has a zero-real reference impedance at frequency {frequency}, port {port}"
+    )]
+    ZeroRealTwoPortTransducerGainPowerWaveChangeZ0 { frequency: usize, port: usize },
+
+    #[error(
+        "two-port transducer power gain direct wave-change system is exactly singular at frequency {frequency}, pivot {pivot}"
+    )]
+    SingularTwoPortTransducerGainPowerWaveChange { frequency: usize, pivot: usize },
+
+    #[error(
+        "two-port transducer power gain direct wave-change produced a non-finite computation at frequency {frequency}, row {row}, column {column}"
+    )]
+    NonFiniteTwoPortTransducerGainPowerWaveChange {
+        frequency: usize,
+        row: usize,
+        column: usize,
+    },
+
+    #[error(
+        "two-port transducer power gain arithmetic became non-finite or unrepresentable at frequency {frequency} while evaluating {stage}"
+    )]
+    NonFiniteTwoPortTransducerGainPowerComputation {
+        frequency: usize,
+        stage: TwoPortTransducerGainArithmetic,
+    },
+
     #[error("group-delay frequency axis must contain at least two samples, got {actual}")]
     GroupDelayTooFewFrequencySamples { actual: usize },
 
@@ -1667,6 +1791,26 @@ impl fmt::Display for GroupDelayArithmetic {
     }
 }
 
+/// Arithmetic quantity used to identify an unrepresentable sampled
+/// two-port transducer power-gain result.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TwoPortTransducerGainArithmetic {
+    /// The forward-wave amplitude `hypot(Re(S21), Im(S21))`.
+    ForwardAmplitude,
+    /// The final dimensionless power ratio `|S21|²`.
+    PowerRatio,
+}
+
+impl fmt::Display for TwoPortTransducerGainArithmetic {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::ForwardAmplitude => "forward-wave amplitude",
+            Self::PowerRatio => "forward power ratio",
+        })
+    }
+}
+
 /// Arithmetic stage used by a lossless reference-plane shift diagnostic.
 ///
 /// The operation evaluates each endpoint's phase factor independently,
@@ -1923,6 +2067,77 @@ impl Network {
     pub fn max_singular_value_power(&self) -> Result<Vec<f64>> {
         max_singular_value::max_singular_value_power(&self.frequency.hz, &self.s, &self.z0)
             .map_err(map_max_singular_value_error)
+    }
+
+    /// Computes sampled two-port transducer power gain for explicit source
+    /// and load impedances.
+    ///
+    /// `source_impedance_ohm[f]` and `load_impedance_ohm[f]` are finite
+    /// complex impedances in ohms at the stored sample `f`.  The operation
+    /// uses port 0 as the source/input and port 1 as the load/output, builds
+    /// the target reference table `[Zs, Zl]`, and reports the dimensionless
+    /// linear power ratio
+    ///
+    /// ```text
+    /// G_T[f] = |S_new[f, 1, 0]|²
+    /// ```
+    ///
+    /// where `S_new` is the same physical network expressed in Kurokawa
+    /// power waves at the target references.  Equivalently, with RMS
+    /// phasors, currents directed into the network, and
+    ///
+    /// ```text
+    /// a = (V + Z I)/(2 sqrt(Re(Z)))
+    /// b = (V - conj(Z) I)/(2 sqrt(Re(Z))),  b = S a,
+    /// ```
+    ///
+    /// this is the forward loaded power response for the explicit source and
+    /// load coordinates.  Target entries are exactly `Zs` and `Zl`; callers
+    /// must not pre-conjugate them.  The result is one value per stored sample
+    /// in the original order.  Frequency labels are finite pointwise data and
+    /// may be negative, duplicate, descending, or signed zero.
+    ///
+    /// The source network must be exactly a two-port with finite S/z0 data and
+    /// finite stored references whose real parts are strictly positive.
+    /// Source/load entries use the same finite positive-real domain and both
+    /// slices must have exactly `frequency.len()` entries.  No broadcasting,
+    /// sorting, interpolation, renormalization of the source object, or
+    /// hidden 50-ohm default is applied.  The source and both borrowed slices
+    /// remain unchanged.
+    ///
+    /// Internally the complete direct Kurokawa wave-change system is evaluated
+    /// for every sample before any `S21` value is extracted.  An exact
+    /// singular system is therefore an error even if its forward transmission
+    /// would be zero.  Exact complex-zero `S21` yields `0.0`; a nonzero
+    /// amplitude whose squared result overflows or rounds to zero is reported
+    /// as structured arithmetic failure.  Positive subnormal ratios remain
+    /// valid.  This operation is a borrowing diagnostic, not a stability,
+    /// maximum/available/operating-gain, optimization, gain-circle, noise,
+    /// dB, or all-frequency realization certificate.
+    ///
+    /// This additive operation is provisional during the `0.x` series; its
+    /// name and signature are not a `1.0` compatibility promise.
+    ///
+    /// # Errors
+    ///
+    /// Returns operation-specific structured errors for malformed
+    /// serde-created axes/shapes, non-finite frequency/S/z0 values,
+    /// non-positive-real stored/source/load references, exact direct-system
+    /// singularities, and non-finite or unrepresentable arithmetic.  Shape,
+    /// length, and value validation completes before sampled indexing.
+    pub fn two_port_transducer_gain_power(
+        &self,
+        source_impedance_ohm: &[Complex64],
+        load_impedance_ohm: &[Complex64],
+    ) -> Result<Vec<f64>> {
+        transducer_gain::two_port_transducer_gain_power(
+            &self.frequency.hz,
+            &self.s,
+            &self.z0,
+            source_impedance_ohm,
+            load_impedance_ohm,
+        )
+        .map_err(map_two_port_transducer_gain_error)
     }
 
     /// Computes per-port active reflection for an explicitly supplied
@@ -4424,6 +4639,126 @@ fn map_active_reflection_power_error(
             frequency,
             output_port,
         },
+    }
+}
+
+fn map_two_port_transducer_gain_error(error: transducer_gain::TwoPortTransducerGainError) -> Error {
+    match error {
+        transducer_gain::TwoPortTransducerGainError::EmptyFrequency => {
+            Error::EmptyTwoPortTransducerGainPowerFrequency
+        }
+        transducer_gain::TwoPortTransducerGainError::FrequencyLengthMismatch {
+            expected,
+            actual,
+        } => Error::TwoPortTransducerGainPowerFrequencyLengthMismatch { expected, actual },
+        transducer_gain::TwoPortTransducerGainError::InvalidSShape { shape } => {
+            Error::InvalidTwoPortTransducerGainPowerSShape {
+                shape: vec![shape.0, shape.1, shape.2],
+            }
+        }
+        transducer_gain::TwoPortTransducerGainError::InvalidZ0Shape { shape } => {
+            Error::InvalidTwoPortTransducerGainPowerZ0Shape {
+                shape: vec![shape.0, shape.1],
+            }
+        }
+        transducer_gain::TwoPortTransducerGainError::SourceImpedanceLengthMismatch {
+            expected,
+            actual,
+        } => Error::TwoPortTransducerGainPowerSourceImpedanceLengthMismatch { expected, actual },
+        transducer_gain::TwoPortTransducerGainError::LoadImpedanceLengthMismatch {
+            expected,
+            actual,
+        } => Error::TwoPortTransducerGainPowerLoadImpedanceLengthMismatch { expected, actual },
+        transducer_gain::TwoPortTransducerGainError::NonFiniteFrequency { index, value } => {
+            Error::NonFiniteTwoPortTransducerGainPowerFrequency { index, value }
+        }
+        transducer_gain::TwoPortTransducerGainError::NonFiniteS {
+            frequency,
+            row,
+            column,
+        } => Error::NonFiniteTwoPortTransducerGainPowerS {
+            frequency,
+            row,
+            column,
+        },
+        transducer_gain::TwoPortTransducerGainError::NonFiniteZ0 { frequency, port } => {
+            Error::NonFiniteTwoPortTransducerGainPowerZ0 { frequency, port }
+        }
+        transducer_gain::TwoPortTransducerGainError::NonPositiveRealZ0 {
+            frequency,
+            port,
+            value,
+        } => Error::NonPositiveRealTwoPortTransducerGainPowerZ0 {
+            frequency,
+            port,
+            value,
+        },
+        transducer_gain::TwoPortTransducerGainError::NonFiniteSourceImpedance { frequency } => {
+            Error::NonFiniteTwoPortTransducerGainPowerSourceImpedance { frequency }
+        }
+        transducer_gain::TwoPortTransducerGainError::NonPositiveRealSourceImpedance {
+            frequency,
+            value,
+        } => Error::NonPositiveRealTwoPortTransducerGainPowerSourceImpedance { frequency, value },
+        transducer_gain::TwoPortTransducerGainError::NonFiniteLoadImpedance { frequency } => {
+            Error::NonFiniteTwoPortTransducerGainPowerLoadImpedance { frequency }
+        }
+        transducer_gain::TwoPortTransducerGainError::NonPositiveRealLoadImpedance {
+            frequency,
+            value,
+        } => Error::NonPositiveRealTwoPortTransducerGainPowerLoadImpedance { frequency, value },
+        transducer_gain::TwoPortTransducerGainError::InvalidWaveChangeSShape { shape } => {
+            Error::InvalidTwoPortTransducerGainPowerWaveChangeSShape {
+                shape: vec![shape.0, shape.1, shape.2],
+            }
+        }
+        transducer_gain::TwoPortTransducerGainError::InvalidWaveChangeZ0Shape { shape, .. } => {
+            Error::InvalidTwoPortTransducerGainPowerWaveChangeZ0Shape {
+                shape: vec![shape.0, shape.1],
+            }
+        }
+        transducer_gain::TwoPortTransducerGainError::NonFiniteWaveChangeS {
+            frequency,
+            row,
+            column,
+        } => Error::NonFiniteTwoPortTransducerGainPowerWaveChangeS {
+            frequency,
+            row,
+            column,
+        },
+        transducer_gain::TwoPortTransducerGainError::NonFiniteWaveChangeZ0 {
+            frequency,
+            port,
+            ..
+        } => Error::NonFiniteTwoPortTransducerGainPowerWaveChangeZ0 { frequency, port },
+        transducer_gain::TwoPortTransducerGainError::ZeroRealWaveChangeZ0 {
+            frequency,
+            port,
+            ..
+        } => Error::ZeroRealTwoPortTransducerGainPowerWaveChangeZ0 { frequency, port },
+        transducer_gain::TwoPortTransducerGainError::SingularWaveChange { frequency, pivot } => {
+            Error::SingularTwoPortTransducerGainPowerWaveChange { frequency, pivot }
+        }
+        transducer_gain::TwoPortTransducerGainError::NonFiniteWaveChangeComputation {
+            frequency,
+            row,
+            column,
+        } => Error::NonFiniteTwoPortTransducerGainPowerWaveChange {
+            frequency,
+            row,
+            column,
+        },
+        transducer_gain::TwoPortTransducerGainError::Arithmetic { frequency, stage } => {
+            let stage = match stage {
+                transducer_gain::TwoPortTransducerGainArithmetic::ForwardAmplitude => {
+                    TwoPortTransducerGainArithmetic::ForwardAmplitude
+                }
+                transducer_gain::TwoPortTransducerGainArithmetic::PowerRatio => {
+                    TwoPortTransducerGainArithmetic::PowerRatio
+                }
+            };
+            Error::NonFiniteTwoPortTransducerGainPowerComputation { frequency, stage }
+        }
     }
 }
 

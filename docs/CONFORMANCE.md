@@ -384,6 +384,44 @@ poles, unsampled frequencies, nonlinear/large-signal behavior, or overall
 circuit stability. No verdict booleans, circles, μ factors, gain optimization,
 or tolerance classifications are part of this slice.
 
+Issue #124 adds `Network::two_port_transducer_gain_power`, a borrowing
+two-port diagnostic whose fixed physical coordinates are source/input port 0
+and load/output port 1. Core coverage includes the ideal-through analytical
+ratio `4*Re(Zs)*Re(Zl)/|Zs+Zl|²`, an independent original-coordinate
+V/I/Thevenin/load solve (including source-drive scaling), stored-reference
+renormalization invariance, explicit port exchange on a nonreciprocal network
+checked against independent forward and reverse V/I solves, passive `0<=G<=1`
+representatives, an unclipped finite active/nonreciprocal response, singular
+full-S data with a finite loaded response, exact and near-singular direct
+wave-change systems, exact-zero transmission, overflow, underflow,
+positive-subnormal output, nonstandard ndarray layouts, malformed serde-created
+axes/shapes, finite/non-finite data, positive-real validation, length errors,
+and source/input immutability. Frequencies remain finite pointwise labels, with
+negative/duplicate/descending values preserved.
+
+The operation validates complete `(nfreq,2,2)` S and `(nfreq,2)` z0 shapes and
+all source/load slices before indexing, constructs target references exactly as
+`[Zs,Zl]`, and uses the existing checked `renormalize_s_power_direct` kernel
+as its sole evaluation path. All samples are solved before S21 extraction, so
+an exact singularity cannot be hidden by zero forward transmission. The
+arithmetic policy reports final overflow or nonzero-amplitude underflow rather
+than clamping; finite positive subnormal gains remain valid.
+
+The canonical fixture
+`two_port_transducer_gain_power_four_frequency.json` uses NumPy `2.5.1`,
+scikit-rf `2.0.1` at commit
+`bd651e923cac6020de49a096e1d7e9b5f949f884`, and seed `20261015`. Its expected
+output is generated through public
+`Network.renormalize(column_stack((Zs,Zl)), s_def="power")` then `abs(S21)**2`
+and independently guarded by the original-coordinate solve. Only
+`data.transducer_gain` uses `rtol=1e-12`, `atol=1e-12`; all input/mapping/
+metadata fields are exact. The Python registration/checker and strict Rust
+fixture test both enforce that contract. The focused Touchstone workflow in
+`crates/rfkit-touchstone/tests/public_transducer_gain_workflow.rs` and
+`crates/rfkit-touchstone/examples/transducer_gain_touchstone.rs` parses a
+two-port v1.0 input, optionally selects samples, and compares matched and
+mismatched loads with the ideal-through formula.
+
 Issue #98 adds the sampled `Network::max_singular_value_power` diagnostic. It
 returns the dimensionless scalar `sigma_max(S)` from a full dense complex SVD
 for every source sample, so its square is the maximum reflected/incident

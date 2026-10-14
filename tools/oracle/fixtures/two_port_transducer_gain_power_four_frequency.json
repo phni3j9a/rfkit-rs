@@ -1,0 +1,258 @@
+{
+  "data": {
+    "frequency_hz": [
+      800000000.0,
+      1700000000.0,
+      2650000000.0,
+      4200000000.0
+    ],
+    "load_impedance_ohm": [
+      {
+        "imag": -9.0,
+        "real": 83.0
+      },
+      {
+        "imag": 6.0,
+        "real": 64.0
+      },
+      {
+        "imag": -7.0,
+        "real": 97.0
+      },
+      {
+        "imag": 11.0,
+        "real": 72.0
+      }
+    ],
+    "s_input": [
+      [
+        [
+          {
+            "imag": -0.0051223228576777816,
+            "real": 0.09872711826732873
+          },
+          {
+            "imag": -0.010447798977772219,
+            "real": -0.046088336270659856
+          }
+        ],
+        [
+          {
+            "imag": 0.005679466038408479,
+            "real": -0.06823454784579998
+          },
+          {
+            "imag": 0.0015850465617711015,
+            "real": 0.09638003477597384
+          }
+        ]
+      ],
+      [
+        [
+          {
+            "imag": -0.05937591728151275,
+            "real": 0.09839055198344342
+          },
+          {
+            "imag": 0.027559852270265084,
+            "real": 0.009147705388724166
+          }
+        ],
+        [
+          {
+            "imag": 0.019523286046973013,
+            "real": 0.0069454074492889505
+          },
+          {
+            "imag": 0.015535446861784196,
+            "real": 0.15751760155253713
+          }
+        ]
+      ],
+      [
+        [
+          {
+            "imag": -0.00946267802106236,
+            "real": 0.14148758810051865
+          },
+          {
+            "imag": -0.0063521756873377916,
+            "real": 0.043583879765846885
+          }
+        ],
+        [
+          {
+            "imag": -0.017233680403089823,
+            "real": 0.020194467480396213
+          },
+          {
+            "imag": -0.021141701731034662,
+            "real": 0.2502999476410486
+          }
+        ]
+      ],
+      [
+        [
+          {
+            "imag": -0.06104762602032952,
+            "real": 0.13264940929424104
+          },
+          {
+            "imag": -0.05765302951305604,
+            "real": -0.059875925786463675
+          }
+        ],
+        [
+          {
+            "imag": 0.029067303192564273,
+            "real": -0.08803467403127034
+          },
+          {
+            "imag": 0.03469491986297351,
+            "real": 0.20266127528687045
+          }
+        ]
+      ]
+    ],
+    "source_impedance_ohm": [
+      {
+        "imag": 7.0,
+        "real": 32.0
+      },
+      {
+        "imag": -5.0,
+        "real": 46.0
+      },
+      {
+        "imag": 8.0,
+        "real": 59.0
+      },
+      {
+        "imag": -3.0,
+        "real": 67.0
+      }
+    ],
+    "transducer_gain": [
+      0.004492597908518932,
+      0.00040329977653307463,
+      0.000742379305009258,
+      0.008136314313584617
+    ],
+    "z0_input_ohm": [
+      [
+        {
+          "imag": 5.0,
+          "real": 43.0
+        },
+        {
+          "imag": -4.0,
+          "real": 71.0
+        }
+      ],
+      [
+        {
+          "imag": 6.0,
+          "real": 47.0
+        },
+        {
+          "imag": 3.0,
+          "real": 76.0
+        }
+      ],
+      [
+        {
+          "imag": 4.0,
+          "real": 51.0
+        },
+        {
+          "imag": -5.0,
+          "real": 81.0
+        }
+      ],
+      [
+        {
+          "imag": 7.0,
+          "real": 56.0
+        },
+        {
+          "imag": 2.0,
+          "real": 88.0
+        }
+      ]
+    ]
+  },
+  "metadata": {
+    "case_id": "two_port_transducer_gain_power_four_frequency",
+    "input_recipe": "independent four-frequency non-reciprocal two-port S stack from NumPy default_rng seed 20261015 with deterministic diagonal terms; unequal complex positive-real frequency-dependent stored z0 and varying complex positive-real source/load impedance tables; no prior fixture values reused",
+    "numpy_version": "2.5.1",
+    "operation": "network_two_port_transducer_gain_power",
+    "physical_definition": {
+      "available_source_power": "abs(Vs)^2/(4*Re(Zs))",
+      "current_direction": "into the network",
+      "load_power": "Re(Zl)*abs(I1)^2",
+      "phasors": "RMS",
+      "ratio": "P_load/P_available_source"
+    },
+    "port_orientation": {
+      "forward_s_entry": {
+        "column_input_zero_based": 0,
+        "row_output_zero_based": 1
+      },
+      "load_output_port_zero_based": 1,
+      "source_input_port_zero_based": 0,
+      "target_reference_columns": [
+        "source_impedance_ohm",
+        "load_impedance_ohm"
+      ]
+    },
+    "random_seed": 20261015,
+    "reference_impedance": {
+      "complex": true,
+      "frequency_dependent": true,
+      "per_port": true,
+      "real_part": "strictly positive",
+      "unit": "ohm"
+    },
+    "schema": "rfkit-rs.oracle.fixture",
+    "schema_version": 1,
+    "scikit_rf_commit": "bd651e923cac6020de49a096e1d7e9b5f949f884",
+    "scikit_rf_version": "2.0.1",
+    "shape": {
+      "frequency": [
+        4
+      ],
+      "input_s": [
+        4,
+        2,
+        2
+      ],
+      "input_z0": [
+        4,
+        2
+      ],
+      "load_impedance": [
+        4
+      ],
+      "output_transducer_gain": [
+        4
+      ],
+      "source_impedance": [
+        4
+      ]
+    },
+    "tolerance_policy": {
+      "atol": 1e-12,
+      "comparison": "only data.transducer_gain is numeric output; all input, frequency, references, and metadata contract fields are exact",
+      "justification": "Strict binary64 mixed tolerance for dimensionless linear transducer power ratios.  Only data.transducer_gain is numeric-tolerance output; frequency, S, stored references, source/load tables, metadata, and shapes are exact. The expected path is pinned public Network.renormalize(..., s_def=power) followed by |S21|² and is independently guarded with an original-coordinate V/I/Thevenin/load solve.",
+      "regeneration": "canonical UTF-8 JSON; public Network.renormalize(column_stack((Zs,Zl)), s_def=power), abs(S21)**2, and an independent original-coordinate V/I/Thevenin/load solve guard",
+      "rtol": 1e-12
+    },
+    "units": {
+      "frequency": "Hz",
+      "impedance": "ohm",
+      "s": "dimensionless",
+      "transducer_gain": "dimensionless linear power ratio"
+    },
+    "wave_definition": "power"
+  }
+}
