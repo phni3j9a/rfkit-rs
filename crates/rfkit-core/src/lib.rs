@@ -138,6 +138,41 @@ pub enum Error {
         second_position: usize,
     },
 
+    #[error("frequency sample selection frequency axis must not be empty")]
+    EmptyFrequencySampleSelectionFrequency,
+
+    #[error(
+        "frequency sample selection frequency length does not match the S-parameter frequency dimension: expected {expected}, got {actual}"
+    )]
+    FrequencySampleSelectionFrequencyLengthMismatch { expected: usize, actual: usize },
+
+    #[error("frequency sample selection received an invalid S-parameter shape {shape:?}")]
+    InvalidFrequencySampleSelectionSShape { shape: Vec<usize> },
+
+    #[error("frequency sample selection received an invalid reference-impedance shape {shape:?}")]
+    InvalidFrequencySampleSelectionZ0Shape { shape: Vec<usize> },
+
+    #[error("frequency sample selection must contain at least one source sample")]
+    FrequencySampleSelectionEmpty,
+
+    #[error(
+        "frequency sample selection entry at position {position} refers to source sample {sample}, out of range for {nsamples} source samples"
+    )]
+    FrequencySampleSelectionOutOfRange {
+        position: usize,
+        sample: usize,
+        nsamples: usize,
+    },
+
+    #[error(
+        "frequency sample selection repeats source sample {sample} at positions {first_position} and {second_position}"
+    )]
+    FrequencySampleSelectionDuplicate {
+        sample: usize,
+        first_position: usize,
+        second_position: usize,
+    },
+
     #[error("{stage} conversion received an invalid {parameter} shape {shape:?}")]
     InvalidShape {
         stage: ConversionStage,
@@ -2213,6 +2248,143 @@ impl Network {
 
         Ok(Network {
             frequency: self.frequency.clone(),
+            s: output_s,
+            z0: output_z0,
+        })
+    }
+
+    /// Returns an owned network containing an explicitly ordered subset of
+    /// stored frequency observations.
+    ///
+    /// `samples[new_sample] = old_sample` uses zero-based source-sample
+    /// indices.  Every nonempty ordered list of distinct source indices is
+    /// valid, including a one-sample selection, a complete reorder, and an
+    /// identity selection.  Frequency labels are observation identities, not
+    /// keys: equal source frequency values remain distinct and are selected
+    /// by their indices.
+    ///
+    /// For every selected observation, the returned values are copied
+    /// according to
+    /// `out.frequency.hz[k] = source.frequency.hz[samples[k]]`,
+    /// `out.s[k,i,j] = source.s[samples[k],i,j]`, and
+    /// `out.z0[k,p] = source.z0[samples[k],p]`.  This is a structural copy,
+    /// not an RF operation.  It performs no arithmetic, finite-value check,
+    /// reference-impedance policy, interpolation, sorting, deduplication,
+    /// label matching, or metadata transformation.  All copied binary64
+    /// components, including signed zero and NaN payloads, are retained.
+    /// Unselected non-finite values are therefore harmless, while selected
+    /// non-finite values remain present for downstream operations to validate.
+    ///
+    /// The source and `samples` slice are borrowed and unchanged.  The
+    /// returned frequency, S, and reference arrays are independently owned
+    /// standard-layout arrays, even when the source uses a nonstandard owned
+    /// ndarray layout.  Physical port order and both S axes are preserved.
+    ///
+    /// Source structure is validated before any selection index is accessed,
+    /// including for values produced by deserialization: the frequency axis
+    /// must be nonempty, S must have an exact frequency cardinality and a
+    /// positive square port shape, and `z0` must have shape
+    /// `(nfreq, nport)`.  Selection errors then identify the selection
+    /// position, offending source index, source count, or duplicate positions.
+    /// Identity selection does not bypass these checks and malformed input
+    /// never causes an indexing panic.
+    ///
+    /// This additive operation is provisional during the `0.x` series; its
+    /// name and signature are not a `1.0` stability promise.
+    ///
+    /// # Errors
+    ///
+    /// Returns a structured [`enum@Error`] for malformed source axes/shapes,
+    /// an empty selection, an out-of-range source index, or a repeated source
+    /// index.  Frequency labels and stored RF values are otherwise opaque to
+    /// this operation.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use ndarray::{Array2, Array3};
+    /// use num_complex::Complex64;
+    /// use rfkit_core::{Frequency, Network};
+    ///
+    /// # fn example() -> rfkit_core::Result<()> {
+    /// let network = Network::new(
+    ///     Frequency::from_hz(vec![1.0e9, 2.0e9, 3.0e9])?,
+    ///     Array3::from_shape_fn((3, 1, 1), |(sample, _, _)| {
+    ///         Complex64::new(sample as f64, 0.0)
+    ///     }),
+    ///     Array2::from_elem((3, 1), Complex64::new(50.0, 0.0)),
+    /// )?;
+    ///
+    /// let selected = network.select_frequency_samples(&[2, 0])?;
+    /// assert_eq!(selected.frequency().hz(), &[3.0e9, 1.0e9]);
+    /// assert_eq!(selected.s()[[0, 0, 0]], Complex64::new(2.0, 0.0));
+    /// # Ok(())
+    /// # }
+    /// # example().unwrap();
+    /// ```
+    pub fn select_frequency_samples(&self, samples: &[usize]) -> Result<Network> {
+        if self.frequency.is_empty() {
+            return Err(Error::EmptyFrequencySampleSelectionFrequency);
+        }
+
+        let (parameter_frequency_length, nport_rows, nport_columns) = self.s.dim();
+        if parameter_frequency_length != self.frequency.len() {
+            return Err(Error::FrequencySampleSelectionFrequencyLengthMismatch {
+                expected: self.frequency.len(),
+                actual: parameter_frequency_length,
+            });
+        }
+        if nport_rows == 0 || nport_rows != nport_columns {
+            return Err(Error::InvalidFrequencySampleSelectionSShape {
+                shape: vec![parameter_frequency_length, nport_rows, nport_columns],
+            });
+        }
+        if self.z0.dim() != (parameter_frequency_length, nport_rows) {
+            let (z0_frequencies, z0_ports) = self.z0.dim();
+            return Err(Error::InvalidFrequencySampleSelectionZ0Shape {
+                shape: vec![z0_frequencies, z0_ports],
+            });
+        }
+
+        if samples.is_empty() {
+            return Err(Error::FrequencySampleSelectionEmpty);
+        }
+
+        let mut first_positions = vec![None; parameter_frequency_length];
+        for (position, &sample) in samples.iter().enumerate() {
+            if sample >= parameter_frequency_length {
+                return Err(Error::FrequencySampleSelectionOutOfRange {
+                    position,
+                    sample,
+                    nsamples: parameter_frequency_length,
+                });
+            }
+            if let Some(first_position) = first_positions[sample] {
+                return Err(Error::FrequencySampleSelectionDuplicate {
+                    sample,
+                    first_position,
+                    second_position: position,
+                });
+            }
+            first_positions[sample] = Some(position);
+        }
+
+        let output_frequency = Frequency {
+            hz: samples
+                .iter()
+                .map(|&sample| self.frequency.hz[sample])
+                .collect(),
+        };
+        let output_s = Array3::from_shape_fn(
+            (samples.len(), nport_rows, nport_columns),
+            |(frequency, row, column)| self.s[[samples[frequency], row, column]],
+        );
+        let output_z0 = Array2::from_shape_fn((samples.len(), nport_rows), |(frequency, port)| {
+            self.z0[[samples[frequency], port]]
+        });
+
+        Ok(Network {
+            frequency: output_frequency,
             s: output_s,
             z0: output_z0,
         })

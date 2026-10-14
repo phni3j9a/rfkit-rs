@@ -492,6 +492,54 @@ example with:
 cargo run -p rfkit-touchstone --example permute_ports_touchstone
 ```
 
+## Select exact stored frequency observations before composition
+
+`Network::select_frequency_samples` selects caller-identified observations and
+keeps each selected frequency, complete S matrix, and frequency-dependent
+reference vector aligned:
+
+```rust
+let a_on_shared_observations = a.select_frequency_samples(&[1, 3])?;
+let b_on_shared_observations = b.select_frequency_samples(&[1, 3])?;
+let connected = a_on_shared_observations.connect_power(
+    1,
+    &b_on_shared_observations,
+    0,
+)?;
+```
+
+The mapping is `samples[new_sample] = old_sample`.  It is a nonempty ordered
+list of distinct zero-based indices, so a one-sample extraction, complete
+reorder, duplicate frequency labels, and nonmonotone/descending stored labels
+are all explicit and valid.  The operation copies binary64 values exactly,
+does no arithmetic or finite/reference validation, and never infers an
+intersection, nearest match, sort, interpolation, or default grid.  Source
+shape is validated before selection indexing, including malformed
+serde-created networks; empty, duplicate, and out-of-range indices return
+structured errors.  The result owns new standard-layout arrays and accepts
+nonstandard owned source layouts.
+
+For two measured files with unequal source grids, the caller must provide both
+mappings.  The focused workflow uses two Touchstone inputs, selects their
+shared observations explicitly, connects them, and writes/readbacks the
+result:
+
+```text
+cargo test -p rfkit-touchstone --test public_frequency_selection_workflow
+cargo run -p rfkit-touchstone --example select_frequency_samples_touchstone
+```
+
+The exact-copy differential fixture
+`tools/oracle/fixtures/frequency_sample_selection_three_port_complex_z0.json`
+uses pinned scikit-rf `2.0.1` at commit
+`bd651e923cac6020de49a096e1d7e9b5f949f884`, NumPy `2.5.1`, and seed
+`20260967`.  It exercises public integer-array selection on an asymmetric
+three-port input with unequal complex frequency-dependent references.  This
+observation-identity operation coexists with
+`interpolate_cartesian_linear`: exact knots may agree, but selection preserves
+stored identities/order while interpolation defines a target grid and may
+synthesize values.
+
 ## Convert pair-adjacent ports to mixed mode
 
 The provisional power-wave mixed-mode slice adds two borrowing, owned-result

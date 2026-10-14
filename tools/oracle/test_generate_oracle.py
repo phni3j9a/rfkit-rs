@@ -874,6 +874,17 @@ PORT_SELECTION_CASE_SPECS = {
 }
 
 
+FREQUENCY_SELECTION_CASE_SPECS = {
+    oracle.FREQUENCY_SELECTION_CASE_ID: {
+        "operation": "network_select_frequency_samples",
+        "ports": 3,
+        "frequencies": 4,
+        "seed": oracle.FREQUENCY_SELECTION_RANDOM_SEED,
+        "selection": [3, 1],
+    },
+}
+
+
 class PortPermutationRegistrationAndCheckerTests(unittest.TestCase):
     """Protect the exact public port-renumbering oracle contract."""
 
@@ -1164,6 +1175,149 @@ class PortSelectionRegistrationAndCheckerTests(unittest.TestCase):
                 1,
                 4,
             ]
+            path.write_bytes(oracle._canonical_bytes(changed_contract))
+            self.assertEqual(oracle._check_fixture(path, expected), 1)
+
+
+class FrequencySelectionRegistrationAndCheckerTests(unittest.TestCase):
+    """Protect the exact ordered integer-array sample-selection oracle contract."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.np, cls.skrf = oracle._load_dependencies()
+        cls.fixture_path = oracle.FREQUENCY_SELECTION_FIXTURE
+        cls.fixture = oracle._read_canonical_json(cls.fixture_path)
+
+    def test_case_is_registered_with_exact_observation_contract(self) -> None:
+        case_id = oracle.FREQUENCY_SELECTION_CASE_ID
+        spec = FREQUENCY_SELECTION_CASE_SPECS[case_id]
+        registered = {case.case_id: case for case in oracle._CASES}
+        self.assertIn(case_id, registered)
+        case = registered[case_id]
+        self.assertEqual(case.path, oracle.FREQUENCY_SELECTION_FIXTURE)
+        self.assertEqual(case.path.stem, case_id)
+        self.assertEqual(case.comparison, "exact")
+        self.assertIsNone(case.numeric_output_key)
+
+        metadata = self.fixture["metadata"]
+        self.assertEqual(metadata["case_id"], case_id)
+        self.assertEqual(metadata["operation"], spec["operation"])
+        self.assertEqual(metadata["random_seed"], spec["seed"])
+        self.assertEqual(metadata["numpy_version"], oracle.EXPECTED_NUMPY_VERSION)
+        self.assertEqual(metadata["scikit_rf_version"], oracle.EXPECTED_SCIKIT_RF_VERSION)
+        self.assertEqual(metadata["scikit_rf_commit"], oracle.EXPECTED_SCIKIT_RF_COMMIT)
+        self.assertEqual(metadata["wave_definition"], "power")
+        self.assertEqual(
+            metadata["frequency_selection"]["samples_new_to_old"],
+            spec["selection"],
+        )
+        self.assertEqual(
+            metadata["frequency_selection"]["source_mapping"],
+            [
+                {"new_sample": 0, "old_sample": 3},
+                {"new_sample": 1, "old_sample": 1},
+            ],
+        )
+        self.assertEqual(
+            metadata["reference_impedance"],
+            {
+                "complex": True,
+                "frequency_dependent": True,
+                "per_port": True,
+                "unit": "ohm",
+            },
+        )
+        self.assertEqual(
+            metadata["shape"],
+            {
+                "frequency": [4],
+                "input_s": [4, 3, 3],
+                "input_z0": [4, 3],
+                "output_s": [2, 3, 3],
+                "output_z0": [2, 3],
+            },
+        )
+        self.assertEqual(
+            metadata["tolerance_policy"]["comparison"],
+            oracle.FREQUENCY_SELECTION_TOLERANCE_COMPARISON,
+        )
+
+    def test_builder_calls_public_integer_array_selection(self) -> None:
+        case = next(
+            case
+            for case in oracle._CASES
+            if case.case_id == oracle.FREQUENCY_SELECTION_CASE_ID
+        )
+        with mock.patch.object(
+            self.skrf.Network,
+            "__getitem__",
+            autospec=True,
+            side_effect=self.skrf.Network.__getitem__,
+        ) as getitem:
+            generated = case.builder(self.np, self.skrf)
+
+        self.assertEqual(getitem.call_count, 1)
+        selected_key = getitem.call_args.args[1]
+        self.assertEqual(selected_key.tolist(), [3, 1])
+        self.assertEqual(
+            generated["metadata"]["operation"],
+            "network_select_frequency_samples",
+        )
+        source_s = generated["data"]["s_input"]
+        output_s = generated["data"]["s"]
+        source_z0 = generated["data"]["z0_input_ohm"]
+        output_z0 = generated["data"]["z0_ohm"]
+        selection = [3, 1]
+        for new_frequency, old_frequency in enumerate(selection):
+            self.assertEqual(
+                generated["data"]["frequency_hz"][new_frequency],
+                generated["data"]["frequency_input_hz"][old_frequency],
+            )
+            for row in range(3):
+                for column in range(3):
+                    self.assertEqual(
+                        output_s[new_frequency][row][column],
+                        source_s[old_frequency][row][column],
+                    )
+                self.assertEqual(
+                    output_z0[new_frequency][row], source_z0[old_frequency][row]
+                )
+
+        self.assertTrue(
+            any(
+                source_s[frequency][row][column]
+                != source_s[frequency][column][row]
+                for frequency in range(4)
+                for row in range(3)
+                for column in range(row + 1, 3)
+            )
+        )
+        self.assertTrue(
+            any(
+                source_z0[frequency][port]["imag"] != 0.0
+                for frequency in range(4)
+                for port in range(3)
+            )
+        )
+        self.assertNotEqual(source_z0[0], source_z0[1])
+        self.assertNotEqual(source_z0[0], source_z0[3])
+
+    def test_exact_checker_rejects_output_or_mapping_drift(self) -> None:
+        expected = oracle._canonical_bytes(self.fixture)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / self.fixture_path.name
+            path.write_bytes(expected)
+            self.assertEqual(oracle._check_fixture(path, expected), 0)
+
+            changed_output = copy.deepcopy(self.fixture)
+            changed_output["data"]["s"][0][0][0]["real"] += 1e-13
+            path.write_bytes(oracle._canonical_bytes(changed_output))
+            self.assertEqual(oracle._check_fixture(path, expected), 1)
+
+            changed_contract = copy.deepcopy(self.fixture)
+            changed_contract["metadata"]["frequency_selection"][
+                "samples_new_to_old"
+            ] = [1, 3]
             path.write_bytes(oracle._canonical_bytes(changed_contract))
             self.assertEqual(oracle._check_fixture(path, expected), 1)
 
@@ -2045,6 +2199,7 @@ class MatrixRegistrationAndCheckerTests(unittest.TestCase):
             3
             + len(PORT_PERMUTATION_CASE_SPECS)
             + len(PORT_SELECTION_CASE_SPECS)
+            + len(FREQUENCY_SELECTION_CASE_SPECS)
             + len(MIXED_MODE_CASE_SPECS)
             + len(INTERPOLATION_CASE_SPECS)
             + len(MATRIX_CASE_SPECS)
