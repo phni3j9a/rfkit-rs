@@ -807,6 +807,17 @@ GROUP_DELAY_SECANT_CASE_SPECS = {
 }
 
 
+ACTIVE_REFLECTION_POWER_CASE_SPECS = {
+    oracle.ACTIVE_REFLECTION_POWER_CASE_ID: {
+        "operation": "network_active_reflection_power",
+        "ports": 4,
+        "frequencies": 3,
+        "seed": oracle.ACTIVE_REFLECTION_POWER_RANDOM_SEED,
+        "output": "active_reflection",
+    },
+}
+
+
 REFERENCE_PLANE_SHIFT_CASE_SPECS = {
     oracle.REFERENCE_PLANE_SHIFT_CASE_ID: {
         "operation": "network_shift_reference_planes_lossless_power",
@@ -2055,6 +2066,7 @@ class MatrixRegistrationAndCheckerTests(unittest.TestCase):
             + len(TWO_PORT_STABILITY_CASE_SPECS)
             + len(MAX_SINGULAR_VALUE_POWER_CASE_SPECS)
             + len(GROUP_DELAY_SECANT_CASE_SPECS)
+            + len(ACTIVE_REFLECTION_POWER_CASE_SPECS)
             + len(REFERENCE_PLANE_SHIFT_CASE_SPECS)
             + len(INVERSE_CASCADE_CASE_SPECS)
             + len(CASCADE_DIRECT_CASE_SPECS)
@@ -2070,6 +2082,9 @@ class MatrixRegistrationAndCheckerTests(unittest.TestCase):
         self.assertTrue(set(TWO_PORT_STABILITY_CASE_SPECS).issubset(registered))
         self.assertTrue(set(MAX_SINGULAR_VALUE_POWER_CASE_SPECS).issubset(registered))
         self.assertTrue(set(GROUP_DELAY_SECANT_CASE_SPECS).issubset(registered))
+        self.assertTrue(
+            set(ACTIVE_REFLECTION_POWER_CASE_SPECS).issubset(registered)
+        )
         self.assertTrue(set(REFERENCE_PLANE_SHIFT_CASE_SPECS).issubset(registered))
         self.assertTrue(set(INVERSE_CASCADE_CASE_SPECS).issubset(registered))
         self.assertTrue(set(CASCADE_DIRECT_CASE_SPECS).issubset(registered))
@@ -5470,6 +5485,192 @@ class ReferencePlaneShiftRegistrationAndCheckerTests(unittest.TestCase):
 
         metadata_drift = copy.deepcopy(self.fixture)
         metadata_drift["metadata"]["output_port_mapping"][0] = "changed"
+        self.assertEqual(self._check_document(metadata_drift), 1)
+
+
+class ActiveReflectionPowerRegistrationAndCheckerTests(unittest.TestCase):
+    """Protect the coherent-drive oracle path and exact input contract."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.np, cls.skrf = oracle._load_dependencies()
+        cls.case_id = oracle.ACTIVE_REFLECTION_POWER_CASE_ID
+        cls.case = next(case for case in oracle._CASES if case.case_id == cls.case_id)
+        cls.fixture = oracle._read_canonical_json(cls.case.path)
+
+    def _check_document(self, document: dict[str, object]) -> int:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / self.case.path.name
+            path.write_bytes(oracle._canonical_bytes(document))
+            return oracle._check_numeric_fixture(
+                path,
+                self.fixture,
+                "active_reflection",
+            )
+
+    def test_registration_metadata_shapes_and_public_output_contract(self) -> None:
+        spec = ACTIVE_REFLECTION_POWER_CASE_SPECS[self.case_id]
+        registered = {case.case_id: case for case in oracle._CASES}
+        self.assertIn(self.case_id, registered)
+        self.assertEqual(self.case.path, oracle.ACTIVE_REFLECTION_POWER_FIXTURE)
+        self.assertEqual(self.case.path.stem, self.case_id)
+        self.assertEqual(self.case.comparison, "numeric_output")
+        self.assertEqual(self.case.numeric_output_key, spec["output"])
+
+        metadata = self.fixture["metadata"]
+        self.assertEqual(metadata["case_id"], self.case_id)
+        self.assertEqual(metadata["operation"], spec["operation"])
+        self.assertEqual(metadata["random_seed"], spec["seed"])
+        self.assertEqual(
+            metadata["order"],
+            "frequency-major; S axes [port_out,port_in]; incident and output columns use physical port order",
+        )
+        self.assertIn("default_rng seed 20260966", metadata["input_recipe"])
+        self.assertIn(
+            "every incident component is finite and nonzero",
+            metadata["input_recipe"],
+        )
+        self.assertEqual(metadata["numpy_version"], oracle.EXPECTED_NUMPY_VERSION)
+        self.assertEqual(metadata["scikit_rf_version"], oracle.EXPECTED_SCIKIT_RF_VERSION)
+        self.assertEqual(metadata["scikit_rf_commit"], oracle.EXPECTED_SCIKIT_RF_COMMIT)
+        self.assertEqual(metadata["wave_definition"], "power")
+        self.assertEqual(metadata["shape"]["frequency"], [3])
+        self.assertEqual(metadata["shape"]["input_s"], [3, 4, 4])
+        self.assertEqual(metadata["shape"]["input_z0"], [3, 4])
+        self.assertEqual(metadata["shape"]["input_incident"], [3, 4])
+        self.assertEqual(metadata["shape"]["output_active_reflection"], [3, 4])
+        self.assertEqual(
+            metadata["reference_impedance"],
+            {
+                "complex": False,
+                "frequency_dependent": True,
+                "per_port": True,
+                "real_part": "strictly positive",
+                "unit": "ohm",
+            },
+        )
+        self.assertEqual(metadata["tolerance_policy"]["rtol"], 1e-12)
+        self.assertEqual(metadata["tolerance_policy"]["atol"], 1e-12)
+        self.assertIn("Network.s_active", metadata["tolerance_policy"]["regeneration"])
+        self.assertIn("S @ a / a", metadata["tolerance_policy"]["regeneration"])
+        self.assertIn("fresh copy", metadata["tolerance_policy"]["mutation_guard"])
+        self.assertIn("exact complex-zero", metadata["zero_policy"])
+        self.assertEqual(
+            metadata["units"],
+            {
+                "active_reflection": "dimensionless",
+                "frequency": "Hz",
+                "incident": "sqrt(W), common arbitrary normalization",
+                "s": "dimensionless",
+                "z0": "ohm",
+            },
+        )
+
+    def test_builder_calls_public_s_active_and_guards_drive_mutation(self) -> None:
+        original = self.skrf.Network.s_active
+        observed: list[object] = []
+
+        def guarded(network: object, drive: object) -> object:
+            before = self.np.array(drive, copy=True)
+            result = original(network, drive)
+            self.np.testing.assert_array_equal(drive, before)
+            observed.append(drive)
+            return result
+
+        with mock.patch.object(
+            self.skrf.Network,
+            "s_active",
+            autospec=True,
+            side_effect=guarded,
+        ) as s_active:
+            generated = self.case.builder(self.np, self.skrf)
+
+        self.assertEqual(s_active.call_count, 3)
+        self.assertEqual(len(observed), 3)
+        self.assertEqual(generated["metadata"], self.fixture["metadata"])
+        for key in ("frequency_hz", "incident", "s_input", "z0_input_ohm"):
+            self.assertEqual(generated["data"][key], self.fixture["data"][key])
+        self.assertTrue(
+            all(
+                component != 0.0
+                for row in generated["data"]["incident"]
+                for component in row
+                for component in (complex(component["real"], component["imag"]),)
+            )
+        )
+
+    def test_builder_is_deterministic(self) -> None:
+        first = self.case.builder(self.np, self.skrf)
+        second = self.case.builder(self.np, self.skrf)
+        self.assertEqual(first, second)
+        self.assertEqual(
+            oracle._canonical_bytes(first),
+            oracle._canonical_bytes(second),
+        )
+
+    def test_public_output_matches_independent_s_times_a_divided_by_a(self) -> None:
+        data = self.fixture["data"]
+        source_s = self.np.asarray(
+            [
+                [
+                    [complex(value["real"], value["imag"]) for value in row]
+                    for row in matrix
+                ]
+                for matrix in data["s_input"]
+            ],
+            dtype=self.np.complex128,
+        )
+        incident = self.np.asarray(
+            [
+                [complex(value["real"], value["imag"]) for value in row]
+                for row in data["incident"]
+            ],
+            dtype=self.np.complex128,
+        )
+        expected = self.np.einsum("fij,fj->fi", source_s, incident) / incident
+        actual = self.np.asarray(
+            [
+                [complex(value["real"], value["imag"]) for value in row]
+                for row in data["active_reflection"]
+            ],
+            dtype=self.np.complex128,
+        )
+        self.np.testing.assert_allclose(
+            actual,
+            expected,
+            rtol=5.0e-15,
+            atol=5.0e-15,
+        )
+        self.assertTrue(self.np.isfinite(actual).all())
+
+    def test_only_active_reflection_output_is_numeric_and_contract_drift_fails(self) -> None:
+        adjusted = copy.deepcopy(self.fixture)
+        adjusted["data"]["active_reflection"][0][0]["real"] += 1e-13
+        self.assertEqual(self._check_document(adjusted), 0)
+
+        output_drift = copy.deepcopy(self.fixture)
+        output_drift["data"]["active_reflection"][0][0]["real"] += 1e-3
+        self.assertEqual(self._check_document(output_drift), 1)
+
+        for field in ("frequency_hz", "incident", "s_input", "z0_input_ohm"):
+            drifted = copy.deepcopy(self.fixture)
+            if field == "frequency_hz":
+                drifted["data"][field][0] += 1.0
+            elif field == "s_input":
+                drifted["data"][field][0][0][0]["real"] += 1e-13
+            else:
+                drifted["data"][field][0][0]["real"] += 1e-13
+            self.assertEqual(self._check_document(drifted), 1, field)
+
+        reordered = copy.deepcopy(self.fixture)
+        reordered["data"]["incident"][0][0], reordered["data"]["incident"][0][1] = (
+            reordered["data"]["incident"][0][1],
+            reordered["data"]["incident"][0][0],
+        )
+        self.assertEqual(self._check_document(reordered), 1, "incident order")
+
+        metadata_drift = copy.deepcopy(self.fixture)
+        metadata_drift["metadata"]["random_seed"] += 1
         self.assertEqual(self._check_document(metadata_drift), 1)
 
 

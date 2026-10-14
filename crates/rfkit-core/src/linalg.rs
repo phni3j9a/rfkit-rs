@@ -226,6 +226,82 @@ pub(crate) fn divide_complex(left: Complex64, right: Complex64) -> Complex64 {
     )
 }
 
+/// A complex value whose real and imaginary components retain binary
+/// exponents separately from their normalized mantissas.
+///
+/// This is used when a finite S-parameter multiplied by a finite incident
+/// wave can leave the binary64 range even though the eventual active-ratio
+/// quotient is representable. Keeping the coherent sum in this form avoids
+/// manufacturing an infinity before the single final division.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ScaledComplex {
+    real: Option<Scaled>,
+    imag: Option<Scaled>,
+}
+
+impl ScaledComplex {
+    pub(crate) fn zero() -> Self {
+        Self {
+            real: None,
+            imag: None,
+        }
+    }
+
+    pub(crate) fn add(self, other: Self) -> Self {
+        Self {
+            real: Scaled::add(self.real, other.real),
+            imag: Scaled::add(self.imag, other.imag),
+        }
+    }
+
+    pub(crate) fn multiply(left: Complex64, right: Complex64) -> Self {
+        debug_assert!(is_finite(left) && is_finite(right));
+        Self {
+            real: Scaled::subtract(
+                Scaled::product(left.re, right.re),
+                Scaled::product(left.im, right.im),
+            ),
+            imag: Scaled::add(
+                Scaled::product(left.re, right.im),
+                Scaled::product(left.im, right.re),
+            ),
+        }
+    }
+
+    /// Divides by a finite, nonzero complex value without forming its squared
+    /// magnitude as an ordinary `f64`.
+    ///
+    /// `Err(())` means that a nonzero quotient component could not be
+    /// materialized as a finite binary64 value. An exactly zero numerator
+    /// component is returned as an ordinary zero.
+    pub(crate) fn divide_by(self, denominator: Complex64) -> Result<Complex64, ()> {
+        debug_assert!(is_finite(denominator) && denominator != ZERO);
+
+        let denominator_squared = Scaled::add(
+            Scaled::product(denominator.re, denominator.re),
+            Scaled::product(denominator.im, denominator.im),
+        )
+        .ok_or(())?;
+        let real_numerator = Scaled::add(
+            product_scaled(self.real, denominator.re),
+            product_scaled(self.imag, denominator.im),
+        );
+        let imaginary_numerator = Scaled::subtract(
+            product_scaled(self.imag, denominator.re),
+            product_scaled(self.real, denominator.im),
+        );
+
+        let real = divide_scaled_checked(real_numerator, denominator_squared)?;
+        let imag = divide_scaled_checked(imaginary_numerator, denominator_squared)?;
+        let result = Complex64::new(real, imag);
+        if is_finite(result) {
+            Ok(result)
+        } else {
+            Err(())
+        }
+    }
+}
+
 /// A finite non-zero value represented as `mantissa * 2^exponent`.
 ///
 /// The mantissa is signed and lies in `[-1, -0.5] ∪ [0.5, 1)`.  Keeping the
@@ -332,6 +408,39 @@ fn divide_scaled(numerator: Option<Scaled>, denominator: Scaled) -> f64 {
     } else {
         result
     }
+}
+
+fn divide_scaled_checked(numerator: Option<Scaled>, denominator: Scaled) -> Result<f64, ()> {
+    let Some(numerator) = numerator else {
+        return Ok(0.0);
+    };
+
+    let quotient = Scaled::normalize(
+        numerator.mantissa / denominator.mantissa,
+        numerator.exponent - denominator.exponent,
+    )
+    .ok_or(())?;
+
+    let result = scale_by_power_of_two(quotient.mantissa.abs(), quotient.exponent);
+    if !result.is_finite() || result == 0.0 {
+        return Err(());
+    }
+    if quotient.mantissa.is_sign_negative() {
+        Ok(-result)
+    } else {
+        Ok(result)
+    }
+}
+
+fn product_scaled(left: Option<Scaled>, right: f64) -> Option<Scaled> {
+    left.and_then(|left| {
+        Scaled::from_f64(right).and_then(|right| {
+            Scaled::normalize(
+                left.mantissa * right.mantissa,
+                left.exponent + right.exponent,
+            )
+        })
+    })
 }
 
 /// Decompose a finite positive number as `mantissa * 2^exponent`.

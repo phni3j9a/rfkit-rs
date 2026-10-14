@@ -1068,6 +1068,34 @@ GROUP_DELAY_SECANT_TOLERANCE_JUSTIFICATION = (
     "interval differencing; input arrays and metadata are exact."
 )
 
+ACTIVE_REFLECTION_POWER_FIXTURE = (
+    Path(__file__).resolve().parent
+    / "fixtures"
+    / "active_reflection_power_four_port_real_z0.json"
+)
+ACTIVE_REFLECTION_POWER_CASE_ID = "active_reflection_power_four_port_real_z0"
+ACTIVE_REFLECTION_POWER_RANDOM_SEED = 20_260_966
+ACTIVE_REFLECTION_POWER_NFREQ = 3
+ACTIVE_REFLECTION_POWER_NPORTS = 4
+ACTIVE_REFLECTION_POWER_RTOL = 1e-12
+ACTIVE_REFLECTION_POWER_ATOL = 1e-12
+ACTIVE_REFLECTION_POWER_FREQUENCY_HZ = (0.9e9, 1.6e9, 2.8e9)
+ACTIVE_REFLECTION_POWER_INPUT_RECIPE = (
+    "independent asymmetric four-port S stack and frequency-varying complex "
+    "drive rows from NumPy default_rng seed 20260966; three frequencies "
+    "[0.9,1.6,2.8] GHz; unequal real-positive per-port references varying by "
+    "frequency; every incident component is finite and nonzero; no prior "
+    "fixture values reused"
+)
+ACTIVE_REFLECTION_POWER_TOLERANCE_JUSTIFICATION = (
+    "Strict binary64 mixed tolerance for the dimensionless per-port active "
+    "reflection ratios.  Expected values come from one public scikit-rf "
+    "Network.s_active call per frequency on a fresh nonzero drive vector and "
+    "are independently checked against S @ a / a.  Only data.active_reflection "
+    "is numeric output; frequency, S, z0, incident rows, metadata, and shapes "
+    "are exact canonical contract fields."
+)
+
 # The inverse-cascade fixture is deliberately independent from the stability
 # case above.  It exercises the fixed equal-group convention on a genuine
 # four-port, multi-frequency source with unequal real-positive references.
@@ -7363,6 +7391,226 @@ def _group_delay_secant_fixture(np: Any, skrf: Any) -> dict[str, Any]:
     }
 
 
+def _active_reflection_power_inputs(np: Any) -> tuple[Any, Any, Any, Any]:
+    """Build independent nonzero coherent-drive inputs without oracle calls."""
+
+    frequency_hz = np.asarray(
+        ACTIVE_REFLECTION_POWER_FREQUENCY_HZ,
+        dtype=np.float64,
+    )
+    rng = np.random.default_rng(ACTIVE_REFLECTION_POWER_RANDOM_SEED)
+    source_s = np.asarray(
+        rng.normal(
+            loc=0.0,
+            scale=0.075,
+            size=(
+                ACTIVE_REFLECTION_POWER_NFREQ,
+                ACTIVE_REFLECTION_POWER_NPORTS,
+                ACTIVE_REFLECTION_POWER_NPORTS,
+            ),
+        )
+        + 1j
+        * rng.normal(
+            loc=0.0,
+            scale=0.055,
+            size=(
+                ACTIVE_REFLECTION_POWER_NFREQ,
+                ACTIVE_REFLECTION_POWER_NPORTS,
+                ACTIVE_REFLECTION_POWER_NPORTS,
+            ),
+        ),
+        dtype=np.complex128,
+    )
+    source_z0 = np.asarray(
+        [
+            [41.0, 58.0, 73.0, 66.0],
+            [43.5, 61.0, 70.0, 68.0],
+            [47.0, 64.0, 76.0, 69.0],
+        ],
+        dtype=np.complex128,
+    )
+    incident = np.asarray(
+        rng.normal(
+            loc=0.0,
+            scale=0.8,
+            size=(ACTIVE_REFLECTION_POWER_NFREQ, ACTIVE_REFLECTION_POWER_NPORTS),
+        )
+        + 1j
+        * rng.normal(
+            loc=0.0,
+            scale=0.65,
+            size=(ACTIVE_REFLECTION_POWER_NFREQ, ACTIVE_REFLECTION_POWER_NPORTS),
+        ),
+        dtype=np.complex128,
+    )
+
+    if frequency_hz.shape != (ACTIVE_REFLECTION_POWER_NFREQ,):
+        raise ValueError("active-reflection frequency shape drifted")
+    if source_s.shape != (
+        ACTIVE_REFLECTION_POWER_NFREQ,
+        ACTIVE_REFLECTION_POWER_NPORTS,
+        ACTIVE_REFLECTION_POWER_NPORTS,
+    ):
+        raise ValueError("active-reflection S shape drifted")
+    if source_z0.shape != (
+        ACTIVE_REFLECTION_POWER_NFREQ,
+        ACTIVE_REFLECTION_POWER_NPORTS,
+    ):
+        raise ValueError("active-reflection z0 shape drifted")
+    if incident.shape != (
+        ACTIVE_REFLECTION_POWER_NFREQ,
+        ACTIVE_REFLECTION_POWER_NPORTS,
+    ):
+        raise ValueError("active-reflection incident shape drifted")
+    if not np.isfinite(frequency_hz).all() or not np.isfinite(source_s).all():
+        raise ValueError("active-reflection frequency/S input must be finite")
+    if not np.isfinite(source_z0).all() or not (source_z0.real > 0.0).all():
+        raise ValueError("active-reflection z0 input must be positive-real finite")
+    if not np.isfinite(incident).all() or np.any(incident == 0.0):
+        raise ValueError("active-reflection incident input must be finite and nonzero")
+    _assert_non_symmetric(np, source_s, name="active-reflection S input")
+    return frequency_hz, source_s, source_z0, incident
+
+
+def _active_reflection_power_fixture(np: Any, skrf: Any) -> dict[str, Any]:
+    """Generate active-reflection ratios from pinned public scikit-rf."""
+
+    frequency_hz, source_s, source_z0, incident = _active_reflection_power_inputs(np)
+    case_id = ACTIVE_REFLECTION_POWER_CASE_ID
+    network = skrf.Network(
+        f=frequency_hz,
+        s=source_s,
+        z0=source_z0,
+        s_def="power",
+        name=case_id,
+    )
+    network_s = np.asarray(network.s, dtype=np.complex128)
+    network_z0 = np.asarray(network.z0, dtype=np.complex128)
+    if not np.array_equal(network_s, source_s) or not np.array_equal(
+        network_z0, source_z0
+    ):
+        raise ValueError("scikit-rf changed active-reflection inputs on read-back")
+
+    active_reflection = np.empty(
+        (ACTIVE_REFLECTION_POWER_NFREQ, ACTIVE_REFLECTION_POWER_NPORTS),
+        dtype=np.complex128,
+    )
+    for frequency in range(ACTIVE_REFLECTION_POWER_NFREQ):
+        drive = np.array(incident[frequency], dtype=np.complex128, copy=True)
+        drive_before = drive.copy()
+        sample = skrf.Network(
+            f=frequency_hz[frequency : frequency + 1],
+            s=network_s[frequency : frequency + 1],
+            z0=network_z0[frequency : frequency + 1],
+            s_def="power",
+            name=f"{case_id}_{frequency}",
+        )
+        public_output = np.asarray(sample.s_active(drive), dtype=np.complex128)
+        if not np.array_equal(drive, drive_before):
+            raise ValueError(
+                "public Network.s_active mutated the nonzero incident input"
+            )
+        if public_output.shape != (1, ACTIVE_REFLECTION_POWER_NPORTS):
+            raise ValueError(
+                "active-reflection public output shape drifted: "
+                f"{public_output.shape}"
+            )
+        active_reflection[frequency] = public_output[0]
+
+        independent = np.einsum(
+            "ij,j->i",
+            network_s[frequency],
+            drive,
+            optimize=False,
+        ) / drive
+        if not np.isfinite(independent).all():
+            raise ValueError("active-reflection independent output must be finite")
+        if not np.allclose(
+            active_reflection[frequency],
+            independent,
+            rtol=5.0e-15,
+            atol=5.0e-15,
+        ):
+            raise ValueError(
+                "public Network.s_active disagrees with independent S @ a / a"
+            )
+
+    return {
+        "metadata": {
+            "case_id": case_id,
+            "drive_definition": (
+                "complex incident Kurokawa power-wave amplitudes in sqrt(W), "
+                "one row per stored frequency and one column per physical port; "
+                "a common nonzero complex row scale is immaterial"
+            ),
+            "input_recipe": ACTIVE_REFLECTION_POWER_INPUT_RECIPE,
+            "numpy_version": np.__version__,
+            "operation": "network_active_reflection_power",
+            "order": (
+                "frequency-major; S axes [port_out,port_in]; incident and "
+                "output columns use physical port order"
+            ),
+            "random_seed": ACTIVE_REFLECTION_POWER_RANDOM_SEED,
+            "reference_impedance": {
+                "complex": False,
+                "frequency_dependent": True,
+                "per_port": True,
+                "real_part": "strictly positive",
+                "unit": "ohm",
+            },
+            "schema": "rfkit-rs.oracle.fixture",
+            "schema_version": SCHEMA_VERSION,
+            "scikit_rf_commit": EXPECTED_SCIKIT_RF_COMMIT,
+            "scikit_rf_version": skrf.__version__,
+            "shape": {
+                "frequency": list(frequency_hz.shape),
+                "input_incident": list(incident.shape),
+                "input_s": list(network_s.shape),
+                "input_z0": list(network_z0.shape),
+                "output_active_reflection": list(active_reflection.shape),
+            },
+            "tolerance_policy": {
+                "atol": ACTIVE_REFLECTION_POWER_ATOL,
+                "comparison": (
+                    "only data.active_reflection is numeric output; frequency, "
+                    "S, z0, incident, metadata, and shapes are exact"
+                ),
+                "justification": ACTIVE_REFLECTION_POWER_TOLERANCE_JUSTIFICATION,
+                "mutation_guard": (
+                    "each public Network.s_active call receives a fresh copy "
+                    "of one nonzero incident row; the row is compared bitwise "
+                    "before and after the call"
+                ),
+                "regeneration": (
+                    "canonical UTF-8 JSON; public Network.s_active once per "
+                    "frequency on a fresh power-defined Network, independently "
+                    "checked against NumPy einsum S @ a / a"
+                ),
+                "rtol": ACTIVE_REFLECTION_POWER_RTOL,
+            },
+            "units": {
+                "active_reflection": "dimensionless",
+                "frequency": "Hz",
+                "incident": "sqrt(W), common arbitrary normalization",
+                "s": "dimensionless",
+                "z0": "ohm",
+            },
+            "wave_definition": "power",
+            "zero_policy": (
+                "exact complex-zero incident coordinate -> None; all-zero "
+                "rows are valid; canonical incident rows contain no exact zero"
+            ),
+        },
+        "data": {
+            "active_reflection": _complex_array(active_reflection),
+            "frequency_hz": [float(value) for value in frequency_hz],
+            "incident": _complex_array(incident),
+            "s_input": _complex_array(network_s),
+            "z0_input_ohm": _complex_array(network_z0),
+        },
+    }
+
+
 # This fixture deliberately uses the public media/line plus sequential
 # network.connect path as an independent physical construction.  The direct
 # DSD expression is checked only as a generation-time identity witness; the
@@ -8458,6 +8706,13 @@ _CASES = (
         _group_delay_secant_fixture,
         "numeric_output",
         "group_delay_seconds",
+    ),
+    _OracleCase(
+        ACTIVE_REFLECTION_POWER_CASE_ID,
+        ACTIVE_REFLECTION_POWER_FIXTURE,
+        _active_reflection_power_fixture,
+        "numeric_output",
+        "active_reflection",
     ),
     _OracleCase(
         REFERENCE_PLANE_SHIFT_CASE_ID,
