@@ -30,7 +30,7 @@ The first vertical slice should make these excellent before expanding broadly:
 - S/Z/Y conversions
 - renormalization including complex and per-port Z0
 - interpolation
-- connect / inner-connect / cascade
+- uncoupled direct-sum assembly, connect / inner-connect / cascade
 - de-embedding primitives
 - time-domain transforms
 - Smith-chart data generation as a presentation-independent layer
@@ -1005,6 +1005,47 @@ The executable Touchstone workflow is:
 ```text
 cargo run -p rfkit-touchstone --example reference_plane_shift_touchstone
 ```
+
+## Combine independent networks into an uncoupled N-port
+
+`Network::combine_uncoupled` assembles two independently measured networks on
+one exact stored frequency grid.  A's ports are followed by B's ports, the S
+matrix is the block-diagonal direct sum, and the per-port reference table is
+concatenated in the same order:
+
+```rust
+let bank = a.combine_uncoupled(&b)?;
+```
+
+The operation supports unequal port counts, including one-port inputs.  Both
+frequency axes must have the same length and finite pointwise-equal labels;
+negative, repeated, descending, and signed-zero labels remain valid and A's
+frequency bits are preserved.  It does not sort, interpolate, infer a target
+grid, renormalize, assume a common reference, or model coupling.  S and z0
+are opaque stored coordinates for this assembly, so their scalar bits (even
+signed zero and non-finite payloads) are copied exactly; those values are not
+thereby validated for later wave-sensitive operations.  Cross blocks contain
+canonical complex zero, and the returned arrays are newly owned standard
+layout allocations.  Malformed serde-created shapes and checked output
+element/byte-size arithmetic return structured errors before sampled indexing
+or allocation.
+
+The direct-sum result can then be explicitly reordered, connected internally,
+or exported through the existing Touchstone 2.0 writer.  The focused
+ingress/combine/reorder/write/read workflow is:
+
+```text
+cargo run -p rfkit-touchstone --example combine_uncoupled_touchstone
+```
+
+The pinned direct-sum fixture is
+`tools/oracle/fixtures/combine_uncoupled_two_plus_three_port_complex_z0.json`.
+It records scikit-rf `2.0.1` at commit
+`bd651e923cac6020de49a096e1d7e9b5f949f884`, NumPy `2.5.1`, seed `20261016`,
+and an asymmetric 2+3-port case with unequal complex frequency-dependent
+references.  The direct-sum blocks, references, frequency labels, and zeros
+are exact contract fields; the fixture is a behavior oracle rather than a
+claim of broad scikit-rf API compatibility.
 
 ## Connect networks at a physical power-wave junction
 

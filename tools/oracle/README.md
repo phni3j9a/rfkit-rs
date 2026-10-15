@@ -83,6 +83,14 @@ coordinates, `ports[new_port]=old_port`, the `a_R=0; b_E=S_EE*a_E` physical
 meaning, units, and pinned dependency metadata. Because this is exact
 coordinate copying, frequency, S, and z0 use an exact canonical comparison;
 no load, Schur-complement, feedback solve, or hidden default is involved.
+One uncoupled direct-sum case is registered for Issue #126: independent
+asymmetric two-port A and three-port B inputs use three frequency samples and
+unequal complex frequency-dependent references.  Expected frequency, S, and
+z0 come from public `skrf.network.concat_ports([A, B], port_order="first")`.
+The fixture records A-then-B port order and compares the source diagonal
+blocks, canonical zero cross blocks, concatenated references, and frequency
+labels exactly; no interpolation, renormalization, or coupling model is
+involved.
 One Cartesian linear interpolation case is also registered: an independent
 three-port S/z0 input uses irregular source and target grids, exact endpoints
 and a source knot, nonreciprocal complex S data, and non-50 Ω complex,
@@ -264,7 +272,7 @@ this check after the canonical fixture checker and runs the checker unit tests.
 
 ## Generate and verify
 
-The harness has fifty-four registered canonical cases. The original three cases
+The harness has fifty-seven registered canonical cases. The original three cases
 remain unchanged:
 
 - `three_port_complex_z0` — the representative four-frequency, three-port
