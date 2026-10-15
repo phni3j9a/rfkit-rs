@@ -719,6 +719,65 @@ introducing poles, circles, μ factors, gain optimization, tolerance-based
 classifiers, or a broad analysis hierarchy. Removing the method, tests,
 fixture, and documentation during 0.x requires no data migration.
 
+## Compute two-port transducer power gain for explicit source/load tables
+
+`Network::two_port_transducer_gain_power` is a borrowing diagnostic for a
+two-port whose physical input/source coordinate is port 0 and output/load
+coordinate is port 1:
+
+```rust
+use num_complex::Complex64;
+
+let gain = network.two_port_transducer_gain_power(
+    &[Complex64::new(50.0, 0.0); 2],
+    &[Complex64::new(50.0, 0.0), Complex64::new(83.0, -9.0)],
+)?;
+```
+
+Each slice contains one finite complex impedance in ohms per stored frequency;
+both source and load entries, and the stored references, must have strictly
+positive real parts. The operation builds the explicit target table `[Zs, Zl]`
+and returns the linear dimensionless ratio `|S_new[1,0]|²` after direct
+Kurokawa power-wave re-expression. Equivalently, with RMS phasors, currents
+directed into the network, and
+
+```text
+a = (V + Z I)/(2 sqrt(Re(Z)))
+b = (V - conj(Z) I)/(2 sqrt(Re(Z)))
+```
+
+it is the loaded output power divided by available source power. Do not
+pre-conjugate the target entries. Frequencies are finite pointwise labels;
+negative, duplicate, descending, and signed-zero labels are retained without
+sorting, interpolation, broadcasting, or a 50-ohm default. Source/network and
+input slices are borrowed and unchanged.
+
+The complete direct wave-change system is evaluated for every sample before
+extracting S21, so exact singularity remains an error even when forward
+transmission is zero. Exact zero S21 returns `0.0`; overflow or nonzero-gain
+underflow is a structured arithmetic error, while representable positive
+subnormal gain is valid. This is not a stability certificate, maximum/
+available/operating gain, optimization, gain-circle, noise, dB, or
+all-frequency realization API.
+
+The focused Touchstone ingress → explicit sample selection → matched and
+mismatched load workflow is executable with:
+
+```text
+cargo run -p rfkit-touchstone --example transducer_gain_touchstone
+```
+
+This is an additive Yellow, provisional 0.x decision. Alternatives were
+caller composition through `renormalize_direct_power`, Gamma inputs, a
+50-ohm-only helper, and a generic gain/impedance hierarchy. The selected
+explicit source/load impedance tables, fixed physical ports, power-wave
+semantics, linear output, and positive-real checked domain keep consequential
+choices visible while closing the workflow. The implementation is a REWRITE
+from the RMS V/I/Thevenin/load equations while reusing the checked local
+direct-renormalization kernel; it adds no public-surface overlap entry.
+Rollback is one PR revert removing the method, focused module, fixture, tests,
+workflow, and docs, with no stored-data or dependency migration.
+
 ## Inspect sampled maximum power-wave response
 
 `Network::max_singular_value_power` returns one dimensionless largest singular
