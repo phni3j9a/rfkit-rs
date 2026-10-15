@@ -859,6 +859,25 @@ COMPOSITION_TOLERANCE_JUSTIFICATION = (
     "while catching material disagreement."
 )
 
+# Uncoupled direct-sum assembly is a pure coordinate operation.  Keep one
+# independently seeded asymmetric 2+3-port case with complex, unequal,
+# frequency-dependent references so the canonical output can be compared
+# byte-for-byte; no floating arithmetic is involved in the Rust operation.
+COMBINE_UNCOUPLED_FIXTURE = (
+    Path(__file__).resolve().parent
+    / "fixtures"
+    / "combine_uncoupled_two_plus_three_port_complex_z0.json"
+)
+COMBINE_UNCOUPLED_CASE_ID = "combine_uncoupled_two_plus_three_port_complex_z0"
+COMBINE_UNCOUPLED_RANDOM_SEED = 20_261_016
+COMBINE_UNCOUPLED_NFREQ = 3
+COMBINE_UNCOUPLED_NPORTS_A = 2
+COMBINE_UNCOUPLED_NPORTS_B = 3
+COMBINE_UNCOUPLED_TOLERANCE_COMPARISON = (
+    "exact canonical UTF-8 JSON bytes; the direct-sum output is block placement "
+    "and canonical complex zeros with no floating arithmetic"
+)
+
 # Port permutation is a data-reindexing operation.  Keep this case small but
 # asymmetric so an inverse permutation or one-axis-only implementation cannot
 # pass accidentally.  The input stream is independent of all earlier oracle
@@ -4025,6 +4044,171 @@ def _composition_fixture(np: Any, skrf: Any) -> dict[str, Any]:
             "z0_a_ohm": _complex_array(source_z0_a_readback),
             "z0_b_ohm": _complex_array(source_z0_b_readback),
             "z0_connected_ohm": _complex_array(connected_z0),
+        },
+    }
+
+
+def _combine_uncoupled_inputs(np: Any) -> tuple[Any, Any, Any, Any, Any]:
+    """Build the independent inputs for the direct-sum oracle case."""
+
+    frequency_hz = np.array([1.0e9, 2.0e9, 3.5e9], dtype=np.float64)
+    rng = np.random.default_rng(COMBINE_UNCOUPLED_RANDOM_SEED)
+    s_a = (
+        rng.normal(
+            loc=0.0,
+            scale=0.071,
+            size=(COMBINE_UNCOUPLED_NFREQ, COMBINE_UNCOUPLED_NPORTS_A, COMBINE_UNCOUPLED_NPORTS_A),
+        )
+        + 1j
+        * rng.normal(
+            loc=0.0,
+            scale=0.053,
+            size=(COMBINE_UNCOUPLED_NFREQ, COMBINE_UNCOUPLED_NPORTS_A, COMBINE_UNCOUPLED_NPORTS_A),
+        )
+    ).astype(np.complex128)
+    s_b = (
+        rng.normal(
+            loc=0.0,
+            scale=0.064,
+            size=(COMBINE_UNCOUPLED_NFREQ, COMBINE_UNCOUPLED_NPORTS_B, COMBINE_UNCOUPLED_NPORTS_B),
+        )
+        + 1j
+        * rng.normal(
+            loc=0.0,
+            scale=0.049,
+            size=(COMBINE_UNCOUPLED_NFREQ, COMBINE_UNCOUPLED_NPORTS_B, COMBINE_UNCOUPLED_NPORTS_B),
+        )
+    ).astype(np.complex128)
+    frequency_index_a = np.arange(COMBINE_UNCOUPLED_NFREQ, dtype=np.float64)[:, None]
+    frequency_index_b = np.arange(COMBINE_UNCOUPLED_NFREQ, dtype=np.float64)[:, None]
+    port_index_a = np.arange(COMBINE_UNCOUPLED_NPORTS_A, dtype=np.float64)[None, :]
+    port_index_b = np.arange(COMBINE_UNCOUPLED_NPORTS_B, dtype=np.float64)[None, :]
+    z0_a = (
+        37.0
+        + 2.75 * port_index_a
+        + 1.5 * frequency_index_a
+        + 1j * (2.0 + 0.35 * port_index_a - 0.2 * frequency_index_a)
+    ).astype(np.complex128)
+    z0_b = (
+        71.0
+        + 3.25 * port_index_b
+        + 2.25 * frequency_index_b
+        + 1j * (-1.5 + 0.27 * port_index_b + 0.18 * frequency_index_b)
+    ).astype(np.complex128)
+
+    if not np.isfinite(frequency_hz).all():
+        raise ValueError("uncoupled-combination frequencies must be finite")
+    if not np.isfinite(s_a).all() or not np.isfinite(s_b).all():
+        raise ValueError("uncoupled-combination S inputs must be finite")
+    if not np.isfinite(z0_a).all() or not np.isfinite(z0_b).all():
+        raise ValueError("uncoupled-combination references must be finite")
+    _assert_non_symmetric(np, s_a, name="uncoupled-combination A")
+    _assert_non_symmetric(np, s_b, name="uncoupled-combination B")
+
+    return frequency_hz, s_a, z0_a, s_b, z0_b
+
+
+def _combine_uncoupled_fixture(np: Any, skrf: Any) -> dict[str, Any]:
+    """Build direct-sum output through pinned public scikit-rf concat_ports."""
+
+    frequency_hz, source_s_a, source_z0_a, source_s_b, source_z0_b = (
+        _combine_uncoupled_inputs(np)
+    )
+    case_id = COMBINE_UNCOUPLED_CASE_ID
+    network_a = skrf.Network(
+        f=frequency_hz,
+        s=source_s_a,
+        z0=source_z0_a,
+        s_def="power",
+        name=f"{case_id}_a",
+    )
+    network_b = skrf.Network(
+        f=frequency_hz,
+        s=source_s_b,
+        z0=source_z0_b,
+        s_def="power",
+        name=f"{case_id}_b",
+    )
+    combined = skrf.network.concat_ports([network_a, network_b], port_order="first")
+    combined_frequency = np.asarray(combined.f, dtype=np.float64)
+    combined_s = np.asarray(combined.s, dtype=np.complex128)
+    combined_z0 = np.asarray(combined.z0, dtype=np.complex128)
+    expected_s = np.zeros(
+        (
+            COMBINE_UNCOUPLED_NFREQ,
+            COMBINE_UNCOUPLED_NPORTS_A + COMBINE_UNCOUPLED_NPORTS_B,
+            COMBINE_UNCOUPLED_NPORTS_A + COMBINE_UNCOUPLED_NPORTS_B,
+        ),
+        dtype=np.complex128,
+    )
+    expected_s[:, :COMBINE_UNCOUPLED_NPORTS_A, :COMBINE_UNCOUPLED_NPORTS_A] = source_s_a
+    expected_s[:, COMBINE_UNCOUPLED_NPORTS_A :, COMBINE_UNCOUPLED_NPORTS_A :] = source_s_b
+    expected_z0 = np.hstack((source_z0_a, source_z0_b))
+    if not np.array_equal(combined_frequency, frequency_hz):
+        raise ValueError("uncoupled-combination output frequency changed")
+    if not np.array_equal(combined_s, expected_s):
+        raise ValueError("scikit-rf concat_ports did not produce direct-sum S")
+    if not np.array_equal(combined_z0, expected_z0):
+        raise ValueError("scikit-rf concat_ports did not concatenate z0 exactly")
+
+    output_order = [
+        *({"network": "A", "port": port} for port in range(COMBINE_UNCOUPLED_NPORTS_A)),
+        *({"network": "B", "port": port} for port in range(COMBINE_UNCOUPLED_NPORTS_B)),
+    ]
+    shape = {
+        "frequency": list(combined_frequency.shape),
+        "input_s_a": list(source_s_a.shape),
+        "input_s_b": list(source_s_b.shape),
+        "input_z0_a": list(source_z0_a.shape),
+        "input_z0_b": list(source_z0_b.shape),
+        "output_s": list(combined_s.shape),
+        "output_z0": list(combined_z0.shape),
+    }
+    return {
+        "metadata": {
+            "case_id": case_id,
+            "input_recipe": (
+                "one independent NumPy default_rng stream with seed 20261016, "
+                "an asymmetric non-reciprocal two-port A and three-port B, "
+                "three finite frequency samples, and unequal complex "
+                "frequency-dependent references"
+            ),
+            "numpy_version": np.__version__,
+            "operation": "network_combine_uncoupled",
+            "port_order": {
+                "a_ports": COMBINE_UNCOUPLED_NPORTS_A,
+                "b_ports": COMBINE_UNCOUPLED_NPORTS_B,
+                "description": "A ports in original order followed by B ports in original order",
+                "output": output_order,
+            },
+            "random_seed": COMBINE_UNCOUPLED_RANDOM_SEED,
+            "reference_impedance": {
+                "complex": True,
+                "frequency_dependent": True,
+                "per_port": True,
+                "unit": "ohm",
+                "unequal": True,
+            },
+            "schema": "rfkit-rs.oracle.fixture",
+            "schema_version": SCHEMA_VERSION,
+            "scikit_rf_commit": EXPECTED_SCIKIT_RF_COMMIT,
+            "scikit_rf_version": skrf.__version__,
+            "shape": shape,
+            "tolerance_policy": {
+                "comparison": COMBINE_UNCOUPLED_TOLERANCE_COMPARISON,
+                "regeneration": "exact canonical UTF-8 JSON bytes",
+            },
+            "units": {"frequency": "Hz", "s": "dimensionless", "z0": "ohm"},
+            "wave_definition": "power",
+        },
+        "data": {
+            "frequency_hz": [float(value) for value in combined_frequency],
+            "s_a": _complex_array(source_s_a),
+            "s_b": _complex_array(source_s_b),
+            "s_combined": _complex_array(combined_s),
+            "z0_a_ohm": _complex_array(source_z0_a),
+            "z0_b_ohm": _complex_array(source_z0_b),
+            "z0_combined_ohm": _complex_array(combined_z0),
         },
     }
 
@@ -8867,6 +9051,12 @@ _CASES = (
         _composition_fixture,
         "numeric_output",
         ("s_connected", "z0_connected_ohm"),
+    ),
+    _OracleCase(
+        COMBINE_UNCOUPLED_CASE_ID,
+        COMBINE_UNCOUPLED_FIXTURE,
+        _combine_uncoupled_fixture,
+        "exact",
     ),
     _OracleCase(
         CONNECT_CASE_ID,

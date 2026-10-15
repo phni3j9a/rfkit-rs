@@ -51,6 +51,7 @@ use thiserror::Error;
 
 mod active_reflection;
 mod cascade;
+mod combine;
 mod connection;
 mod direct_connection;
 mod group_delay;
@@ -716,6 +717,59 @@ pub enum Error {
         target: usize,
         row: usize,
         column: usize,
+    },
+
+    #[error(
+        "{input} uncoupled combination S-parameter shape must be (nfreq, nport, nport), got {shape:?}"
+    )]
+    InvalidCombineUncoupledSShape {
+        input: ConnectionInput,
+        shape: Vec<usize>,
+    },
+
+    #[error(
+        "{input} uncoupled combination reference-impedance shape must be (nfreq, nport), got {shape:?}"
+    )]
+    InvalidCombineUncoupledZ0Shape {
+        input: ConnectionInput,
+        shape: Vec<usize>,
+    },
+
+    #[error("{input} uncoupled combination frequency axis must not be empty")]
+    EmptyCombineUncoupledFrequency { input: ConnectionInput },
+
+    #[error(
+        "{input} uncoupled combination frequency axis length does not match the S-parameter frequency dimension: expected {expected}, got {actual}"
+    )]
+    CombineUncoupledFrequencyShape {
+        input: ConnectionInput,
+        expected: usize,
+        actual: usize,
+    },
+
+    #[error("A and B uncoupled-combination frequency axes have different lengths: A={a}, B={b}")]
+    CombineUncoupledFrequencyLengthMismatch { a: usize, b: usize },
+
+    #[error("uncoupled-combination frequency axes differ at index {index}: A={a:?}, B={b:?}")]
+    CombineUncoupledFrequencyMismatch { index: usize, a: f64, b: f64 },
+
+    #[error("{input} uncoupled-combination frequency is non-finite at index {index}: {value:?}")]
+    NonFiniteCombineUncoupledFrequency {
+        input: ConnectionInput,
+        index: usize,
+        value: f64,
+    },
+
+    #[error("uncoupled-combination port-count addition overflow for A={a} and B={b} ports")]
+    CombineUncoupledPortCountOverflow { a: usize, b: usize },
+
+    #[error(
+        "uncoupled-combination {quantity} size is not representable for {nfreq} frequency samples and {nports} output ports"
+    )]
+    CombineUncoupledSizeOverflow {
+        quantity: &'static str,
+        nfreq: usize,
+        nports: usize,
     },
 
     #[error("{input} connection S-parameter shape must be (nfreq, nport, nport), got {shape:?}")]
@@ -3404,6 +3458,65 @@ impl Network {
         Network::new(frequency, interpolated.s, interpolated.z0)
     }
 
+    /// Combines two independent networks into one uncoupled N-port direct sum.
+    ///
+    /// At each stored frequency, if `self` has `p` ports and `other` has `q`
+    /// ports, the returned network has `p + q` ports in fixed A-then-B order
+    /// and satisfies
+    ///
+    /// ```text
+    /// S_out = [[S_self, 0], [0, S_other]],
+    /// z0_out = [z0_self, z0_other].
+    /// ```
+    ///
+    /// This is a coordinate assembly for a bank of independent measured
+    /// devices.  It is not a physical parallel connection, a junction,
+    /// cascade, coupled-device approximation, or topology operation.  The
+    /// frequency axes must have equal lengths and finite labels that compare
+    /// equal pointwise under ordinary `f64` equality.  Negative, repeated,
+    /// descending, and signed-zero labels are accepted; the returned axis is
+    /// copied bit-for-bit from `self`.  No sorting, interpolation, grid
+    /// inference, broadcasting, or renormalization is performed.
+    ///
+    /// S and `z0` are opaque stored coordinates for this operation.  Their
+    /// scalar bits, including signed zero and non-finite payloads, are copied
+    /// exactly without wave computation or physical-reference validation.
+    /// Consequently, this method does not make such data valid for downstream
+    /// wave-sensitive operations.  Both source structures are nevertheless
+    /// checked for a nonempty axis, a positive square S shape whose first
+    /// dimension matches that axis, and an exact `(nfreq, nport)` `z0` shape
+    /// before any sampled indexing or output allocation.
+    ///
+    /// The returned S and `z0` arrays are newly owned standard-layout arrays;
+    /// cross blocks contain canonical `Complex64::new(0.0, 0.0)`.  Port-count,
+    /// element-count, allocation-byte, and ndarray signed-index arithmetic
+    /// are checked before allocation.  The source networks and their arrays
+    /// remain unchanged.
+    ///
+    /// This additive operation is provisional during the `0.x` series; its
+    /// name and signature are not a `1.0` stability promise.
+    ///
+    /// # Errors
+    ///
+    /// Returns structured [`Error`] variants identifying the input side for
+    /// malformed shapes, empty axes, and non-finite labels; grid length and
+    /// point mismatches; and checked output-size failures.  S and `z0` values
+    /// themselves are never rejected by this coordinate-only operation.
+    pub fn combine_uncoupled(&self, other: &Network) -> Result<Network> {
+        let combined = combine::combine_uncoupled(
+            self.frequency.hz(),
+            &self.s,
+            &self.z0,
+            other.frequency.hz(),
+            &other.s,
+            &other.z0,
+        )
+        .map_err(map_combine_uncoupled_error)?;
+
+        let frequency = Frequency::from_hz(combined.frequency_hz)?;
+        Network::new(frequency, combined.s, combined.z0)
+    }
+
     /// Connects one port of this network to one port of `other` through the
     /// Kurokawa power-wave physical junction.
     ///
@@ -4026,6 +4139,62 @@ fn map_interpolation_error(error: interpolation::InterpolationError) -> Error {
             target,
             row,
             column,
+        },
+    }
+}
+
+fn map_combine_uncoupled_error(error: combine::CombineUncoupledError) -> Error {
+    match error {
+        combine::CombineUncoupledError::InvalidSShape { input, shape } => {
+            Error::InvalidCombineUncoupledSShape {
+                input,
+                shape: vec![shape.0, shape.1, shape.2],
+            }
+        }
+        combine::CombineUncoupledError::InvalidZ0Shape { input, shape } => {
+            Error::InvalidCombineUncoupledZ0Shape {
+                input,
+                shape: vec![shape.0, shape.1],
+            }
+        }
+        combine::CombineUncoupledError::EmptyFrequency { input } => {
+            Error::EmptyCombineUncoupledFrequency { input }
+        }
+        combine::CombineUncoupledError::FrequencyShape {
+            input,
+            expected,
+            actual,
+        } => Error::CombineUncoupledFrequencyShape {
+            input,
+            expected,
+            actual,
+        },
+        combine::CombineUncoupledError::FrequencyLengthMismatch { a, b } => {
+            Error::CombineUncoupledFrequencyLengthMismatch { a, b }
+        }
+        combine::CombineUncoupledError::FrequencyMismatch { index, a, b } => {
+            Error::CombineUncoupledFrequencyMismatch { index, a, b }
+        }
+        combine::CombineUncoupledError::NonFiniteFrequency {
+            input,
+            index,
+            value,
+        } => Error::NonFiniteCombineUncoupledFrequency {
+            input,
+            index,
+            value,
+        },
+        combine::CombineUncoupledError::PortCountOverflow { a, b } => {
+            Error::CombineUncoupledPortCountOverflow { a, b }
+        }
+        combine::CombineUncoupledError::SizeOverflow {
+            quantity,
+            nfreq,
+            nports,
+        } => Error::CombineUncoupledSizeOverflow {
+            quantity,
+            nfreq,
+            nports,
         },
     }
 }

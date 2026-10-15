@@ -775,6 +775,17 @@ COMPOSITION_CASE_SPECS = {
     },
 }
 
+COMBINE_UNCOUPLED_CASE_SPECS = {
+    "combine_uncoupled_two_plus_three_port_complex_z0": {
+        "operation": "network_combine_uncoupled",
+        "ports_a": 2,
+        "ports_b": 3,
+        "frequencies": 3,
+        "output": ("s_combined", "z0_combined_ohm"),
+        "seed": 20_261_016,
+    },
+}
+
 TOUCHSTONE_CASE_SPECS = {
     "touchstone_v1_0_s_three_port": {
         "operation": "touchstone_v1_0_s_parse",
@@ -2290,6 +2301,7 @@ class MatrixRegistrationAndCheckerTests(unittest.TestCase):
             + len(DIRECT_Y_TO_S_CASE_SPECS)
             + len(DIRECT_S_TO_Y_SINGULAR_CASE_SPECS)
             + len(COMPOSITION_CASE_SPECS)
+            + len(COMBINE_UNCOUPLED_CASE_SPECS)
             + len(MATCHED_CONNECTION_CASE_SPECS)
             + len(DIRECT_CONNECTION_CASE_SPECS)
             + len(INNER_CONNECT_CASE_SPECS)

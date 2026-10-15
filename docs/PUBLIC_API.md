@@ -329,6 +329,51 @@ A change that adds a public operation overlapping an existing one must either co
 | Stored frequency observations vs. Cartesian interpolation | `select_frequency_samples`, `interpolate_cartesian_linear` | They agree on some exact finite knots, but selection identifies and copies stored observations (including repeated labels and caller order), while interpolation accepts an explicit target grid and may synthesize values. | Coexist until a reviewed replacement can express both observation identity and synthesized-grid semantics without hidden matching or narrowing either domain. |
 The following are **not** overlaps, because their qualifiers are semantic: `cascade_direct_power`, which keeps within-group coupling in one simultaneous solve and differs from repeated connection; `inverse_cascade_power`; the `equal_pair` mixed-mode pair; and the `_power` wave suffix itself.
 
+## Uncoupled direct-sum network assembly (Issue #126 Yellow decision)
+
+Issue #126 adds one binary borrowing operation with explicit fixed ordering:
+
+```rust
+impl Network {
+    pub fn combine_uncoupled(&self, other: &Network) -> Result<Network>;
+}
+```
+
+For A with `p` ports and B with `q` ports, the result has `p + q` ports in
+A-then-B order and is the direct sum `S = diag(S_A, S_B)`.  The two cross
+blocks are canonical complex positive zero, and `z0` is concatenated in the
+same port order.  This is coordinate assembly for an independent measured
+device bank, not a physical parallel/junction connection, cascade, topology
+engine, or coupling model.  It supports unequal port counts and one-port
+inputs.
+
+The operation requires both source structures to have a nonempty axis, a
+positive square S stack whose first dimension matches the axis, and an exact
+`(nfreq,nport)` reference shape.  The grids must have equal lengths and finite
+pointwise-equal labels under ordinary `f64` equality.  Negative, repeated,
+descending, and signed-zero labels remain valid; A's frequency bits are
+copied.  No tolerance, sorting, interpolation, broadcasting, or
+renormalization is performed.  S and `z0` are opaque stored data for this
+operation: signed zero and non-finite scalar payloads are copied bit-for-bit
+without physical reference validation.  The returned arrays are newly owned
+  standard-layout arrays.  Port addition, output element/byte counts, and
+  ndarray signed-index limits are checked before allocation, with
+  side/shape/grid/size context preserved in the crate-level structured error.
+
+This choice is Yellow because the fixed binary A-then-B ordering and strict
+finite exact-grid policy are consequential caller-visible semantics.  The
+alternatives were leaving repeated block assembly to every caller, accepting a
+list/options or interleaved default, inferring a common grid, or silently
+renormalizing references.  The selected binary method keeps the bounded
+workflow explicit and is additive and reversible during `0.x`; rollback is a
+single PR revert with no storage migration.  It does not overlap existing
+`connect_power`, `inner_connect_power`, `cascade_direct_power`, or port
+selection: those operations impose junction/group constraints or copy a
+subset of an already assembled network, while direct-sum assembly retains all
+source ports.  The canonical pinned fixture and local Rust/Touchstone tests
+provide exact-copy, invariance, malformed-input, checked-size, and downstream
+composition evidence; no broad scikit-rf compatibility promise is made.
+
 ## Consolidated physical power-wave connection (Issue #109 Yellow decision)
 
 Issue #109 consolidates the matched/direct two-network and same-network
@@ -1890,6 +1935,8 @@ impl Network {
         target: &Frequency,
     ) -> Result<Network>;
 
+    pub fn combine_uncoupled(&self, other: &Network) -> Result<Network>;
+
     pub fn connect_power(
         &self,
         port_a: usize,
@@ -1949,6 +1996,10 @@ The exact internal delegation remains an implementation detail. The semantic dis
 - `select_ports_zero_incident` explicitly selects a nonempty ordered distinct new-to-old physical-port subset, including complete permutations, and carries S rows, S columns, and z0 together without wave arithmetic; its omitted-coordinate meaning is `a_R=0`, not a physical termination or Schur-complement solve;
 - `to_mixed_mode_equal_pair_power` and `to_single_ended_equal_pair_power` explicitly select the equal single-ended-reference adjacent-pair power-wave transform and its inverse, with modal layout `[d...,c...,unpaired...]`; they do not infer physical pairing or store mode metadata;
 - `interpolate_cartesian_linear` does not establish a vague interpolation default that would later need reinterpretation;
+- `combine_uncoupled` explicitly assembles a direct-sum bank on one finite
+  exact stored grid with fixed A-then-B port order.  It copies opaque S/z0
+  coordinates and canonical cross-block zeros; it does not imply a physical
+  connection, common reference, coupling model, or hidden grid policy;
 - `connect_power` exposes one physical Kurokawa junction for the union of the
   matched and direct domains. Its pre-computation selector chooses the
   existing matched kernel only for finite, exactly real, strictly positive,
