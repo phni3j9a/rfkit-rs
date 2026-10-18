@@ -953,6 +953,76 @@ Touchstone workflow is
 executable counterpart
 `crates/rfkit-touchstone/examples/select_frequency_samples_touchstone.rs`.
 
+## Exact frequency-sample concatenation (Issue #128 Yellow decision)
+
+The provisional public surface adds one borrowing, owned-result operation for
+assembling measured frequency segments:
+
+```rust
+impl Network {
+    pub fn concatenate_frequency_samples(&self, other: &Network) -> Result<Network>;
+}
+```
+
+For A with `m` samples and B with `n` samples, output samples `0..m` copy A
+and `m..m+n` copy B. The complete frequency-major S plane, frequency label,
+and `(frequency, port)` z0 row move together, while the positive port count
+and physical order remain unchanged. Both inputs must have a nonempty axis,
+positive square S data with exact frequency cardinality, exact `(nfreq,nport)`
+z0 shape, and equal port counts. Sample counts may differ, and concatenating a
+network with itself is valid.
+
+This is an opaque coordinate operation, not an RF connection or measurement
+merge. Frequency labels are preserved in caller order, including descending,
+negative, repeated, overlapping, non-finite, and signed-zero values. S and z0
+scalar components are copied bit-for-bit, including signed zeros and NaN
+payloads. The method performs no sort, deduplication, overlap resolution,
+averaging, gap filling, extrapolation, interpolation, frequency equality
+check, wave arithmetic, default reference, renormalization, or magnitude
+clipping. The caller is responsible for the two networks representing the
+same port identities, orientation, and coordinate/wave convention; the
+current model cannot infer those facts. Downstream analyses and writers retain
+their own validation domains.
+
+Both source structures are validated before indexed access, including
+serde-created malformed Networks. Sample-count addition, output dimensions,
+element counts, byte counts, and ndarray signed-index bounds are checked
+before allocation; errors retain operation, input-side, shape, port-count, or
+size context through the crate-level structured `Error` boundary. The result
+owns new standard-layout arrays and neither borrowed input is mutated.
+
+The selected Yellow decision is binary exact A-then-B concatenation. The
+alternatives were leaving array assembly to every caller; restricting the
+operation to separated finite strictly increasing bands; sorting and
+resolving overlaps automatically; and introducing a collection/options
+builder. The selected bounded operation preserves measured observation
+identity and lets callers use `select_frequency_samples` when they want an
+explicit subset/order policy. Strict separated bands are useful for a writer
+workflow but would be an unnecessary core restriction; automatic repair or a
+builder would hide policy and add surface before a concrete need exists.
+
+This operation has no new overlap-inventory entry. Selection chooses
+observations from one already assembled Network; interpolation synthesizes a
+target grid from one source; and `combine_uncoupled` changes the port
+dimension and requires a common grid. None computes the same two-source
+sample-axis result, so adding a row would misclassify distinct caller-visible
+semantics.
+
+The method and diagnostics are additive and provisional in unpublished 0.x:
+no existing behavior or stability guarantee changes, and rollback is one
+bounded PR revert removing the method, evidence, diagnostics, and docs with
+no serialized-data migration. The implementation and fixture are REWRITEs
+from the indexing definition. The canonical fixture
+`tools/oracle/fixtures/frequency_sample_concatenation_three_port_complex_z0.json`
+uses public scikit-rf `network.stitch` only as an executed finite-domain
+oracle, pinned to version `2.0.1` at commit
+`bd651e923cac6020de49a096e1d7e9b5f949f884` with NumPy `2.5.1` and seed
+`20261017`; output frequency/S/z0 are exact sequence fields, not a broad
+scikit-rf compatibility promise. The focused Touchstone workflow is
+`crates/rfkit-touchstone/tests/public_frequency_concatenation_workflow.rs`
+with executable counterpart
+`crates/rfkit-touchstone/examples/concatenate_frequency_samples_touchstone.rs`.
+
 ## Equal-pair mixed-mode power waves (Issue #84 Yellow decision)
 
 The provisional public surface adds one reversible forward/inverse slice:
@@ -1926,6 +1996,8 @@ impl Network {
 
     pub fn select_frequency_samples(&self, samples: &[usize]) -> Result<Network>;
 
+    pub fn concatenate_frequency_samples(&self, other: &Network) -> Result<Network>;
+
     pub fn to_mixed_mode_equal_pair_power(&self, pair_count: usize) -> Result<Network>;
 
     pub fn to_single_ended_equal_pair_power(&self, pair_count: usize) -> Result<Network>;
@@ -1994,6 +2066,13 @@ The exact internal delegation remains an implementation detail. The semantic dis
   within-group coupling; it does not imply sequential connection semantics,
   transfer/Z/Y composition, arbitrary pair maps, topology, or calibration;
 - `select_ports_zero_incident` explicitly selects a nonempty ordered distinct new-to-old physical-port subset, including complete permutations, and carries S rows, S columns, and z0 together without wave arithmetic; its omitted-coordinate meaning is `a_R=0`, not a physical termination or Schur-complement solve;
+- `concatenate_frequency_samples` explicitly appends two borrowed networks' stored
+  observations in self-then-other order along the sample axis. It copies each
+  frequency label, complete S plane, and aligned z0 row as opaque data; it does
+  not sort, deduplicate, match, interpolate, renormalize, or choose a hidden
+  grid/reference policy. The same port count and physical order are caller
+  responsibilities, while the operation preserves both sample counts and
+  references exactly;
 - `to_mixed_mode_equal_pair_power` and `to_single_ended_equal_pair_power` explicitly select the equal single-ended-reference adjacent-pair power-wave transform and its inverse, with modal layout `[d...,c...,unpaired...]`; they do not infer physical pairing or store mode metadata;
 - `interpolate_cartesian_linear` does not establish a vague interpolation default that would later need reinterpretation;
 - `combine_uncoupled` explicitly assembles a direct-sum bank on one finite
@@ -2057,6 +2136,10 @@ Public connection APIs must not silently choose a frequency grid.
 - `connect_power` and `inner_connect_power` use the stored exact pointwise
   labels; they do not sort, intersect, subset, extrapolate, interpolate, or
   infer a target grid.
+- `concatenate_frequency_samples` preserves two caller-provided sample
+  sequences in self-then-other order; it does not sort, deduplicate, match,
+  or infer a common grid. Overlap and writer-domain validity remain explicit
+  downstream concerns.
 - A caller-selected grid is explicit composition: interpolate each input with
   `interpolate_cartesian_linear(&grid)?`, then call `connect_power`.
 - Errors remain staged as interpolation or connection errors; there is no

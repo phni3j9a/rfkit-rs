@@ -975,6 +975,18 @@ FREQUENCY_SELECTION_CASE_SPECS = {
 }
 
 
+FREQUENCY_CONCATENATION_CASE_SPECS = {
+    oracle.FREQUENCY_CONCATENATION_CASE_ID: {
+        "operation": "network_concatenate_frequency_samples",
+        "ports": 3,
+        "frequencies_a": 3,
+        "frequencies_b": 2,
+        "frequencies": 5,
+        "seed": oracle.FREQUENCY_CONCATENATION_RANDOM_SEED,
+    },
+}
+
+
 class PortPermutationRegistrationAndCheckerTests(unittest.TestCase):
     """Protect the exact public port-renumbering oracle contract."""
 
@@ -1408,6 +1420,155 @@ class FrequencySelectionRegistrationAndCheckerTests(unittest.TestCase):
             changed_contract["metadata"]["frequency_selection"][
                 "samples_new_to_old"
             ] = [1, 3]
+            path.write_bytes(oracle._canonical_bytes(changed_contract))
+            self.assertEqual(oracle._check_fixture(path, expected), 1)
+
+
+class FrequencyConcatenationRegistrationAndCheckerTests(unittest.TestCase):
+    """Protect the exact A-then-B sample-axis oracle contract."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.np, cls.skrf = oracle._load_dependencies()
+        cls.fixture_path = oracle.FREQUENCY_CONCATENATION_FIXTURE
+        cls.fixture = oracle._read_canonical_json(cls.fixture_path)
+
+    def test_case_is_registered_with_exact_sequence_contract(self) -> None:
+        case_id = oracle.FREQUENCY_CONCATENATION_CASE_ID
+        spec = FREQUENCY_CONCATENATION_CASE_SPECS[case_id]
+        registered = {case.case_id: case for case in oracle._CASES}
+        self.assertIn(case_id, registered)
+        case = registered[case_id]
+        self.assertEqual(case.path, oracle.FREQUENCY_CONCATENATION_FIXTURE)
+        self.assertEqual(case.path.stem, case_id)
+        self.assertEqual(case.comparison, "exact")
+        self.assertIsNone(case.numeric_output_key)
+
+        metadata = self.fixture["metadata"]
+        self.assertEqual(metadata["case_id"], case_id)
+        self.assertEqual(metadata["operation"], spec["operation"])
+        self.assertEqual(metadata["random_seed"], spec["seed"])
+        self.assertEqual(metadata["numpy_version"], oracle.EXPECTED_NUMPY_VERSION)
+        self.assertEqual(metadata["scikit_rf_version"], oracle.EXPECTED_SCIKIT_RF_VERSION)
+        self.assertEqual(metadata["scikit_rf_commit"], oracle.EXPECTED_SCIKIT_RF_COMMIT)
+        self.assertEqual(metadata["wave_definition"], "power")
+        self.assertEqual(
+            metadata["frequency_concatenation"]["a_samples"],
+            spec["frequencies_a"],
+        )
+        self.assertEqual(
+            metadata["frequency_concatenation"]["b_samples"],
+            spec["frequencies_b"],
+        )
+        self.assertEqual(
+            metadata["frequency_concatenation"]["output_mapping"],
+            [
+                {"network": "A", "sample": 0},
+                {"network": "A", "sample": 1},
+                {"network": "A", "sample": 2},
+                {"network": "B", "sample": 0},
+                {"network": "B", "sample": 1},
+            ],
+        )
+        self.assertEqual(
+            metadata["reference_impedance"],
+            {
+                "complex": True,
+                "frequency_dependent": True,
+                "per_port": True,
+                "unequal": True,
+                "unit": "ohm",
+            },
+        )
+        self.assertEqual(
+            metadata["shape"],
+            {
+                "frequency_a": [3],
+                "frequency_b": [2],
+                "frequency": [5],
+                "input_s_a": [3, 3, 3],
+                "input_s_b": [2, 3, 3],
+                "input_z0_a": [3, 3],
+                "input_z0_b": [2, 3],
+                "output_s": [5, 3, 3],
+                "output_z0": [5, 3],
+            },
+        )
+        self.assertEqual(
+            metadata["tolerance_policy"]["comparison"],
+            oracle.FREQUENCY_CONCATENATION_TOLERANCE_COMPARISON,
+        )
+
+    def test_builder_calls_public_stitch_and_preserves_each_segment(self) -> None:
+        case = next(
+            case
+            for case in oracle._CASES
+            if case.case_id == oracle.FREQUENCY_CONCATENATION_CASE_ID
+        )
+        with mock.patch.object(
+            self.skrf.network,
+            "stitch",
+            autospec=True,
+            side_effect=self.skrf.network.stitch,
+        ) as stitch:
+            generated = case.builder(self.np, self.skrf)
+
+        self.assertEqual(stitch.call_count, 1)
+        first, second = stitch.call_args.args
+        self.assertEqual(first.f.tolist(), [0.71e9, 1.03e9, 1.39e9])
+        self.assertEqual(second.f.tolist(), [2.01e9, 2.47e9])
+        self.assertEqual(
+            generated["data"]["frequency_hz"],
+            generated["data"]["frequency_a_hz"]
+            + generated["data"]["frequency_b_hz"],
+        )
+        for output, source in zip(
+            generated["data"]["s"],
+            generated["data"]["s_a"] + generated["data"]["s_b"],
+        ):
+            self.assertEqual(output, source)
+        for output, source in zip(
+            generated["data"]["z0_ohm"],
+            generated["data"]["z0_a_ohm"] + generated["data"]["z0_b_ohm"],
+        ):
+            self.assertEqual(output, source)
+        self.assertTrue(
+            any(
+                generated["data"]["s_a"][frequency][row][column]
+                != generated["data"]["s_a"][frequency][column][row]
+                for frequency in range(3)
+                for row in range(3)
+                for column in range(row + 1, 3)
+            )
+        )
+        self.assertTrue(
+            any(
+                value["imag"] != 0.0
+                for values in (
+                    generated["data"]["z0_a_ohm"],
+                    generated["data"]["z0_b_ohm"],
+                )
+                for row in values
+                for value in row
+            )
+        )
+
+    def test_exact_checker_rejects_sequence_or_metadata_drift(self) -> None:
+        expected = oracle._canonical_bytes(self.fixture)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / self.fixture_path.name
+            path.write_bytes(expected)
+            self.assertEqual(oracle._check_fixture(path, expected), 0)
+
+            changed_output = copy.deepcopy(self.fixture)
+            changed_output["data"]["frequency_hz"][0] += 1.0
+            path.write_bytes(oracle._canonical_bytes(changed_output))
+            self.assertEqual(oracle._check_fixture(path, expected), 1)
+
+            changed_contract = copy.deepcopy(self.fixture)
+            changed_contract["metadata"]["frequency_concatenation"][
+                "output_mapping"
+            ][3]["network"] = "A"
             path.write_bytes(oracle._canonical_bytes(changed_contract))
             self.assertEqual(oracle._check_fixture(path, expected), 1)
 
@@ -2302,6 +2463,7 @@ class MatrixRegistrationAndCheckerTests(unittest.TestCase):
             + len(DIRECT_S_TO_Y_SINGULAR_CASE_SPECS)
             + len(COMPOSITION_CASE_SPECS)
             + len(COMBINE_UNCOUPLED_CASE_SPECS)
+            + len(FREQUENCY_CONCATENATION_CASE_SPECS)
             + len(MATCHED_CONNECTION_CASE_SPECS)
             + len(DIRECT_CONNECTION_CASE_SPECS)
             + len(INNER_CONNECT_CASE_SPECS)

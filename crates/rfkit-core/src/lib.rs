@@ -52,6 +52,7 @@ use thiserror::Error;
 mod active_reflection;
 mod cascade;
 mod combine;
+mod concatenate;
 mod connection;
 mod direct_connection;
 mod group_delay;
@@ -769,6 +770,53 @@ pub enum Error {
     CombineUncoupledSizeOverflow {
         quantity: &'static str,
         nfreq: usize,
+        nports: usize,
+    },
+
+    #[error(
+        "{input} frequency-sample concatenation S-parameter shape must be (nfreq, nport, nport), got {shape:?}"
+    )]
+    InvalidConcatenateFrequencySamplesSShape {
+        input: ConnectionInput,
+        shape: Vec<usize>,
+    },
+
+    #[error(
+        "{input} frequency-sample concatenation reference-impedance shape must be (nfreq, nport), got {shape:?}"
+    )]
+    InvalidConcatenateFrequencySamplesZ0Shape {
+        input: ConnectionInput,
+        shape: Vec<usize>,
+    },
+
+    #[error("{input} frequency-sample concatenation frequency axis must not be empty")]
+    EmptyConcatenateFrequencySamplesFrequency { input: ConnectionInput },
+
+    #[error(
+        "{input} frequency-sample concatenation frequency axis length does not match the S-parameter frequency dimension: expected {expected}, got {actual}"
+    )]
+    ConcatenateFrequencySamplesFrequencyShape {
+        input: ConnectionInput,
+        expected: usize,
+        actual: usize,
+    },
+
+    #[error("frequency-sample concatenation requires equal port counts: A={a}, B={b}")]
+    ConcatenateFrequencySamplesPortCountMismatch { a: usize, b: usize },
+
+    #[error(
+        "frequency-sample concatenation sample-count addition overflow for A={a} and B={b} samples"
+    )]
+    ConcatenateFrequencySamplesSampleCountOverflow { a: usize, b: usize },
+
+    #[error(
+        "frequency-sample concatenation {quantity} size is not representable for A={samples_a}, B={samples_b}, output {samples} samples and {nports} ports"
+    )]
+    ConcatenateFrequencySamplesSizeOverflow {
+        quantity: &'static str,
+        samples_a: usize,
+        samples_b: usize,
+        samples: usize,
         nports: usize,
     },
 
@@ -2659,6 +2707,66 @@ impl Network {
         })
     }
 
+    /// Concatenates the stored frequency observations of two networks in
+    /// explicit self-then-other order.
+    ///
+    /// If `self` has `m` samples and `other` has `n`, the returned network has
+    /// `m + n` samples.  For every sample, the complete S plane and its
+    /// corresponding `z0` row are copied together:
+    ///
+    /// ```text
+    /// out.frequency.hz = self.frequency.hz ++ other.frequency.hz
+    /// out.s            = self.s            ++ other.s            (axis 0)
+    /// out.z0           = self.z0           ++ other.z0           (axis 0)
+    /// ```
+    ///
+    /// This is exact structural concatenation, not frequency-grid merging or
+    /// an RF operation.  Frequency labels are opaque observation identities:
+    /// descending, negative, repeated, overlapping, non-finite, and signed-
+    /// zero values are retained in caller order without comparison, sorting,
+    /// deduplication, interpolation, averaging, or gap filling.  S and `z0`
+    /// are likewise opaque coordinate values; all `Complex64` component bits,
+    /// including signed zeros and NaN payloads, are copied without arithmetic
+    /// or physical-reference validation.  Equal port counts are required, but
+    /// sample counts may differ and no common frequency grid is inferred.
+    ///
+    /// Both source structures are checked before any sample-indexed access,
+    /// including networks created by deserialization: each frequency axis is
+    /// nonempty, S is exactly `(nfreq, nport, nport)` with a positive square
+    /// port shape, and `z0` is exactly `(nfreq, nport)`.  The sources are
+    /// borrowed and unchanged.  The result owns fresh standard-layout S and
+    /// `z0` arrays, even when either source uses a nonstandard owned ndarray
+    /// layout, and the result may safely be concatenated with either source or
+    /// with itself.
+    ///
+    /// Output sample addition, dimensions, S/`z0`/frequency element counts,
+    /// allocation byte counts, and ndarray's signed-index limits are checked
+    /// before output allocation.  These checks do not promise recovery from
+    /// ordinary allocator exhaustion.
+    ///
+    /// This additive operation is provisional during the `0.x` series; its
+    /// name and signature are not a `1.0` stability promise.
+    ///
+    /// # Errors
+    ///
+    /// Returns a structured [`enum@Error`] identifying the malformed input
+    /// side and shape, mismatched port counts, or an unrepresentable output
+    /// size.  No scalar-value validation is performed by this operation.
+    pub fn concatenate_frequency_samples(&self, other: &Network) -> Result<Network> {
+        let (frequency_hz, s, z0) = concatenate::concatenate_frequency_samples(
+            self.frequency.hz(),
+            &self.s,
+            &self.z0,
+            other.frequency.hz(),
+            &other.s,
+            &other.z0,
+        )
+        .map_err(map_concatenate_frequency_samples_error)?;
+
+        let frequency = Frequency::from_hz(frequency_hz)?;
+        Network::new(frequency, s, z0)
+    }
+
     /// Converts adjacent equal-reference single-ended pairs to differential
     /// and common-mode coordinates using Kurokawa power waves.
     ///
@@ -4194,6 +4302,56 @@ fn map_combine_uncoupled_error(error: combine::CombineUncoupledError) -> Error {
         } => Error::CombineUncoupledSizeOverflow {
             quantity,
             nfreq,
+            nports,
+        },
+    }
+}
+
+fn map_concatenate_frequency_samples_error(
+    error: concatenate::ConcatenateFrequencySamplesError,
+) -> Error {
+    match error {
+        concatenate::ConcatenateFrequencySamplesError::InvalidSShape { input, shape } => {
+            Error::InvalidConcatenateFrequencySamplesSShape {
+                input,
+                shape: vec![shape.0, shape.1, shape.2],
+            }
+        }
+        concatenate::ConcatenateFrequencySamplesError::InvalidZ0Shape { input, shape } => {
+            Error::InvalidConcatenateFrequencySamplesZ0Shape {
+                input,
+                shape: vec![shape.0, shape.1],
+            }
+        }
+        concatenate::ConcatenateFrequencySamplesError::EmptyFrequency { input } => {
+            Error::EmptyConcatenateFrequencySamplesFrequency { input }
+        }
+        concatenate::ConcatenateFrequencySamplesError::FrequencyShape {
+            input,
+            expected,
+            actual,
+        } => Error::ConcatenateFrequencySamplesFrequencyShape {
+            input,
+            expected,
+            actual,
+        },
+        concatenate::ConcatenateFrequencySamplesError::PortCountMismatch { a, b } => {
+            Error::ConcatenateFrequencySamplesPortCountMismatch { a, b }
+        }
+        concatenate::ConcatenateFrequencySamplesError::SampleCountOverflow { a, b } => {
+            Error::ConcatenateFrequencySamplesSampleCountOverflow { a, b }
+        }
+        concatenate::ConcatenateFrequencySamplesError::SizeOverflow {
+            quantity,
+            samples_a,
+            samples_b,
+            samples,
+            nports,
+        } => Error::ConcatenateFrequencySamplesSizeOverflow {
+            quantity,
+            samples_a,
+            samples_b,
+            samples,
             nports,
         },
     }
