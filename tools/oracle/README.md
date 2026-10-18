@@ -91,6 +91,14 @@ The fixture records A-then-B port order and compares the source diagonal
 blocks, canonical zero cross blocks, concatenated references, and frequency
 labels exactly; no interpolation, renormalization, or coupling model is
 involved.
+One frequency-segment concatenation case is registered for Issue #128:
+independently generated asymmetric N=3 A/B inputs have separated bands and
+unequal sample counts (A=3, B=2), with complex per-port/frequency-dependent
+references. Expected frequency, S, and z0 come from one public
+`skrf.network.stitch(A, B)` call. The fixture records the A-then-B sample
+mapping, pinned commit/version, dedicated seed `20261017`, and exact sequence
+copy policy; no sorting, overlap resolution, interpolation, reference
+validation, or hidden grid rule is implied by the oracle.
 One Cartesian linear interpolation case is also registered: an independent
 three-port S/z0 input uses irregular source and target grids, exact endpoints
 and a source knot, nonreciprocal complex S data, and non-50 Ω complex,
@@ -735,6 +743,16 @@ five-port source, omits `[0,2]`, and records the block-scattering boundary
 | --- | ---: | --- | --- | --- | --- |
 | Network → zero-incident subset | 5 | `[4, 1, 3]` | `[0, 2]` | complex, per-port, frequency-dependent positive-real | `port_selection_zero_incident_five_port_complex_z0` |
 
+The frequency-concatenation fixture uses one local NumPy `default_rng` stream
+with seed `20261017` to generate independent A and B S stacks. A has three
+samples at `[0.71, 1.03, 1.39] GHz`; B has two samples at `[2.01, 2.47] GHz`.
+Both are asymmetric three-port networks with finite complex references that
+vary by port and frequency. The builder calls only public
+`skrf.network.stitch(A, B)` for the expected output, then verifies the exact
+`A ++ B` frequency/S/z0 sequence independently. The exact checker therefore
+rejects any output, mapping, input, or metadata drift; it does not apply a
+numeric tolerance.
+
 All registered cases are checked by default against a fresh scikit-rf run; the
 default command checks every case:
 
@@ -949,6 +967,10 @@ The JSON representation is deliberately machine-readable and byte-stable:
   exact canonical UTF-8 byte comparison: its expected frequency/S/z0 values
   are ordered coordinate copies under `a_R=0`, so no numeric tolerance is
   appropriate.
+- The `frequency_sample_concatenation_three_port_complex_z0` case also retains
+  an exact canonical UTF-8 byte comparison: its expected frequency/S/z0 values
+  are opaque A-then-B sample-axis copies, so no numeric tolerance or
+  frequency-grid policy is appropriate.
 - Every operation case requires strict JSON parsing (including finite
   numbers), canonical encoding of the actual document, and exact canonical
   equality for metadata, schema, dependency versions, shapes, frequency,
