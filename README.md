@@ -540,6 +540,52 @@ observation-identity operation coexists with
 stored identities/order while interpolation defines a target grid and may
 synthesize values.
 
+## Concatenate measured frequency segments exactly
+
+`Network::concatenate_frequency_samples` assembles two measurements of the
+same port layout along the stored sample axis:
+
+```rust
+let assembled = segment_a.concatenate_frequency_samples(&segment_b)?;
+```
+
+The result is the exact sequence `segment_a` followed by `segment_b`. Each
+frequency label, complete S plane, and aligned z0 row is copied as opaque data;
+port count and physical order are unchanged, and the two sample counts may
+differ. The operation does not sort, deduplicate, reject overlap, infer a
+common grid, fill gaps, interpolate, average, renormalize, or validate wave
+references. Repeated, descending, negative, non-finite, and overlapping labels
+therefore remain caller-visible in their original order. Use
+`select_frequency_samples` when a caller wants an explicit subset or order,
+and use interpolation when a synthesized target grid is intended.
+
+For export, the existing Touchstone 2.0 Full writer still applies its own
+format contract: the assembled grid must be finite and strictly increasing,
+with no duplicate labels, and each physical port's reference must be finite,
+positive-real, and constant across samples. Concatenation deliberately does
+not repair a grid or a changing reference; those writer diagnostics remain
+visible to the caller.
+
+The focused Touchstone workflow parses two separated three-port v2 Full
+segments with unequal real per-port references, concatenates them, selects
+samples for a small analysis, and writes/reads the existing Full RI/Hz format:
+
+```text
+cargo test -p rfkit-touchstone --test public_frequency_concatenation_workflow
+cargo run -p rfkit-touchstone --example concatenate_frequency_samples_touchstone
+```
+
+The exact-copy oracle fixture
+`tools/oracle/fixtures/frequency_sample_concatenation_three_port_complex_z0.json`
+uses public scikit-rf `network.stitch` only as an executed finite-domain
+behavior oracle. It records scikit-rf `2.0.1` at commit
+`bd651e923cac6020de49a096e1d7e9b5f949f884`, NumPy `2.5.1`, seed `20261017`,
+and independently generated asymmetric N=3 A/B inputs with 3 and 2 samples,
+complex per-port/frequency-dependent references, and exact A-then-B frequency,
+S, and z0 outputs. This is an additive provisional 0.x API; it makes no broad
+scikit-rf compatibility claim and introduces no metadata, storage, or file-I/O
+model.
+
 ## Convert pair-adjacent ports to mixed mode
 
 The provisional power-wave mixed-mode slice adds two borrowing, owned-result
