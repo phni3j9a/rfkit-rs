@@ -824,6 +824,26 @@ TOUCHSTONE_V2_CASE_SPECS = {
         "matrix_format": "Upper",
         "references": [25.0, 50.0, 75.0],
     },
+    "touchstone_v2_0_z_full_three_port": {
+        "operation": "touchstone_v2_0_z_full_parse",
+        "ports": 3,
+        "frequencies": 2,
+        "output": "s",
+        "input_recipe": oracle.TOUCHSTONE_V2_Z_INPUT_RECIPE,
+        "parameter": "Z",
+        "parameter_unit": "ohm",
+        "references": [25.0, 50.0, 75.0],
+    },
+    "touchstone_v2_0_y_full_three_port": {
+        "operation": "touchstone_v2_0_y_full_parse",
+        "ports": 3,
+        "frequencies": 2,
+        "output": "s",
+        "input_recipe": oracle.TOUCHSTONE_V2_Y_INPUT_RECIPE,
+        "parameter": "Y",
+        "parameter_unit": "siemens",
+        "references": [25.0, 50.0, 75.0],
+    },
 }
 
 
@@ -2043,6 +2063,106 @@ class TouchstoneV2TriangularRegistrationAndCheckerTests(unittest.TestCase):
                             ),
                             1,
                         )
+
+
+class TouchstoneV2PhysicalParameterRegistrationAndCheckerTests(unittest.TestCase):
+    """Protect the physical Z/Y v2 reader fixtures and exact raw matrices."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.np, cls.skrf = oracle._load_dependencies()
+
+    @staticmethod
+    def _cases() -> tuple[tuple[str, Path, str], ...]:
+        return (
+            (
+                oracle.TOUCHSTONE_V2_Z_CASE_ID,
+                oracle.TOUCHSTONE_V2_Z_FIXTURE,
+                "Z",
+            ),
+            (
+                oracle.TOUCHSTONE_V2_Y_CASE_ID,
+                oracle.TOUCHSTONE_V2_Y_FIXTURE,
+                "Y",
+            ),
+        )
+
+    def test_cases_are_registered_with_physical_parameter_contracts(self) -> None:
+        registered = {case.case_id: case for case in oracle._CASES}
+        for case_id, path, parameter in self._cases():
+            with self.subTest(case_id=case_id):
+                spec = TOUCHSTONE_V2_CASE_SPECS[case_id]
+                self.assertIn(case_id, registered)
+                case = registered[case_id]
+                fixture = oracle._read_canonical_json(path)
+                metadata = fixture["metadata"]
+                self.assertEqual(case.path, path)
+                self.assertEqual(case.comparison, "numeric_output")
+                self.assertEqual(case.numeric_output_key, "s")
+                self.assertEqual(metadata["case_id"], case_id)
+                self.assertEqual(metadata["input_parameter"], parameter)
+                self.assertEqual(metadata["parameter_unit"], spec["parameter_unit"])
+                self.assertEqual(metadata["operation"], spec["operation"])
+                self.assertEqual(metadata["port_count"], spec["ports"])
+                self.assertEqual(metadata["input_recipe"], spec["input_recipe"])
+                self.assertEqual(metadata["numpy_version"], oracle.EXPECTED_NUMPY_VERSION)
+                self.assertEqual(metadata["scikit_rf_version"], oracle.EXPECTED_SCIKIT_RF_VERSION)
+                self.assertEqual(metadata["scikit_rf_commit"], oracle.EXPECTED_SCIKIT_RF_COMMIT)
+                self.assertEqual(metadata["shape"]["frequency"], [2])
+                self.assertEqual(metadata["shape"]["parameter"], [2, 3, 3])
+                self.assertEqual(metadata["shape"]["s"], [2, 3, 3])
+                self.assertEqual(metadata["shape"]["z0"], [2, 3])
+                self.assertEqual(fixture["data"]["parameter"], parameter)
+                self.assertEqual(
+                    [value["real"] for value in fixture["data"]["z0_ohm"][0]],
+                    [25.0, 50.0, 75.0],
+                )
+
+    def test_public_reader_builders_preserve_raw_physical_contract(self) -> None:
+        registered = {case.case_id: case for case in oracle._CASES}
+        for case_id, path, _parameter in self._cases():
+            with self.subTest(case_id=case_id):
+                fixture = oracle._read_canonical_json(path)
+                regenerated = registered[case_id].builder(self.np, self.skrf)
+                self.assertEqual(
+                    regenerated["data"]["touchstone_text"],
+                    fixture["data"]["touchstone_text"],
+                )
+                self.assertEqual(
+                    regenerated["data"]["parameter_matrix"],
+                    fixture["data"]["parameter_matrix"],
+                )
+                self.assertEqual(
+                    regenerated["data"]["frequency_hz"],
+                    fixture["data"]["frequency_hz"],
+                )
+                self.assertEqual(regenerated["data"]["z0_ohm"], fixture["data"]["z0_ohm"])
+
+    def test_checker_tolerates_only_converted_s_output(self) -> None:
+        registered = {case.case_id: case for case in oracle._CASES}
+        for case_id, path, _parameter in self._cases():
+            with self.subTest(case_id=case_id):
+                fixture = oracle._read_canonical_json(path)
+                case = registered[case_id]
+                adjusted = copy.deepcopy(fixture)
+                adjusted["data"]["s"][0][0][0]["real"] += 1e-13
+                with tempfile.TemporaryDirectory() as directory:
+                    target = Path(directory) / path.name
+                    target.write_bytes(oracle._canonical_bytes(adjusted))
+                    self.assertEqual(
+                        oracle._check_numeric_fixture(target, fixture, case.numeric_output_key),
+                        0,
+                    )
+
+                drifted = copy.deepcopy(fixture)
+                drifted["data"]["parameter_matrix"][0][0][0]["real"] += 1e-13
+                with tempfile.TemporaryDirectory() as directory:
+                    target = Path(directory) / path.name
+                    target.write_bytes(oracle._canonical_bytes(drifted))
+                    self.assertEqual(
+                        oracle._check_numeric_fixture(target, fixture, case.numeric_output_key),
+                        1,
+                    )
 
 
 class InterpolationRegistrationAndCheckerTests(unittest.TestCase):

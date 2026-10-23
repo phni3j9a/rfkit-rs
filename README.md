@@ -26,7 +26,8 @@ The first vertical slice should make these excellent before expanding broadly:
 - Frequency and Network data model
 - Touchstone ingress/egress (the current public slice is explicitly limited to
   Touchstone 1.0 single-ended S ingress plus bounded Touchstone 2.0
-  single-ended S ingress/Full S egress; broader format support is future work)
+  single-ended S/Z/Y ingress and Full S egress; broader format support is
+  future work)
 - S/Z/Y conversions
 - renormalization including complex and per-port Z0
 - interpolation
@@ -140,11 +141,11 @@ writer when preserving unequal real per-port references matters:
 
 ```rust
 use rfkit_touchstone::{
-    parse_touchstone_v2_0_s, write_touchstone_v2_0_s_full_ri_hz,
+    parse_touchstone_v2_0_power, write_touchstone_v2_0_s_full_ri_hz,
 };
 
 fn write_v2(input: &str) -> rfkit_touchstone::Result<String> {
-    let source = parse_touchstone_v2_0_s(input)?;
+    let source = parse_touchstone_v2_0_power(input)?;
     write_touchstone_v2_0_s_full_ri_hz(&source)
 }
 ```
@@ -257,13 +258,13 @@ definition`, or `S-parameter uses the traveling definition` comments.
 Ordinary comments, including `Port[n] = ...` port-name comments, remain
 ignorable; universal vendor-marker recognition is outside this reader's scope.
 
-Touchstone 2.0 single-ended S data has one explicit ingress function:
+Touchstone 2.0 single-ended S, Z, and Y data has one explicit ingress function:
 
 ```rust
-use rfkit_touchstone::parse_touchstone_v2_0_s;
+use rfkit_touchstone::parse_touchstone_v2_0_power;
 
 fn load_v2(text: &str) -> rfkit_touchstone::Result<rfkit_core::Network> {
-    parse_touchstone_v2_0_s(text)
+    parse_touchstone_v2_0_power(text)
 }
 ```
 
@@ -282,7 +283,19 @@ are preserved in frequency-major `Network` order without sorting,
 interpolation, repair, or implicit renormalization. The resulting
 `(nfreq,nport)` references are expanded exactly per frequency and port.
 
-Non-S parameters, mixed-mode, noise, information blocks, unknown keywords,
+The option-line parameter selects the physical input kind before any RF
+arithmetic. S values are stored directly as dimensionless power-wave S; Z
+values are decoded in physical ohms and converted through
+`Network::from_z_power`; Y values are decoded in physical siemens and
+converted through `Network::from_y_direct_power`. The selected positive-real
+per-port reference profile is the output S coordinate for all three kinds: it
+is copied into the returned network and never scales physical Z/Y values.
+Consequently, changing only `[Reference]` changes the returned S coordinates
+but not the physical Z/Y recovered from the result. Direct Y ingress accepts
+zero or rank-deficient Y whenever its checked direct system is nonsingular;
+there is no fallback, pseudoinverse, regularization, or new conversion kernel.
+
+H/G parameters, mixed-mode, noise, information blocks, unknown keywords,
 other versions, complex/non-positive references, duplicate or misplaced
 bracket directives, incomplete/surplus records, missing `[End]`, trailing
 content, non-finite values, and recognized HFSS/Ansys semantic comments are
@@ -297,6 +310,18 @@ ingress-to-v1 executable demonstrates the renormalization workflow:
 ```text
 cargo run -p rfkit-touchstone --example touchstone_v2_full_workflow
 ```
+
+The physical-parameter ingress workflow is executable with:
+
+```text
+cargo run -p rfkit-touchstone --example touchstone_v2_parameter_workflow
+```
+
+It loads a physical Z document, applies the existing `to_z_power` inspection,
+exports the resulting S network through the bounded Full v2 writer, and reads
+the emitted S text back. The same parser accepts physical Y and selects the
+direct Y→S constructor; the workflow's `to_z_power` operation is documented
+only for the nonsingular Z example used by the executable.
 
 The direct v2 preservation workflow (parse, select/reorder physical ports, write and
 read without renormalization) is executable with:
@@ -1282,7 +1307,7 @@ back.
 
 ```text
 crates/rfkit-core/       Rust RF numerical core
-crates/rfkit-touchstone/ pure Touchstone v1.0 ingress/egress and bounded v2.0 Full S ingress/egress
+crates/rfkit-touchstone/ pure Touchstone v1.0 ingress/egress and bounded v2.0 S/Z/Y ingress plus Full S egress
 tools/oracle/        scikit-rf reference/differential-test tools
 docs/                architecture, development, conformance and provenance policy
 ```

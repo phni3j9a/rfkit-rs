@@ -280,7 +280,7 @@ this check after the canonical fixture checker and runs the checker unit tests.
 
 ## Generate and verify
 
-The harness has fifty-seven registered canonical cases. The original three cases
+The harness has sixty registered canonical cases. The original three cases
 remain unchanged:
 
 - `three_port_complex_z0` — the representative four-frequency, three-port
@@ -334,6 +334,27 @@ fixtures intentionally use N=3: pinned scikit-rf's two-port triangular
 has a legacy transpose-before-mirror defect, so no uninitialized or
 opposite-triangle values are canonicalized here. The ratified Touchstone 2.0
 two-port semantics are covered by the standards-based Rust regression instead.
+
+Issue #130 adds two physical-parameter cases to the same public-reader
+boundary:
+
+- `touchstone_v2_0_z_full_three_port` — independently authored two-sample N=3
+  Full/RI Z text with unequal `[Reference]` values `[25,50,75]` ohm. The
+  builder calls the public `skrf.io.touchstone.Touchstone` reader, verifies its
+  raw `s_flat` physical-ohm matrix against the literal input, and cross-checks
+  reader output S through public `skrf.network.z2s(..., s_def="power")`.
+- `touchstone_v2_0_y_full_three_port` — the corresponding physical-siemens Y
+  text, with reader output S cross-checked through public
+  `skrf.network.y2s(..., s_def="power")`.
+
+Both fixtures pin scikit-rf `2.0.1` at commit
+`bd651e923cac6020de49a096e1d7e9b5f949f884` and NumPy `2.5.1`. Frequency,
+references, source text, metadata, parameter units, and raw physical matrices are exact
+contract fields; only converted S uses `rtol=1e-12`, `atol=1e-12`. Rust
+`oracle_touchstone_v2_power.rs` additionally checks a recovered-parameter
+round trip. The independent decode evidence is the generator's exact
+literal-versus-`s_flat` check, so agreement between two S wrappers alone
+cannot make the fixture pass.
 
 The mixed-mode cases are:
 

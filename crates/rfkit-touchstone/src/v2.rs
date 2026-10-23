@@ -1,4 +1,4 @@
-//! Touchstone 2.0 single-ended Full/Lower/Upper S-parameter ingress.
+//! Touchstone 2.0 single-ended Full/Lower/Upper S/Z/Y ingress.
 //!
 //! This module intentionally has its own document state machine.  Touchstone
 //! 1.0's row/continuation rules are sufficiently different that trying to
@@ -11,9 +11,9 @@ use num_complex::Complex64;
 use rfkit_core::{Frequency, Network};
 
 use super::{
-    DataFormat, Error, Options, Result, SizeQuantity, Token, check_frequency_order, finite_complex,
-    parse_frequency, parse_number, parse_option_line, reject_recognized_extension, split_comment,
-    split_lines, tokenize, validate_character_set,
+    DataFormat, Error, NetworkParameter, Options, Result, SizeQuantity, Token,
+    check_frequency_order, finite_complex, parse_frequency, parse_number, parse_option_line_v2,
+    reject_recognized_extension, split_comment, split_lines, tokenize, validate_character_set,
 };
 
 #[derive(Clone, Copy)]
@@ -49,7 +49,7 @@ struct ScalarValue {
 }
 
 /// Parse the supported Touchstone 2.0 document subset.
-pub(crate) fn parse_touchstone_v2_0_s(input: &str) -> Result<Network> {
+pub(crate) fn parse_touchstone_v2_0_power(input: &str) -> Result<Network> {
     let lines = collect_lines(input)?;
 
     let mut version_seen = false;
@@ -68,7 +68,7 @@ pub(crate) fn parse_touchstone_v2_0_s(input: &str) -> Result<Network> {
     let mut ended = false;
 
     let mut frequencies = Vec::new();
-    let mut s_values = Vec::new();
+    let mut parameter_values = Vec::new();
     let mut current_frequency = None;
     let mut current_record_line = 0usize;
     let mut current_scalars = Vec::new();
@@ -242,7 +242,7 @@ pub(crate) fn parse_touchstone_v2_0_s(input: &str) -> Result<Network> {
                     message: "the option line must precede [Number of Ports]".to_owned(),
                 });
             }
-            option = Some(parse_option_line(trimmed, raw.number)?);
+            option = Some(parse_option_line_v2(trimmed, raw.number)?);
             index += 1;
             continue;
         }
@@ -273,7 +273,7 @@ pub(crate) fn parse_touchstone_v2_0_s(input: &str) -> Result<Network> {
             &mut current_scalars,
             &mut current_matrix,
             &mut frequencies,
-            &mut s_values,
+            &mut parameter_values,
         )?;
         index += 1;
     }
@@ -354,7 +354,7 @@ pub(crate) fn parse_touchstone_v2_0_s(input: &str) -> Result<Network> {
             quantity: SizeQuantity::ReferenceImpedanceElements,
             detail: format!("{nfrequencies} frequency records × {nports} ports"),
         })?;
-    let s_values_len = nfrequencies
+    let parameter_values_len = nfrequencies
         .checked_mul(full_matrix_elements)
         .ok_or_else(|| Error::V2SizeOverflow {
             line: last_line_number(&lines),
@@ -389,13 +389,14 @@ pub(crate) fn parse_touchstone_v2_0_s(input: &str) -> Result<Network> {
     debug_assert_eq!(z0_values.len(), z0_values_len);
 
     let frequency = Frequency::from_hz(frequencies).map_err(Error::Core)?;
-    let s = Array3::from_shape_vec((nfrequencies, nports, nports), s_values).map_err(|_| {
-        Error::ConstructionShape {
-            quantity: "Touchstone 2.0 S-parameter array",
-            shape: vec![nfrequencies, nports, nports],
-        }
-    })?;
-    debug_assert_eq!(s_values_len, s.len());
+    let matrix =
+        Array3::from_shape_vec((nfrequencies, nports, nports), parameter_values).map_err(|_| {
+            Error::ConstructionShape {
+                quantity: "Touchstone 2.0 parameter array",
+                shape: vec![nfrequencies, nports, nports],
+            }
+        })?;
+    debug_assert_eq!(parameter_values_len, matrix.len());
     let z0 = Array2::from_shape_vec((nfrequencies, nports), z0_values).map_err(|_| {
         Error::ConstructionShape {
             quantity: "Touchstone 2.0 reference-impedance array",
@@ -410,7 +411,13 @@ pub(crate) fn parse_touchstone_v2_0_s(input: &str) -> Result<Network> {
             triangular_count(nports).expect("checked at declaration")
         }
     );
-    Network::new(frequency, s, z0).map_err(Error::Core)
+    match options.parameter {
+        NetworkParameter::S => Network::new(frequency, matrix, z0).map_err(Error::Core),
+        NetworkParameter::Z => Network::from_z_power(frequency, matrix, z0).map_err(Error::Core),
+        NetworkParameter::Y => {
+            Network::from_y_direct_power(frequency, matrix, z0).map_err(Error::Core)
+        }
+    }
 }
 
 fn collect_lines<'a>(input: &'a str) -> Result<Vec<RawLine<'a>>> {
@@ -881,7 +888,7 @@ fn feed_network_data_line(
     current_scalars: &mut Vec<ScalarValue>,
     current_matrix: &mut Vec<Complex64>,
     frequencies: &mut Vec<f64>,
-    s_values: &mut Vec<Complex64>,
+    parameter_values: &mut Vec<Complex64>,
 ) -> Result<()> {
     let tokens = tokenize(raw.text);
     if tokens.is_empty() {
@@ -953,7 +960,7 @@ fn feed_network_data_line(
             two_port_order,
             matrix_format,
             frequencies,
-            s_values,
+            parameter_values,
             frequency,
             raw.number,
         )?;
@@ -1087,7 +1094,7 @@ fn append_matrix(
     order: TwoPortDataOrder,
     matrix_format: MatrixFormat,
     frequencies: &mut Vec<f64>,
-    s_values: &mut Vec<Complex64>,
+    parameter_values: &mut Vec<Complex64>,
     frequency: f64,
     line: usize,
 ) -> Result<()> {
@@ -1118,9 +1125,9 @@ fn append_matrix(
     {
         // Physical order N11, N21, N12, N22; Network is row-major N11,
         // N12, N21, N22.
-        s_values.extend([matrix[0], matrix[2], matrix[1], matrix[3]]);
+        parameter_values.extend([matrix[0], matrix[2], matrix[1], matrix[3]]);
     } else if matrix_format == MatrixFormat::Full {
-        s_values.extend(matrix);
+        parameter_values.extend(matrix);
     } else {
         // Triangular Touchstone records declare symmetry.  Expand the missing
         // half with a plain transpose, preserving complex values without
@@ -1147,7 +1154,7 @@ fn append_matrix(
                         quantity: SizeQuantity::MatrixElements,
                         detail: "triangular matrix index".to_owned(),
                     })?;
-                s_values.push(matrix[index]);
+                parameter_values.push(matrix[index]);
             }
         }
     }
