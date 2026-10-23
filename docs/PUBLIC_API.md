@@ -41,9 +41,8 @@ Keep the existing owned, frequency-major core model as the current baseline:
 ## Touchstone 2.0 ingress boundary (Issue #102 Yellow) — Superseded by #112
 
 This is the historical #102 Full-only decision record. Its original reader
-name and rejection boundary are retained below for provenance; the current
-sole reader and its migration are recorded in the Issue #112 section that
-follows.
+name and rejection boundary are retained below for provenance; the subsequent
+#112 and #130 sections record the later reader migrations and current API.
 
 The `rfkit-touchstone` crate exposes the additive pure in-memory function
 `parse_touchstone_v2_0_s_full(input: &str) -> Result<rfkit_core::Network>`.
@@ -92,14 +91,17 @@ callers, or implementing all v2 sections. The selected separate function
 keeps version/matrix semantics visible, preserves v1 behavior, and completes
 an ingress-to-analysis workflow without a core-model or writer change.
 
-## Touchstone 2.0 S ingress generalization (Issue #112 Yellow)
+## Touchstone 2.0 S ingress generalization (Issue #112 Yellow) — Superseded by #130
 
-This section is the current Yellow decision record for Issue #112.
-The current and sole public Version 2.0 single-ended S reader is the
+This section is the historical Yellow decision record for Issue #112. It
+records the pre-#130 name and S-only boundary for provenance, not current API
+guidance. The former sole public Version 2.0 single-ended S reader was the
 provisional pure in-memory function
 `parse_touchstone_v2_0_s(input: &str) -> Result<rfkit_core::Network>`. The
-historical `parse_touchstone_v2_0_s_full` name is removed with no deprecated
-alias. The caller asks to decode Touchstone 2.0 S data; the document's
+historical `parse_touchstone_v2_0_s_full` name was removed with no deprecated
+alias. Issue #130 migrated all callers and replaced that function with
+`parse_touchstone_v2_0_power`, which additionally accepts physical Z/Y. The
+caller asked to decode Touchstone 2.0 S data; the document's
 `[Matrix Format]` selects the storage representation rather than creating a
 second public operation. An absent matrix-format keyword means Full.
 
@@ -157,11 +159,13 @@ generalization is therefore the overlap outcome: one public reader, no new
 overlap-inventory row, and no change to the three existing RF-conversion
 overlaps.
 
-Compatibility is intentionally provisional because `rfkit-rs` is unpublished
-and remains in `0.x`: existing callers replace
+Compatibility was intentionally provisional because `rfkit-rs` is unpublished
+and remains in `0.x`: at the #112 boundary callers replaced
 `parse_touchstone_v2_0_s_full` with `parse_touchstone_v2_0_s`, with no alias.
-Successful Full inputs and results remain unchanged; Lower/Upper moves from an
-explicit unsupported error to decoding or contextual validation errors.
+Issue #130 then migrated callers to `parse_touchstone_v2_0_power`, again with
+no alias. Successful Full inputs and results remain unchanged; Lower/Upper
+moved from an explicit unsupported error to decoding or contextual validation
+errors, and physical Z/Y now use the declared power-wave conversion path.
 Unaffected diagnostics retain their structure, with only compact-count
 diagnostics necessarily generalized where applicable. No persisted-data or
 canonical-storage migration is needed. Rollback is the bounded PR reversal:
@@ -176,6 +180,55 @@ only as a behavior oracle. The focused workflow loads compact triangular data,
 permutes/inspects the resulting Network, writes the existing Full v2 text,
 and reads it back while retaining frequencies and unequal references without
 implicit renormalization.
+
+## Touchstone 2.0 physical Z/Y ingress and power-wave output (Issue #130 Yellow)
+
+Issue #130 supersedes the Issue #112 reader name and generalizes the sole
+Touchstone 2.0 single-ended ingress operation to:
+
+```rust
+pub fn parse_touchstone_v2_0_power(input: &str) -> Result<rfkit_core::Network>;
+```
+
+The operation accepts S, Z, and Y data selected by the option-line parameter,
+with the existing Full/Lower/Upper matrix state machine, RI/MA/DB pairs,
+frequency units, two-port order, continuations, count/grid, `[Reference]`, and
+exclusion rules. The returned `Network` always stores dimensionless Kurokawa
+power-wave S. S data retains the existing direct construction path with no
+round trip. Physical Z is decoded in ohms and passed to
+`Network::from_z_power`; physical Y is decoded in siemens and passed to
+`Network::from_y_direct_power`. The evaluator is selected from the declared
+parameter before arithmetic and never retries another path or introduces a
+pseudoinverse, regularization, nudge, cutoff, or new core kernel.
+
+The positive-real per-port `[Reference]` vector, or the option-line `R` profile
+when `[Reference]` is absent, is the output S coordinate for all accepted
+parameter kinds. It is copied into the returned network exactly and never
+scales a physical Z/Y matrix. Thus different declared references produce
+different S coordinates while recovering the same physical parameters wherever
+the existing extraction operation is defined. Frequency labels and port order
+are preserved exactly. The v1 parser remains S-only because its option helper
+continues to reject Y/Z/H/G; the v1 and v2 writers are unchanged.
+
+The public boundary keeps the existing core conversion errors through the
+Touchstone `Error::Core` source, retaining parameter, stage, sample, row/
+column, pivot, singularity, and non-finite arithmetic context. Structural
+validation and checked counts complete before parameter arrays are constructed
+or RF conversion begins. Direct Y ingress inherits its existing domain: zero
+and rank-deficient Y are accepted when the direct system is nonsingular, while
+downstream operations that require an invertible intermediate parameter retain
+their own documented restrictions.
+
+Pinned scikit-rf `2.0.1` / NumPy `2.5.1` N=3 Full/RI fixtures cover unequal
+references and independently check raw physical Z/Y values through public
+Touchstone reader output before comparing only converted S at the recorded
+`rtol=1e-12`, `atol=1e-12` policy. This is a provisional 0.x rename and
+generalization; no compatibility promise or serialized-data migration is made.
+Rollback of Issue #130 restores the Issue #112 name and S-only rejection
+together with its callers and fixtures.
+
+The focused executable workflow is
+`crates/rfkit-touchstone/examples/touchstone_v2_parameter_workflow.rs`.
 
 ## Touchstone 2.0 Full S egress (Issue #104 Yellow)
 

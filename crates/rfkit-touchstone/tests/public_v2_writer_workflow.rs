@@ -1,6 +1,6 @@
 use ndarray::{Array2, Array3};
 use num_complex::Complex64;
-use rfkit_touchstone::{parse_touchstone_v2_0_s, write_touchstone_v2_0_s_full_ri_hz};
+use rfkit_touchstone::{parse_touchstone_v2_0_power, write_touchstone_v2_0_s_full_ri_hz};
 
 const INPUT: &str = "[Version] 2.0\n\
 # Hz S RI R 37\n\
@@ -17,7 +17,7 @@ const INPUT: &str = "[Version] 2.0\n\
 
 #[test]
 fn v2_parse_permute_write_read_preserves_physical_s_and_references() {
-    let source = parse_touchstone_v2_0_s(INPUT).expect("unequal-reference v2 input parses");
+    let source = parse_touchstone_v2_0_power(INPUT).expect("unequal-reference v2 input parses");
     let analysis = source
         .max_singular_value_power()
         .expect("triangular input reaches existing public analysis");
@@ -73,7 +73,7 @@ fn v2_parse_permute_write_read_preserves_physical_s_and_references() {
         write_touchstone_v2_0_s_full_ri_hz(&reordered).expect("v2 writer accepts references");
     assert!(text.contains("[Reference] 83 37 61\n"));
     assert!(text.contains("[Matrix Format] Full\n"));
-    let reread = parse_touchstone_v2_0_s(&text).expect("v2 output parses");
+    let reread = parse_touchstone_v2_0_power(&text).expect("v2 output parses");
     assert_eq!(reread.frequency(), source.frequency());
     assert_eq!(reread.s(), &expected_s);
     assert_eq!(reread.z0(), &expected_z0);

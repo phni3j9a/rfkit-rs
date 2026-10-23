@@ -2,15 +2,15 @@
 
 scikit-rf is used as a reference oracle, not as the API specification.
 
-Touchstone 2.0 single-ended S ingress is one format-boundary operation exposed
-as `parse_touchstone_v2_0_s`. The document's `[Matrix Format]` selects Full,
-Lower, or Upper representation; absent format means Full. Full preserves every
-row-major complex value, while Lower/Upper expand the declared triangular
-storage by plain transpose (never conjugation), including the diagonal. A
-two-port document retains its required `[Two-Port Data Order]` directive and
-both legal orders produce the same symmetric matrix under the ratified
-Touchstone 2.0 semantics. The reader remains pure in-memory and does not infer
-representation from scalar count.
+Touchstone 2.0 single-ended S/Z/Y ingress is one format-boundary operation
+exposed as `parse_touchstone_v2_0_power`. The document's `[Matrix Format]`
+selects Full, Lower, or Upper representation; absent format means Full. Full
+preserves every row-major complex value, while Lower/Upper expand the declared
+triangular storage by plain transpose (never conjugation), including the
+diagonal. A two-port document retains its required `[Two-Port Data Order]`
+directive and both legal orders produce the same symmetric matrix under the
+ratified Touchstone 2.0 semantics. The reader remains pure in-memory and does
+not infer representation from scalar count.
 
 The public parser is tested externally with asymmetric one-, two-, and
 larger-port Full inputs, deterministic N=3 Lower and Upper inputs, RI/MA/DB
@@ -33,6 +33,41 @@ nonzero imaginary entries, and no random generation. The Rust oracle calls
 only the new public API. The focused workflow explicitly inspects a loaded
 triangular network, selects/reorders ports, writes existing Full v2 text, and checks
 readback of S, reference order, and frequencies without renormalization.
+
+Issue #130 adds the physical-parameter part of the same operation. The option
+line selects S, Z, or Y before arithmetic: S records use the existing direct
+network construction, physical Z records use `Network::from_z_power`, and
+physical Y records use `Network::from_y_direct_power`. The declared positive-
+real per-port `[Reference]`/option `R` profile is copied as the output S
+coordinate; it never scales decoded physical ohms or siemens. Changing only
+that profile is therefore checked by recovering identical physical parameters
+from different S coordinates. Zero Z and zero/rank-deficient Y cases use the
+existing constructor domains, with no fallback, pseudoinverse, regularization,
+or new RF kernel.
+The deterministic parser boundary tests additionally cover option-`R` versus
+`[Reference]` coordinate selection, both physical two-port orders, complex
+plain-transpose Y triangles, exact Z/Y singularities, finite near-singular
+success, and finite-input non-finite arithmetic with the original core stage
+and pivot context preserved through `Error::Core`.
+
+The pinned physical fixtures `touchstone_v2_0_z_full_three_port` and
+`touchstone_v2_0_y_full_three_port` are independently authored N=3 Full/RI
+documents with two MHz samples and unequal references `[25,50,75]`. They
+record scikit-rf `2.0.1` at commit `bd651e923cac6020de49a096e1d7e9b5f949f884`
+and NumPy `2.5.1`. The oracle invokes the public `Touchstone` reader, checks
+its decoded physical `s_flat` Z/Y matrix against the literal source matrix,
+then cross-checks the reader-produced S through public
+`z2s(..., s_def="power")` or `y2s(..., s_def="power")`. The canonical Python
+checker treats source text, frequency, references, raw physical matrices, and
+metadata as exact while comparing only S with `rtol=1e-12`, `atol=1e-12`.
+Rust checks the pinned metadata, frequency, and references, compares S with
+the same tolerance, and adds a parameter round-trip invariant. The
+literal-versus-decoded physical-matrix independence comes from the generator's
+pre-conversion `s_flat` check, not from the Rust round trip. The focused
+`touchstone_v2_parameter_workflow` example/test
+performs physical-Z ingress, existing Z inspection, Full v2 S write, and
+parser readback; Y ingress is covered by the same public function and pinned
+fixture.
 
 The pinned scikit-rf reader has a known two-port triangular `21_12` legacy
 defect (the required Lower/`21_12` example is the narrow exception recorded by

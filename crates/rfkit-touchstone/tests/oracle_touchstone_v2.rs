@@ -1,5 +1,5 @@
 use num_complex::Complex64;
-use rfkit_touchstone::parse_touchstone_v2_0_s;
+use rfkit_touchstone::parse_touchstone_v2_0_power;
 use serde::Deserialize;
 
 const FIXTURE: &str =
@@ -122,7 +122,7 @@ fn assert_fixture(json: &str, expected_case: &str, expected_operation: &str) {
     assert!(fixture.metadata.tolerance_policy.rtol >= 0.0);
     assert!(fixture.metadata.tolerance_policy.atol >= 0.0);
 
-    let network = parse_touchstone_v2_0_s(&fixture.data.touchstone_text)
+    let network = parse_touchstone_v2_0_power(&fixture.data.touchstone_text)
         .expect("Touchstone v2 fixture must parse");
     assert_eq!(
         network.frequency().hz(),

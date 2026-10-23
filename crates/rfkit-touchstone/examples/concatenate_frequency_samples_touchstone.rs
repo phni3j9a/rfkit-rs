@@ -2,7 +2,7 @@
 //! stored observations, and exercise the existing writer domain.
 
 use num_complex::Complex64;
-use rfkit_touchstone::{Error, parse_touchstone_v2_0_s, write_touchstone_v2_0_s_full_ri_hz};
+use rfkit_touchstone::{Error, parse_touchstone_v2_0_power, write_touchstone_v2_0_s_full_ri_hz};
 
 const INPUT_A: &str = "[Version] 2.0\n\
 # Hz S RI R 35\n\
@@ -67,8 +67,8 @@ fn expect_writer_frequency_error(result: rfkit_touchstone::Result<String>) {
 }
 
 fn main() -> rfkit_touchstone::Result<()> {
-    let source_a = parse_touchstone_v2_0_s(INPUT_A)?;
-    let source_b = parse_touchstone_v2_0_s(INPUT_B)?;
+    let source_a = parse_touchstone_v2_0_power(INPUT_A)?;
+    let source_b = parse_touchstone_v2_0_power(INPUT_B)?;
     let assembled = source_a.concatenate_frequency_samples(&source_b)?;
     assert_eq!(assembled.nports(), 3);
     assert_eq!(
@@ -95,19 +95,19 @@ fn main() -> rfkit_touchstone::Result<()> {
 
     let text = write_touchstone_v2_0_s_full_ri_hz(&assembled)?;
     assert!(text.contains("[Reference] 35 50 72\n"));
-    let reread = parse_touchstone_v2_0_s(&text)?;
+    let reread = parse_touchstone_v2_0_power(&text)?;
     assert_eq!(reread.frequency(), assembled.frequency());
     assert_eq!(reread.s(), assembled.s());
     assert_eq!(reread.z0(), assembled.z0());
 
     let duplicate =
-        source_a.concatenate_frequency_samples(&parse_touchstone_v2_0_s(INPUT_B_DUPLICATE)?)?;
+        source_a.concatenate_frequency_samples(&parse_touchstone_v2_0_power(INPUT_B_DUPLICATE)?)?;
     expect_writer_frequency_error(write_touchstone_v2_0_s_full_ri_hz(&duplicate));
-    let nonmonotonic =
-        source_a.concatenate_frequency_samples(&parse_touchstone_v2_0_s(INPUT_B_NONMONOTONIC)?)?;
+    let nonmonotonic = source_a
+        .concatenate_frequency_samples(&parse_touchstone_v2_0_power(INPUT_B_NONMONOTONIC)?)?;
     expect_writer_frequency_error(write_touchstone_v2_0_s_full_ri_hz(&nonmonotonic));
     let varying_reference = source_a
-        .concatenate_frequency_samples(&parse_touchstone_v2_0_s(INPUT_B_VARYING_REFERENCE)?)?;
+        .concatenate_frequency_samples(&parse_touchstone_v2_0_power(INPUT_B_VARYING_REFERENCE)?)?;
     assert!(matches!(
         write_touchstone_v2_0_s_full_ri_hz(&varying_reference),
         Err(Error::WriterV2MismatchedZ0 { .. })

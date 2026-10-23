@@ -1,5 +1,5 @@
 //! Pure in-memory parsing and deterministic writing for deliberately bounded
-//! Touchstone S subsets.
+//! Touchstone subsets.
 //!
 //! [`parse_touchstone_v1_0_s`] accepts Touchstone text and an explicit positive
 //! port count.  It returns the canonical frequency-major
@@ -36,15 +36,19 @@
 //! HFSS/Ansys semantic markers only; universal vendor-format recognition is
 //! outside this crate's scope.
 //!
-//! [`parse_touchstone_v2_0_s`] is the separate Touchstone 2.0 entrypoint.  It
-//! accepts single-ended Full, Lower, and Upper S data, obtains the port and
-//! frequency counts from the document, preserves an optional real-positive
-//! per-port `[Reference]` vector, and requires complete records plus `[End]`.
-//! Triangular records are expanded by plain transpose without conjugation;
-//! absent `[Matrix Format]` means Full.  Mixed-mode, noise, information,
-//! non-S, unknown-keyword, complex-reference, and malformed-count features
-//! remain rejected explicitly; no filename inference or filesystem I/O is
-//! performed.
+//! [`parse_touchstone_v2_0_power`] is the separate Touchstone 2.0 entrypoint.
+//! It accepts single-ended Full, Lower, and Upper S, Z, or Y data, obtains the
+//! port and frequency counts from the document, preserves an optional
+//! real-positive per-port `[Reference]` vector, and requires complete records
+//! plus `[End]`. Triangular records are expanded by plain transpose without
+//! conjugation; absent `[Matrix Format]` means Full. S data remains on the
+//! existing direct construction path; physical Z data is converted through
+//! [`rfkit_core::Network::from_z_power`], and physical Y data through
+//! [`rfkit_core::Network::from_y_direct_power`]. The option/reference profile
+//! supplies the output S coordinates and never rescales physical Z/Y values.
+//! Mixed-mode, noise, information, H/G, unknown-keyword, complex-reference,
+//! and malformed-count features remain rejected explicitly; no filename
+//! inference or filesystem I/O is performed.
 //!
 //! # Example
 //!
@@ -99,8 +103,8 @@ use thiserror::Error;
 mod v2;
 mod writer;
 
-/// The crate-wide public error boundary for bounded Touchstone v1.0/v2.0 S
-/// parsing and deterministic v1 S/RI/Hz writing.
+/// The crate-wide public error boundary for bounded Touchstone v1.0 S and v2.0
+/// S/Z/Y parsing plus deterministic v1 S/RI/Hz writing.
 ///
 /// The enum is non-exhaustive so future format-specific diagnostics can be
 /// added without freezing the provisional 0.x API.  Errors identify the
@@ -130,10 +134,9 @@ pub enum Error {
     #[error("malformed Touchstone option line {line}: {message}")]
     MalformedOption { line: usize, message: String },
 
-    /// Y, Z, H, and G are intentionally outside this reader's S-only domain.
-    #[error(
-        "unsupported Touchstone network parameter {parameter:?} on option line {line}; only S is supported"
-    )]
+    /// H and G are intentionally outside this bounded domain. v1 remains
+    /// S-only, while the v2 power reader additionally accepts physical Z/Y.
+    #[error("unsupported Touchstone network parameter {parameter:?} on option line {line}")]
     UnsupportedParameter { line: usize, parameter: String },
 
     /// More than one reference value denotes the v1.1 option-line extension.
@@ -581,7 +584,7 @@ pub fn write_touchstone_v2_0_s_full_ri_hz(network: &Network) -> Result<String> {
 }
 
 /// Parse the deliberately bounded Touchstone 2.0 single-ended Full/Lower/Upper
-/// S-parameter subset into the canonical frequency-major [`Network`].
+/// S/Z/Y subset into the canonical frequency-major [`Network`].
 ///
 /// Unlike the v1 entrypoint, the port count and sample count come from the
 /// required v2 directives.  The parser accepts RI, MA, and DB data in the
@@ -591,15 +594,20 @@ pub fn write_touchstone_v2_0_s_full_ri_hz(network: &Network) -> Result<String> {
 /// declared `[Number of Frequencies]`, and a terminating `[End]`.  Full is the
 /// default when `[Matrix Format]` is absent.  Lower and Upper records include
 /// the diagonal in row-wise order and expand their missing half by plain
-/// transpose, never conjugation.
+/// transpose, never conjugation. S records retain their decoded values
+/// directly. Z records are physical ohms and use [`Network::from_z_power`]; Y
+/// records are physical siemens and use [`Network::from_y_direct_power`]. The
+/// selected option/reference profile is the output S coordinate and does not
+/// scale Z/Y values.
 ///
-/// Mixed-mode, noise, information blocks, non-S parameters, unknown keywords,
+/// Mixed-mode, noise, information blocks, H/G parameters, unknown keywords,
 /// complex references, and vendor semantic comments are rejected explicitly.
 /// Parsing is pure and in-memory; no file name, filesystem, automatic version
 /// detection, sorting, interpolation, renormalization, or alternate wave
-/// convention is applied.
-pub fn parse_touchstone_v2_0_s(input: &str) -> Result<Network> {
-    v2::parse_touchstone_v2_0_s(input)
+/// convention is applied. The returned network always stores dimensionless
+/// Kurokawa power-wave S values.
+pub fn parse_touchstone_v2_0_power(input: &str) -> Result<Network> {
+    v2::parse_touchstone_v2_0_power(input)
 }
 
 #[derive(Clone, Copy)]
@@ -626,6 +634,14 @@ struct Options {
     unit: FrequencyUnit,
     format: DataFormat,
     resistance: f64,
+    parameter: NetworkParameter,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum NetworkParameter {
+    S,
+    Z,
+    Y,
 }
 
 #[derive(Clone, Copy)]
@@ -838,6 +854,18 @@ fn reject_recognized_extension(comment: &str, line: usize) -> Result<()> {
 }
 
 fn parse_option_line(line_text: &str, line: usize) -> Result<Options> {
+    parse_option_line_with_parameters(line_text, line, false)
+}
+
+fn parse_option_line_v2(line_text: &str, line: usize) -> Result<Options> {
+    parse_option_line_with_parameters(line_text, line, true)
+}
+
+fn parse_option_line_with_parameters(
+    line_text: &str,
+    line: usize,
+    allow_physical_parameters: bool,
+) -> Result<Options> {
     let body = line_text
         .strip_prefix('#')
         .ok_or_else(|| Error::MalformedOption {
@@ -848,7 +876,7 @@ fn parse_option_line(line_text: &str, line: usize) -> Result<Options> {
     let mut unit = None;
     let mut format = None;
     let mut resistance = None;
-    let mut parameter_seen = false;
+    let mut parameter = None;
     let mut index = 0usize;
 
     while index < tokens.len() {
@@ -871,15 +899,34 @@ fn parse_option_line(line_text: &str, line: usize) -> Result<Options> {
                 });
             }
             "s" => {
-                if parameter_seen {
+                if parameter.is_some() {
                     return Err(Error::MalformedOption {
                         line,
                         message: "duplicate network parameter".to_owned(),
                     });
                 }
-                parameter_seen = true;
+                parameter = Some(NetworkParameter::S);
             }
-            "y" | "z" | "h" | "g" => {
+            "y" | "z" => {
+                if !allow_physical_parameters {
+                    return Err(Error::UnsupportedParameter {
+                        line,
+                        parameter: token.text.to_owned(),
+                    });
+                }
+                if parameter.is_some() {
+                    return Err(Error::MalformedOption {
+                        line,
+                        message: "duplicate network parameter".to_owned(),
+                    });
+                }
+                parameter = Some(if lower == "y" {
+                    NetworkParameter::Y
+                } else {
+                    NetworkParameter::Z
+                });
+            }
+            "h" | "g" => {
                 return Err(Error::UnsupportedParameter {
                     line,
                     parameter: token.text.to_owned(),
@@ -946,6 +993,7 @@ fn parse_option_line(line_text: &str, line: usize) -> Result<Options> {
         unit: unit.unwrap_or(FrequencyUnit::GHz),
         format: format.unwrap_or(DataFormat::Ma),
         resistance: resistance.unwrap_or(50.0),
+        parameter: parameter.unwrap_or(NetworkParameter::S),
     })
 }
 

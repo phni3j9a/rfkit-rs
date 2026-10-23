@@ -72,9 +72,12 @@ frequencies, inputs, and references remain exact canonical contract data.
 The Touchstone cases include independent v1.0 and v2.0 parser inputs; the v2
 cases use public ``skrf.io.touchstone.Touchstone`` on named ``.ts`` streams,
 continued heterogeneous ``[Reference]`` data, and arbitrary Full/Lower/Upper
-record continuations. Only parsed S is tolerant in the v2 fixtures; source
-text, directive/count metadata, frequencies, and references are exact. The
-Lower and Upper cases are deterministic literal three-port inputs with
+record continuations. The physical Z/Y cases additionally compare the public
+reader's raw ``s_flat`` matrix exactly against literal physical input before
+cross-checking the reader-produced S against public ``z2s``/``y2s``. Only parsed S is
+tolerant in the v2 fixtures; source text, directive/count metadata,
+frequencies, references, parameter units, and raw physical matrices are exact.
+The Lower and Upper cases are deterministic literal three-port inputs with
 non-zero imaginary components, so plain-transpose expansion is observable.
 The pinned scikit-rf two-port Lower/``21_12`` legacy transpose defect is not
 serialized as expected data; the standards-based two-port behavior is covered
@@ -250,6 +253,76 @@ TOUCHSTONE_V2_UPPER_TEXT = (
     "30 -0.17 0.27 0.37 -0.47\n"
     "-0.57 0.67 0.77 0.87\n"
     "-0.97 1.07 1.17 -1.27\n"
+    "[End]\n"
+)
+TOUCHSTONE_V2_Z_FIXTURE = (
+    Path(__file__).resolve().parent
+    / "fixtures"
+    / "touchstone_v2_0_z_full_three_port.json"
+)
+TOUCHSTONE_V2_Z_CASE_ID = "touchstone_v2_0_z_full_three_port"
+TOUCHSTONE_V2_Z_NPORTS = 3
+TOUCHSTONE_V2_Z_INPUT_RECIPE = (
+    "literal TOUCHSTONE_V2_Z_TEXT below: two MHz Full-matrix RI Z records, "
+    "three unequal real per-port references [25,50,75] ohm, a continued "
+    "[Reference] vector, and no random generation"
+)
+TOUCHSTONE_V2_Z_RTOL = 1e-12
+TOUCHSTONE_V2_Z_ATOL = 1e-12
+TOUCHSTONE_V2_Z_TOLERANCE_JUSTIFICATION = (
+    "Strict binary64 tolerance for a deterministic, independently authored "
+    "Touchstone 2.0 Full-matrix RI physical-Z input. The pinned public "
+    "scikit-rf reader supplies the decoded physical Z matrix and output S; "
+    "the latter is cross-checked through public z2s(..., s_def='power'). Text, frequencies, "
+    "references, and decoded physical Z remain exact contract fields."
+)
+TOUCHSTONE_V2_Z_TEXT = (
+    "! Independently authored Touchstone v2.0 Full Z oracle input\n"
+    "[Version] 2.0\n"
+    "# MHz Z RI R 40\n"
+    "[Number of Ports] 3\n"
+    "[Number of Frequencies] 2\n"
+    "[Reference] 25 50\n"
+    "75\n"
+    "[Matrix Format] Full\n"
+    "[Network Data]\n"
+    "1000 40 2 3 -1 5 0.5 6 1 55 -3 4 2 7 -2 8 1.5 70 4\n"
+    "2000 42 2.5 3.5 -1.5 5.5 0.75 6.5 1.25 57 -3.5 4.5 2.25 7.5 -2.5 8.5 1.75 72 4.5\n"
+    "[End]\n"
+)
+TOUCHSTONE_V2_Y_FIXTURE = (
+    Path(__file__).resolve().parent
+    / "fixtures"
+    / "touchstone_v2_0_y_full_three_port.json"
+)
+TOUCHSTONE_V2_Y_CASE_ID = "touchstone_v2_0_y_full_three_port"
+TOUCHSTONE_V2_Y_NPORTS = 3
+TOUCHSTONE_V2_Y_INPUT_RECIPE = (
+    "literal TOUCHSTONE_V2_Y_TEXT below: two MHz Full-matrix RI Y records, "
+    "three unequal real per-port references [25,50,75] ohm, a continued "
+    "[Reference] vector, and no random generation"
+)
+TOUCHSTONE_V2_Y_RTOL = 1e-12
+TOUCHSTONE_V2_Y_ATOL = 1e-12
+TOUCHSTONE_V2_Y_TOLERANCE_JUSTIFICATION = (
+    "Strict binary64 tolerance for a deterministic, independently authored "
+    "Touchstone 2.0 Full-matrix RI physical-Y input. The pinned public "
+    "scikit-rf reader supplies the decoded physical Y matrix and output S; "
+    "the latter is cross-checked through public y2s(..., s_def='power'). Text, frequencies, "
+    "references, and decoded physical Y remain exact contract fields."
+)
+TOUCHSTONE_V2_Y_TEXT = (
+    "! Independently authored Touchstone v2.0 Full Y oracle input\n"
+    "[Version] 2.0\n"
+    "# MHz Y RI R 40\n"
+    "[Number of Ports] 3\n"
+    "[Number of Frequencies] 2\n"
+    "[Reference] 25 50\n"
+    "75\n"
+    "[Matrix Format] Full\n"
+    "[Network Data]\n"
+    "1000 0.04 0.002 0.003 -0.001 0.005 0.0005 0.006 0.001 0.055 -0.003 0.004 0.002 0.007 -0.002 0.008 0.0015 0.07 0.004\n"
+    "2000 0.042 0.0025 0.0035 -0.0015 0.0055 0.00075 0.0065 0.00125 0.057 -0.0035 0.0045 0.00225 0.0075 -0.0025 0.0085 0.00175 0.072 0.0045\n"
     "[End]\n"
 )
 S_TO_Z_FIXTURE = (
@@ -3837,6 +3910,192 @@ def _touchstone_v2_upper_fixture(np: Any, skrf: Any) -> dict[str, Any]:
         rtol=TOUCHSTONE_V2_UPPER_RTOL,
         atol=TOUCHSTONE_V2_UPPER_ATOL,
         tolerance_justification=TOUCHSTONE_V2_UPPER_TOLERANCE_JUSTIFICATION,
+    )
+
+
+def _touchstone_v2_parameter_fixture(
+    np: Any,
+    skrf: Any,
+    *,
+    parameter: str,
+    case_id: str,
+    nports: int,
+    input_recipe: str,
+    text: str,
+    expected_physical: Any,
+    rtol: float,
+    atol: float,
+    tolerance_justification: str,
+) -> dict[str, Any]:
+    """Build a v2 physical-Z/Y fixture through the public Touchstone reader.
+
+    ``Touchstone.s_flat`` is the reader's decoded physical matrix before its
+    public ``s`` conversion.  It is checked against the independently authored
+    matrix so the generated fixture has decode evidence independent of the S
+    conversion output.
+    """
+
+    stream = StringIO(text)
+    stream.name = f"{case_id}.ts"
+    from skrf.io.touchstone import Touchstone
+
+    parsed = Touchstone(stream)
+    frequency = np.asarray(parsed.f, dtype=np.float64)
+    physical = np.asarray(parsed.s_flat, dtype=np.complex128).reshape(
+        (-1, nports, nports)
+    )
+    network_s = np.asarray(parsed.s, dtype=np.complex128)
+    network_z0 = np.asarray(parsed.z0, dtype=np.complex128)
+    expected_physical = np.asarray(expected_physical, dtype=np.complex128)
+    if physical.shape != expected_physical.shape:
+        raise ValueError(
+            f"unexpected Touchstone v2 {parameter} physical shape: {physical.shape}"
+        )
+    if not np.array_equal(physical, expected_physical):
+        raise ValueError(f"Touchstone v2 {parameter} physical values changed on read-back")
+    if network_s.shape != expected_physical.shape:
+        raise ValueError(f"unexpected Touchstone v2 {parameter} S shape: {network_s.shape}")
+    if network_z0.shape != (expected_physical.shape[0], nports):
+        raise ValueError(f"unexpected Touchstone v2 {parameter} z0 shape: {network_z0.shape}")
+    expected_z0 = np.broadcast_to(np.array([25.0, 50.0, 75.0]), network_z0.shape)
+    if not np.array_equal(network_z0.real, expected_z0) or not np.all(network_z0.imag == 0.0):
+        raise ValueError(f"Touchstone v2 {parameter} references differ from [25,50,75]")
+
+    if parameter == "Z":
+        expected_s = np.asarray(
+            skrf.network.z2s(physical, z0=network_z0, s_def="power"),
+            dtype=np.complex128,
+        )
+        physical_label = "z_ohm"
+    elif parameter == "Y":
+        expected_s = np.asarray(
+            skrf.network.y2s(physical, z0=network_z0, s_def="power"),
+            dtype=np.complex128,
+        )
+        physical_label = "y_siemens"
+    else:
+        raise ValueError(f"unsupported Touchstone physical parameter {parameter!r}")
+    if not np.isfinite(frequency).all() or not np.isfinite(physical).all():
+        raise ValueError(f"Touchstone v2 {parameter} physical output must be finite")
+    if not np.isfinite(expected_s).all() or not np.isfinite(network_s).all():
+        raise ValueError(f"Touchstone v2 {parameter} S output must be finite")
+    if not np.allclose(network_s, expected_s, rtol=0.0, atol=1e-14):
+        raise ValueError(f"Touchstone v2 {parameter} reader S conversion disagrees with public conversion")
+
+    return {
+        "metadata": {
+            "case_id": case_id,
+            "deterministic_construction": "literal source text; no random generation",
+            "input_parameter": parameter,
+            "parameter_unit": "ohm" if parameter == "Z" else "siemens",
+            "input_recipe": input_recipe,
+            "numpy_version": np.__version__,
+            "operation": f"touchstone_v2_0_{parameter.lower()}_full_parse",
+            "port_count": nports,
+            "reference_impedance": {
+                "complex": False,
+                "frequency_dependent": False,
+                "per_port": True,
+                "unit": "ohm",
+            },
+            "schema": "rfkit-rs.oracle.fixture",
+            "schema_version": SCHEMA_VERSION,
+            "scikit_rf_commit": EXPECTED_SCIKIT_RF_COMMIT,
+            "scikit_rf_version": skrf.__version__,
+            "shape": {
+                "frequency": list(frequency.shape),
+                "parameter": list(physical.shape),
+                "s": list(network_s.shape),
+                "z0": list(network_z0.shape),
+            },
+            "tolerance_policy": {
+                "atol": atol,
+                "comparison": "abs(actual-expected) <= atol + rtol*abs(expected)",
+                "justification": tolerance_justification,
+                "regeneration": (
+                    f"canonical UTF-8 JSON serialization; only parsed S is checked "
+                    f"with the recorded numeric tolerance while {physical_label}, "
+                    "frequency, references, text, and metadata remain exact"
+                ),
+                "rtol": rtol,
+            },
+            "wave_definition": "power",
+        },
+        "data": {
+            "frequency_hz": [float(value) for value in frequency],
+            "nports": nports,
+            "parameter": parameter,
+            "parameter_matrix": _complex_array(physical),
+            "s": _complex_array(network_s),
+            "touchstone_text": text,
+            "z0_ohm": _complex_array(network_z0),
+        },
+    }
+
+
+def _touchstone_v2_z_fixture(np: Any, skrf: Any) -> dict[str, Any]:
+    """Build the Full-matrix physical-Z Touchstone 2.0 fixture."""
+
+    expected = np.array(
+        [
+            [
+                [40 + 2j, 3 - 1j, 5 + 0.5j],
+                [6 + 1j, 55 - 3j, 4 + 2j],
+                [7 - 2j, 8 + 1.5j, 70 + 4j],
+            ],
+            [
+                [42 + 2.5j, 3.5 - 1.5j, 5.5 + 0.75j],
+                [6.5 + 1.25j, 57 - 3.5j, 4.5 + 2.25j],
+                [7.5 - 2.5j, 8.5 + 1.75j, 72 + 4.5j],
+            ],
+        ],
+        dtype=np.complex128,
+    )
+    return _touchstone_v2_parameter_fixture(
+        np,
+        skrf,
+        parameter="Z",
+        case_id=TOUCHSTONE_V2_Z_CASE_ID,
+        nports=TOUCHSTONE_V2_Z_NPORTS,
+        input_recipe=TOUCHSTONE_V2_Z_INPUT_RECIPE,
+        text=TOUCHSTONE_V2_Z_TEXT,
+        expected_physical=expected,
+        rtol=TOUCHSTONE_V2_Z_RTOL,
+        atol=TOUCHSTONE_V2_Z_ATOL,
+        tolerance_justification=TOUCHSTONE_V2_Z_TOLERANCE_JUSTIFICATION,
+    )
+
+
+def _touchstone_v2_y_fixture(np: Any, skrf: Any) -> dict[str, Any]:
+    """Build the Full-matrix physical-Y Touchstone 2.0 fixture."""
+
+    expected = np.array(
+        [
+            [
+                [0.04 + 0.002j, 0.003 - 0.001j, 0.005 + 0.0005j],
+                [0.006 + 0.001j, 0.055 - 0.003j, 0.004 + 0.002j],
+                [0.007 - 0.002j, 0.008 + 0.0015j, 0.07 + 0.004j],
+            ],
+            [
+                [0.042 + 0.0025j, 0.0035 - 0.0015j, 0.0055 + 0.00075j],
+                [0.0065 + 0.00125j, 0.057 - 0.0035j, 0.0045 + 0.00225j],
+                [0.0075 - 0.0025j, 0.0085 + 0.00175j, 0.072 + 0.0045j],
+            ],
+        ],
+        dtype=np.complex128,
+    )
+    return _touchstone_v2_parameter_fixture(
+        np,
+        skrf,
+        parameter="Y",
+        case_id=TOUCHSTONE_V2_Y_CASE_ID,
+        nports=TOUCHSTONE_V2_Y_NPORTS,
+        input_recipe=TOUCHSTONE_V2_Y_INPUT_RECIPE,
+        text=TOUCHSTONE_V2_Y_TEXT,
+        expected_physical=expected,
+        rtol=TOUCHSTONE_V2_Y_RTOL,
+        atol=TOUCHSTONE_V2_Y_ATOL,
+        tolerance_justification=TOUCHSTONE_V2_Y_TOLERANCE_JUSTIFICATION,
     )
 
 
@@ -9264,6 +9523,20 @@ _CASES = (
         TOUCHSTONE_V2_UPPER_CASE_ID,
         TOUCHSTONE_V2_UPPER_FIXTURE,
         _touchstone_v2_upper_fixture,
+        "numeric_output",
+        "s",
+    ),
+    _OracleCase(
+        TOUCHSTONE_V2_Z_CASE_ID,
+        TOUCHSTONE_V2_Z_FIXTURE,
+        _touchstone_v2_z_fixture,
+        "numeric_output",
+        "s",
+    ),
+    _OracleCase(
+        TOUCHSTONE_V2_Y_CASE_ID,
+        TOUCHSTONE_V2_Y_FIXTURE,
+        _touchstone_v2_y_fixture,
         "numeric_output",
         "s",
     ),

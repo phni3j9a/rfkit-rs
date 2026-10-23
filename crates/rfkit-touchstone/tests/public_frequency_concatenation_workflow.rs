@@ -1,5 +1,5 @@
 use num_complex::Complex64;
-use rfkit_touchstone::{Error, parse_touchstone_v2_0_s, write_touchstone_v2_0_s_full_ri_hz};
+use rfkit_touchstone::{Error, parse_touchstone_v2_0_power, write_touchstone_v2_0_s_full_ri_hz};
 
 const INPUT_A: &str = "[Version] 2.0\n\
 # Hz S RI R 35\n\
@@ -65,8 +65,8 @@ fn assert_writer_frequency_error(result: rfkit_touchstone::Result<String>) {
 
 #[test]
 fn measured_segments_concatenate_select_analyze_and_round_trip_as_v2_full() {
-    let source_a = parse_touchstone_v2_0_s(INPUT_A).expect("A segment parses");
-    let source_b = parse_touchstone_v2_0_s(INPUT_B).expect("B segment parses");
+    let source_a = parse_touchstone_v2_0_power(INPUT_A).expect("A segment parses");
+    let source_b = parse_touchstone_v2_0_power(INPUT_B).expect("B segment parses");
     assert_eq!(source_a.nports(), 3);
     assert_eq!(source_b.nports(), 3);
     assert_eq!(
@@ -132,7 +132,7 @@ fn measured_segments_concatenate_select_analyze_and_round_trip_as_v2_full() {
         .expect("separated finite bands with constant per-port references write");
     assert!(text.contains("[Matrix Format] Full\n"));
     assert!(text.contains("[Reference] 35 50 72\n"));
-    let reread = parse_touchstone_v2_0_s(&text).expect("written v2 Full data rereads");
+    let reread = parse_touchstone_v2_0_power(&text).expect("written v2 Full data rereads");
     assert_eq!(reread.frequency(), assembled.frequency());
     assert_eq!(reread.s(), assembled.s());
     assert_eq!(reread.z0(), assembled.z0());
@@ -140,25 +140,26 @@ fn measured_segments_concatenate_select_analyze_and_round_trip_as_v2_full() {
 
 #[test]
 fn concatenation_does_not_repair_writer_grid_or_reference_diagnostics() {
-    let source_a = parse_touchstone_v2_0_s(INPUT_A).expect("A segment parses");
+    let source_a = parse_touchstone_v2_0_power(INPUT_A).expect("A segment parses");
 
     let duplicate = source_a
         .concatenate_frequency_samples(
-            &parse_touchstone_v2_0_s(INPUT_B_DUPLICATE).expect("duplicate segment parses"),
+            &parse_touchstone_v2_0_power(INPUT_B_DUPLICATE).expect("duplicate segment parses"),
         )
         .expect("structural concatenation accepts duplicate labels");
     assert_writer_frequency_error(write_touchstone_v2_0_s_full_ri_hz(&duplicate));
 
     let nonmonotonic = source_a
         .concatenate_frequency_samples(
-            &parse_touchstone_v2_0_s(INPUT_B_NONMONOTONIC).expect("nonmonotonic segment parses"),
+            &parse_touchstone_v2_0_power(INPUT_B_NONMONOTONIC)
+                .expect("nonmonotonic segment parses"),
         )
         .expect("structural concatenation accepts nonmonotonic labels");
     assert_writer_frequency_error(write_touchstone_v2_0_s_full_ri_hz(&nonmonotonic));
 
     let varying_reference = source_a
         .concatenate_frequency_samples(
-            &parse_touchstone_v2_0_s(INPUT_B_VARYING_REFERENCE)
+            &parse_touchstone_v2_0_power(INPUT_B_VARYING_REFERENCE)
                 .expect("varying-reference segment parses"),
         )
         .expect("structural concatenation accepts changing references");

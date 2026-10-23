@@ -1,0 +1,268 @@
+{
+  "data": {
+    "frequency_hz": [
+      1000000000.0,
+      2000000000.0
+    ],
+    "nports": 3,
+    "parameter": "Z",
+    "parameter_matrix": [
+      [
+        [
+          {
+            "imag": 2.0,
+            "real": 40.0
+          },
+          {
+            "imag": -1.0,
+            "real": 3.0
+          },
+          {
+            "imag": 0.5,
+            "real": 5.0
+          }
+        ],
+        [
+          {
+            "imag": 1.0,
+            "real": 6.0
+          },
+          {
+            "imag": -3.0,
+            "real": 55.0
+          },
+          {
+            "imag": 2.0,
+            "real": 4.0
+          }
+        ],
+        [
+          {
+            "imag": -2.0,
+            "real": 7.0
+          },
+          {
+            "imag": 1.5,
+            "real": 8.0
+          },
+          {
+            "imag": 4.0,
+            "real": 70.0
+          }
+        ]
+      ],
+      [
+        [
+          {
+            "imag": 2.5,
+            "real": 42.0
+          },
+          {
+            "imag": -1.5,
+            "real": 3.5
+          },
+          {
+            "imag": 0.75,
+            "real": 5.5
+          }
+        ],
+        [
+          {
+            "imag": 1.25,
+            "real": 6.5
+          },
+          {
+            "imag": -3.5,
+            "real": 57.0
+          },
+          {
+            "imag": 2.25,
+            "real": 4.5
+          }
+        ],
+        [
+          {
+            "imag": -2.5,
+            "real": 7.5
+          },
+          {
+            "imag": 1.75,
+            "real": 8.5
+          },
+          {
+            "imag": 4.5,
+            "real": 72.0
+          }
+        ]
+      ]
+    ],
+    "s": [
+      [
+        [
+          {
+            "imag": 0.02491093378606379,
+            "real": 0.226713114300219
+          },
+          {
+            "imag": -0.01124769125132902,
+            "real": 0.028438272057550746
+          },
+          {
+            "imag": 0.0017825138852519923,
+            "real": 0.04523237803834726
+          }
+        ],
+        [
+          {
+            "imag": 0.009935979035393217,
+            "real": 0.0603255624749209
+          },
+          {
+            "imag": -0.028185969547627893,
+            "real": 0.044247005659526634
+          },
+          {
+            "imag": 0.015352542536860813,
+            "real": 0.028694850714759856
+          }
+        ],
+        [
+          {
+            "imag": -0.02363309056231991,
+            "real": 0.059461827784882224
+          },
+          {
+            "imag": 0.01390952210033232,
+            "real": 0.06249967725421948
+          },
+          {
+            "imag": 0.02820023750939197,
+            "real": -0.03927402652373885
+          }
+        ]
+      ],
+      [
+        [
+          {
+            "imag": 0.029507390164225177,
+            "real": 0.24930891244319658
+          },
+          {
+            "imag": -0.016060299392907127,
+            "real": 0.031628156535538056
+          },
+          {
+            "imag": 0.0032761006893728744,
+            "real": 0.04752242088085203
+          }
+        ],
+        [
+          {
+            "imag": 0.011831886820075573,
+            "real": 0.062032948055546724
+          },
+          {
+            "imag": -0.03150154726665455,
+            "real": 0.06154455105301719
+          },
+          {
+            "imag": 0.01650387970703176,
+            "real": 0.031183976311600522
+          }
+        ],
+        [
+          {
+            "imag": -0.028311215824808056,
+            "real": 0.06038209416319087
+          },
+          {
+            "imag": 0.016300131640390163,
+            "real": 0.06417786925156359
+          },
+          {
+            "imag": 0.030886679661070376,
+            "real": -0.025726482544588553
+          }
+        ]
+      ]
+    ],
+    "touchstone_text": "! Independently authored Touchstone v2.0 Full Z oracle input\n[Version] 2.0\n# MHz Z RI R 40\n[Number of Ports] 3\n[Number of Frequencies] 2\n[Reference] 25 50\n75\n[Matrix Format] Full\n[Network Data]\n1000 40 2 3 -1 5 0.5 6 1 55 -3 4 2 7 -2 8 1.5 70 4\n2000 42 2.5 3.5 -1.5 5.5 0.75 6.5 1.25 57 -3.5 4.5 2.25 7.5 -2.5 8.5 1.75 72 4.5\n[End]\n",
+    "z0_ohm": [
+      [
+        {
+          "imag": 0.0,
+          "real": 25.0
+        },
+        {
+          "imag": 0.0,
+          "real": 50.0
+        },
+        {
+          "imag": 0.0,
+          "real": 75.0
+        }
+      ],
+      [
+        {
+          "imag": 0.0,
+          "real": 25.0
+        },
+        {
+          "imag": 0.0,
+          "real": 50.0
+        },
+        {
+          "imag": 0.0,
+          "real": 75.0
+        }
+      ]
+    ]
+  },
+  "metadata": {
+    "case_id": "touchstone_v2_0_z_full_three_port",
+    "deterministic_construction": "literal source text; no random generation",
+    "input_parameter": "Z",
+    "input_recipe": "literal TOUCHSTONE_V2_Z_TEXT below: two MHz Full-matrix RI Z records, three unequal real per-port references [25,50,75] ohm, a continued [Reference] vector, and no random generation",
+    "numpy_version": "2.5.1",
+    "operation": "touchstone_v2_0_z_full_parse",
+    "parameter_unit": "ohm",
+    "port_count": 3,
+    "reference_impedance": {
+      "complex": false,
+      "frequency_dependent": false,
+      "per_port": true,
+      "unit": "ohm"
+    },
+    "schema": "rfkit-rs.oracle.fixture",
+    "schema_version": 1,
+    "scikit_rf_commit": "bd651e923cac6020de49a096e1d7e9b5f949f884",
+    "scikit_rf_version": "2.0.1",
+    "shape": {
+      "frequency": [
+        2
+      ],
+      "parameter": [
+        2,
+        3,
+        3
+      ],
+      "s": [
+        2,
+        3,
+        3
+      ],
+      "z0": [
+        2,
+        3
+      ]
+    },
+    "tolerance_policy": {
+      "atol": 1e-12,
+      "comparison": "abs(actual-expected) <= atol + rtol*abs(expected)",
+      "justification": "Strict binary64 tolerance for a deterministic, independently authored Touchstone 2.0 Full-matrix RI physical-Z input. The pinned public scikit-rf reader supplies the decoded physical Z matrix and output S; the latter is cross-checked through public z2s(..., s_def='power'). Text, frequencies, references, and decoded physical Z remain exact contract fields.",
+      "regeneration": "canonical UTF-8 JSON serialization; only parsed S is checked with the recorded numeric tolerance while z_ohm, frequency, references, text, and metadata remain exact",
+      "rtol": 1e-12
+    },
+    "wave_definition": "power"
+  }
+}
