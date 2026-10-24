@@ -3,9 +3,12 @@
 This is an interoperability check, not a same-parser round trip.  The Rust
 example constructs deterministic common-reference v1 and unequal-reference
 v2 two-/five-port Networks, invokes the public writers, and writes only the
-resulting text to stdout.  This checker
-then asks scikit-rf 2.0.1 to parse that text and compares frequency, S, and z0
-against the independently reproduced construction recipe.
+resulting text to stdout. This checker then asks scikit-rf 2.0.1 to parse that
+text and compares frequency, S, and z0 against independently reproduced
+construction recipes. For physical Z/Y output it also reproduces one authored
+source S, derives the selected physical matrix through direct voltage/current
+equations, and parses the raw serialized records independently before checking
+the parsed S against that source.
 """
 
 from __future__ import annotations
@@ -89,7 +92,9 @@ def _expected(np, nfreq: int, nports: int, references):
     return frequency, s, z0
 
 
-def _check_layout_contract(text: str, case: str, nports: int, references) -> None:
+def _check_layout_contract(
+    text: str, case: str, nports: int, references, parameter: str = "S"
+) -> None:
     """Check deterministic directives and physical line boundaries.
 
     The asymmetric record values are checked independently by scikit-rf
@@ -102,7 +107,7 @@ def _check_layout_contract(text: str, case: str, nports: int, references) -> Non
     if is_v2:
         expected_prefix = [
             "[Version] 2.0",
-            f"# Hz S RI R {references[0]:g}",
+            f"# Hz {parameter} RI R {references[0]:g}",
             f"[Number of Ports] {nports}",
         ]
         if lines[:3] != expected_prefix:
@@ -128,6 +133,8 @@ def _check_layout_contract(text: str, case: str, nports: int, references) -> Non
         expected_values = 1 + 2 * nports * nports
         if any(len(line.split()) != expected_values for line in lines[data_start : data_start + 2]):
             raise AssertionError("v2 writer did not keep one complete record per line")
+        if parameter != "S":
+            return
         for frequency_index, line in enumerate(lines[data_start : data_start + 2]):
             tokens = line.split()
             expected_frequency = 1.0e6 * (frequency_index + 1)
@@ -170,12 +177,99 @@ def _check_case(np, skrf, case: str, extension: str, nports: int, references) ->
             raise AssertionError("writer did not use four-pair continuation layout")
 
 
+def _physical_expected(np, parameter: str):
+    """Reproduce source S and derive physical values from direct V/I equations."""
+    frequency = np.asarray([1.0e6, 2.0e6])
+    references = np.asarray([31.0, 47.0, 73.0])
+    z0 = np.broadcast_to(references, (2, 3)).astype(complex).copy()
+    source_s = np.empty((2, 3, 3), dtype=complex)
+    for sample in range(2):
+        for row in range(3):
+            for column in range(3):
+                source_s[sample, row, column] = complex(
+                    0.025 + 0.006 * sample + 0.004 * row + 0.001 * column,
+                    -0.012
+                    + 0.002 * sample
+                    + 0.001 * row
+                    - 0.0007 * column,
+                )
+
+    physical = np.empty((2, 3, 3), dtype=complex)
+    for sample in range(2):
+        scale = 2.0 * np.sqrt(np.real(z0[sample]))
+        f = np.diag(1.0 / scale)
+        g = np.diag(z0[sample])
+        identity = np.eye(3, dtype=complex)
+        if parameter == "Z":
+            # a = (I - S) F and b = (S G + G*) F in a Z = b.
+            a = (identity - source_s[sample]) @ f
+            b = (source_s[sample] @ g + g.conj()) @ f
+        elif parameter == "Y":
+            # a = (S G + G*) F and b = (I - S) F in a Y = b.
+            a = (source_s[sample] @ g + g.conj()) @ f
+            b = (identity - source_s[sample]) @ f
+        else:
+            raise ValueError(f"unsupported physical parameter {parameter!r}")
+        physical[sample] = np.linalg.solve(a, b)
+    return frequency, physical, source_s, z0
+
+
+def _parse_v2_full_records(text: str, np, nports: int):
+    """Parse only Full/RI records independently of scikit-rf and Rust."""
+    lines = text.splitlines()
+    start = lines.index("[Network Data]") + 1
+    end = lines.index("[End]")
+    records = []
+    for line in lines[start:end]:
+        tokens = line.split()
+        expected = 1 + 2 * nports * nports
+        if len(tokens) != expected:
+            raise AssertionError("physical record is not one complete Full/RI line")
+        values = [float(token) for token in tokens]
+        matrix = np.empty((nports, nports), dtype=complex)
+        for index in range(nports * nports):
+            row, column = divmod(index, nports)
+            matrix[row, column] = complex(values[1 + 2 * index], values[2 + 2 * index])
+        records.append((values[0], matrix))
+    return (
+        np.asarray([record[0] for record in records]),
+        np.asarray([record[1] for record in records]),
+    )
+
+
+def _check_physical_case(np, skrf, case: str, parameter: str) -> None:
+    text = _rust_output(case)
+    frequency, expected_physical, source_s, expected_z0 = _physical_expected(np, parameter)
+    _check_layout_contract(
+        text,
+        case,
+        expected_physical.shape[1],
+        expected_z0[0].real.tolist(),
+        parameter,
+    )
+    raw_frequency, raw_physical = _parse_v2_full_records(
+        text, np, expected_physical.shape[1]
+    )
+    np.testing.assert_array_equal(raw_frequency, frequency)
+    np.testing.assert_allclose(raw_physical, expected_physical, rtol=1e-12, atol=1e-12)
+
+    with tempfile.TemporaryDirectory(prefix="rfkit-touchstone-oracle-") as directory:
+        path = Path(directory) / "writer.s3p"
+        path.write_text(text, encoding="ascii", newline="")
+        parsed = skrf.Network(str(path))
+    np.testing.assert_array_equal(parsed.f, frequency)
+    np.testing.assert_allclose(parsed.s, source_s, rtol=1e-12, atol=1e-12)
+    np.testing.assert_array_equal(parsed.z0, expected_z0)
+
+
 def main() -> int:
     np, skrf = _load_dependencies()
     _check_case(np, skrf, "two-port", ".s2p", 2, [73.5, 73.5])
     _check_case(np, skrf, "five-port", ".s5p", 5, [88.25] * 5)
     _check_case(np, skrf, "v2-two-port", ".s2p", 2, [37.0, 48.0])
     _check_case(np, skrf, "v2-five-port", ".s5p", 5, [37.0, 48.0, 59.0, 70.0, 81.0])
+    _check_physical_case(np, skrf, "v2-z-three-port", "Z")
+    _check_physical_case(np, skrf, "v2-y-three-port", "Y")
     print("Touchstone writer interoperability check passed (Rust → scikit-rf)")
     return 0
 

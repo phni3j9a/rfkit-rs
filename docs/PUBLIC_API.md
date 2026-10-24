@@ -122,9 +122,9 @@ keywords, complex or non-positive references, malformed or non-finite values,
 duplicate/misplaced directives, invalid count/grid/record boundaries, semantic
 vendor comments, missing `[End]`, and trailing content. It does not sort,
 interpolate, average, repair, renormalize, infer filenames, or add a writer or
-metadata model. The existing writer remains explicitly
-`write_touchstone_v2_0_s_full_ri_hz`; it emits Full/RI/Hz only and keeps its
-current reference restrictions.
+metadata model. The current writer is explicitly
+`write_touchstone_v2_0_power_full_ri_hz`; it emits selected Full/RI/Hz S/Z/Y
+data and keeps its documented reference restrictions.
 
 The pinned conformance evidence is independently authored and registered as
 `touchstone_v2_0_s_full_three_port`,
@@ -230,10 +230,13 @@ together with its callers and fixtures.
 The focused executable workflow is
 `crates/rfkit-touchstone/examples/touchstone_v2_parameter_workflow.rs`.
 
-## Touchstone 2.0 Full S egress (Issue #104 Yellow)
+## Touchstone 2.0 Full S egress (Issue #104 Yellow) — Superseded by #132
 
-The `rfkit-touchstone` crate adds the additive pure in-memory function
-`write_touchstone_v2_0_s_full_ri_hz(network: &Network) -> Result<String>`.
+Historically, the `rfkit-touchstone` crate added the additive pure in-memory
+function `write_touchstone_v2_0_s_full_ri_hz(network: &Network) -> Result<String>`.
+That historical S-only operation is retained here as a decision record, not as
+current API guidance. Issue #132 generalizes/replaces it with one required
+parameter selector and removes the old name without an alias.
 Its explicit name fixes the output subset: Touchstone 2.0, single-ended Full
 S, RI pairs, and hertz. The function borrows the canonical `Network`, validates
 the complete input before constructing output, and never performs filesystem
@@ -282,6 +285,52 @@ existing v1 behavior. The focused executable
 unequal-reference v2 input, permutes physical ports, writes without
 renormalization, and independently checks the reordered S/reference values on
 readback.
+
+## Touchstone 2.0 physical S/Z/Y egress (Issue #132 Yellow)
+
+The current sole public v2 writer is:
+
+```rust
+#[non_exhaustive]
+pub enum TouchstoneParameter { S, Z, Y }
+
+pub fn write_touchstone_v2_0_power_full_ri_hz(
+    network: &Network,
+    parameter: TouchstoneParameter,
+) -> Result<String>;
+```
+
+`TouchstoneParameter::S` preserves every successful historical S output byte
+and the old v2 validation/error domain. `Z` selects `Network::to_z_power` and
+emits physical impedance in ohms; `Y` selects
+`Network::to_y_direct_power` and emits physical admittance in siemens. The
+selected conversion is completed after the full v2 input validator and before
+successful output construction. Conversion failures cross the format boundary
+as `Error::Core` with their existing stage, sample, matrix, pivot, or
+non-finite context; the writer never retries a different path. Source arrays
+are borrowed and remain unchanged.
+
+The option line names the selected parameter (`# Hz S|Z|Y RI R ...`), while
+the `[Reference]` vector retains source S coordinates. Physical Z/Y records
+are not multiplied or divided by either the option-line resistance or the
+reference vector. The writer remains single-ended Full/RI/Hz, emits one
+frequency-major row-major record per line, and keeps natural `12_21` order for
+two ports. It retains the nonempty finite non-negative strictly increasing
+frequency requirement, positive square finite S shape, matching `(nfreq,nport)`
+references, and finite strictly positive real references exactly constant per
+port across samples. No new tolerance, regularization, renormalization,
+sorting, interpolation, or parameter-container hierarchy is introduced.
+
+The Issue #132 alternatives were retaining S-only egress, adding separate Z/Y
+writer functions, adding a universal raw-matrix/options abstraction, or
+silently dropping unsupported source-reference coordinates. The selected
+generalized writer closes the physical ingress-to-egress gap with one explicit
+parameter choice and reuses existing verified core conversions. This is a
+provisional unpublished 0.x rename/signature change with no persisted-data or
+schema migration; rollback is a bounded PR revert restoring the old name and
+callers. The focused workflow demonstrates physical Z/Y ingress, explicit port
+selection/reorder, selected physical output, parse/readback, and independent
+matrix/coordinate checks.
 
 The Yellow parameter-ingress slice adds three associated constructors while
 keeping this owned model:

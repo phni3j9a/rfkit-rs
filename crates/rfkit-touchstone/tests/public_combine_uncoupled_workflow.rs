@@ -1,6 +1,7 @@
 use num_complex::Complex64;
 use rfkit_touchstone::{
-    parse_touchstone_v1_0_s, parse_touchstone_v2_0_power, write_touchstone_v2_0_s_full_ri_hz,
+    TouchstoneParameter, parse_touchstone_v1_0_s, parse_touchstone_v2_0_power,
+    write_touchstone_v2_0_power_full_ri_hz,
 };
 
 const INPUT_A: &str = r#"# Hz S RI R 40
@@ -42,7 +43,7 @@ fn touchstone_load_combine_reorder_and_v2_round_trip_preserves_blocks_and_zeros(
         ]
     );
 
-    let text = write_touchstone_v2_0_s_full_ri_hz(&reordered).unwrap();
+    let text = write_touchstone_v2_0_power_full_ri_hz(&reordered, TouchstoneParameter::S).unwrap();
     assert!(text.contains("[Reference] 70 40 40 70 70\n"));
     let reread = parse_touchstone_v2_0_power(&text).unwrap();
     assert_eq!(reread.s(), reordered.s());

@@ -1,5 +1,6 @@
 use num_complex::Complex64;
 use rfkit_core::Network;
+use std::borrow::Cow;
 use std::fmt::Write as _;
 
 use crate::{Error, Result};
@@ -328,15 +329,33 @@ fn validate_v2(network: &Network) -> Result<ValidatedV2Network<'_>> {
     Ok(ValidatedV2Network { network, nports })
 }
 
-/// Serialize the bounded Touchstone 2.0 Full S/RI/Hz subset.
-pub(crate) fn write_touchstone_v2_0_s_full_ri_hz(network: &Network) -> Result<String> {
+/// Serialize the bounded Touchstone 2.0 Full S/Z/Y/RI/Hz subset.
+pub(crate) fn write_touchstone_v2_0_power_full_ri_hz(
+    network: &Network,
+    parameter: crate::TouchstoneParameter,
+) -> Result<String> {
     let validated = validate_v2(network)?;
     let network = validated.network;
     let frequency = network.frequency().hz();
 
+    // Validate the selected conversion before constructing any successful
+    // output.  S deliberately borrows the stored values, preserving the old
+    // writer's bytes and domain exactly; physical output uses the one
+    // explicitly selected core path and never retries another conversion.
+    let values = match parameter {
+        crate::TouchstoneParameter::S => Cow::Borrowed(network.s()),
+        crate::TouchstoneParameter::Z => Cow::Owned(network.to_z_power().map_err(Error::Core)?),
+        crate::TouchstoneParameter::Y => {
+            Cow::Owned(network.to_y_direct_power().map_err(Error::Core)?)
+        }
+    };
+    let parameter_name = parameter.as_str();
+
     let mut output = String::new();
     output.push_str("[Version] 2.0\n");
-    output.push_str("# Hz S RI R ");
+    output.push_str("# Hz ");
+    output.push_str(parameter_name);
+    output.push_str(" RI R ");
     push_number(&mut output, network.z0()[[0, 0]].re);
     output.push('\n');
 
@@ -365,7 +384,7 @@ pub(crate) fn write_touchstone_v2_0_s_full_ri_hz(network: &Network) -> Result<St
             for column in 0..validated.nports {
                 push_pair(
                     &mut output,
-                    network.s()[[frequency_index, row, column]],
+                    values[[frequency_index, row, column]],
                     &mut first,
                 );
             }

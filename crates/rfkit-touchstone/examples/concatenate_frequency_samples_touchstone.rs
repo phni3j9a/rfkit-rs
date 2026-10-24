@@ -2,7 +2,9 @@
 //! stored observations, and exercise the existing writer domain.
 
 use num_complex::Complex64;
-use rfkit_touchstone::{Error, parse_touchstone_v2_0_power, write_touchstone_v2_0_s_full_ri_hz};
+use rfkit_touchstone::{
+    Error, TouchstoneParameter, parse_touchstone_v2_0_power, write_touchstone_v2_0_power_full_ri_hz,
+};
 
 const INPUT_A: &str = "[Version] 2.0\n\
 # Hz S RI R 35\n\
@@ -93,7 +95,7 @@ fn main() -> rfkit_touchstone::Result<()> {
     assert_eq!(sigma_max.len(), 3);
     assert!(sigma_max.iter().all(|value| value.is_finite()));
 
-    let text = write_touchstone_v2_0_s_full_ri_hz(&assembled)?;
+    let text = write_touchstone_v2_0_power_full_ri_hz(&assembled, TouchstoneParameter::S)?;
     assert!(text.contains("[Reference] 35 50 72\n"));
     let reread = parse_touchstone_v2_0_power(&text)?;
     assert_eq!(reread.frequency(), assembled.frequency());
@@ -102,14 +104,20 @@ fn main() -> rfkit_touchstone::Result<()> {
 
     let duplicate =
         source_a.concatenate_frequency_samples(&parse_touchstone_v2_0_power(INPUT_B_DUPLICATE)?)?;
-    expect_writer_frequency_error(write_touchstone_v2_0_s_full_ri_hz(&duplicate));
+    expect_writer_frequency_error(write_touchstone_v2_0_power_full_ri_hz(
+        &duplicate,
+        TouchstoneParameter::S,
+    ));
     let nonmonotonic = source_a
         .concatenate_frequency_samples(&parse_touchstone_v2_0_power(INPUT_B_NONMONOTONIC)?)?;
-    expect_writer_frequency_error(write_touchstone_v2_0_s_full_ri_hz(&nonmonotonic));
+    expect_writer_frequency_error(write_touchstone_v2_0_power_full_ri_hz(
+        &nonmonotonic,
+        TouchstoneParameter::S,
+    ));
     let varying_reference = source_a
         .concatenate_frequency_samples(&parse_touchstone_v2_0_power(INPUT_B_VARYING_REFERENCE)?)?;
     assert!(matches!(
-        write_touchstone_v2_0_s_full_ri_hz(&varying_reference),
+        write_touchstone_v2_0_power_full_ri_hz(&varying_reference, TouchstoneParameter::S),
         Err(Error::WriterV2MismatchedZ0 { .. })
     ));
 

@@ -2,7 +2,9 @@
 //! export/read it again without renormalizing the S coordinates.
 
 use num_complex::Complex64;
-use rfkit_touchstone::{parse_touchstone_v2_0_power, write_touchstone_v2_0_s_full_ri_hz};
+use rfkit_touchstone::{
+    TouchstoneParameter, parse_touchstone_v2_0_power, write_touchstone_v2_0_power_full_ri_hz,
+};
 
 const INPUT: &str = "[Version] 2.0\n\
 # Hz S RI R 37\n\
@@ -27,7 +29,7 @@ fn main() -> rfkit_touchstone::Result<()> {
     assert_eq!(reordered.z0()[[0, 1]], Complex64::new(37.0, 0.0));
     assert_eq!(reordered.z0()[[0, 2]], Complex64::new(61.0, 0.0));
 
-    let text = write_touchstone_v2_0_s_full_ri_hz(&reordered)?;
+    let text = write_touchstone_v2_0_power_full_ri_hz(&reordered, TouchstoneParameter::S)?;
     let reread = parse_touchstone_v2_0_power(&text)?;
     assert_eq!(reread.s(), reordered.s());
     assert_eq!(reread.z0(), reordered.z0());

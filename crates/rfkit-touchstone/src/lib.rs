@@ -18,12 +18,13 @@
 //! exact common finite positive real reference scalar, and leaves filesystem
 //! and metadata policy to callers.
 //!
-//! [`write_touchstone_v2_0_s_full_ri_hz`] is the additive v2.0 counterpart for
-//! the bounded export subset.  It preserves one finite, strictly positive
-//! real reference per physical port (constant across the frequency axis),
-//! emits a Full matrix in row-major order, and keeps each frequency on one
-//! physical line.  It does not widen the v1 writer's common-reference
-//! contract.
+//! [`write_touchstone_v2_0_power_full_ri_hz`] is the v2.0 physical-output
+//! counterpart for the bounded export subset.  Its required
+//! [`TouchstoneParameter`] selects stored dimensionless S, physical Z in ohms,
+//! or physical Y in siemens.  It preserves one finite, strictly positive real
+//! reference per physical port (constant across the frequency axis), emits a
+//! Full matrix in row-major order, and keeps each frequency on one physical
+//! line.  Physical values are not reference-scaled in v2 output.
 //!
 //! Comment handling has one deliberate vendor-extension boundary: matching is
 //! case-insensitive; comments beginning with `Gamma` or `Port Impedance` (or
@@ -521,6 +522,34 @@ pub enum DataFormat {
     Db,
 }
 
+/// Physical quantity emitted by the Touchstone 2.0 Full writer.
+///
+/// `S` writes the stored dimensionless power-wave scattering matrix. `Z` and
+/// `Y` select the existing checked power-wave conversions and emit physical
+/// impedance (ohms) or admittance (siemens), respectively. The option is
+/// required at every call site so a physical export cannot silently depend on
+/// a default parameter.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TouchstoneParameter {
+    /// Dimensionless power-wave scattering parameters.
+    S,
+    /// Physical impedance parameters, in ohms.
+    Z,
+    /// Physical admittance parameters, in siemens.
+    Y,
+}
+
+impl TouchstoneParameter {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::S => "S",
+            Self::Z => "Z",
+            Self::Y => "Y",
+        }
+    }
+}
+
 impl std::fmt::Display for DataFormat {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(match self {
@@ -560,15 +589,20 @@ pub fn write_touchstone_v1_0_s_ri_hz(network: &Network) -> Result<String> {
     writer::write_touchstone_v1_0_s_ri_hz(network)
 }
 
-/// Serialize a network as deterministic Touchstone 2.0 Full-matrix S/RI/Hz
-/// text for the bounded single-ended export subset.
+/// Serialize a network as deterministic Touchstone 2.0 Full-matrix
+/// S/Z/Y/RI/Hz text for the bounded single-ended export subset.
 ///
-/// The output always contains `[Version] 2.0`, `# Hz S RI R <first-port>`
-/// and explicit `[Number of Ports]`, `[Number of Frequencies]`, `[Reference]`,
-/// `[Matrix Format] Full`, `[Network Data]`, and `[End]` directives.  For two
-/// ports it also contains `[Two-Port Data Order] 12_21`.  Every frequency is
-/// emitted on one physical line followed by all S pairs in frequency-major,
-/// row-major order.  The output is ASCII with LF endings and a final newline.
+/// The required [`TouchstoneParameter`] appears in the option line.  `S`
+/// writes the stored values byte-for-byte as the historical v2 writer did;
+/// `Z` and `Y` first validate the selected existing core conversion, then emit
+/// physical ohms or siemens without reference scaling. The output always
+/// contains `[Version] 2.0`, `# Hz <parameter> RI R <first-port>` and explicit
+/// `[Number of Ports]`, `[Number of Frequencies]`, `[Reference]`, `[Matrix
+/// Format] Full`, `[Network Data]`, and `[End]` directives.  For two ports it
+/// also contains `[Two-Port Data Order] 12_21`.  Every frequency is emitted on
+/// one physical line followed by all selected parameter pairs in
+/// frequency-major, row-major order.  The output is ASCII with LF endings and
+/// a final newline.
 ///
 /// The writer accepts a nonempty, finite, non-negative, strictly increasing
 /// frequency axis; finite S components; and a `(nfreq, nport)` reference
@@ -579,8 +613,11 @@ pub fn write_touchstone_v1_0_s_ri_hz(network: &Network) -> Result<String> {
 /// It intentionally does not emit MA/DB, triangular matrices, mixed-mode or
 /// noise data, vendor extensions, metadata, or complex/frequency-varying
 /// references.
-pub fn write_touchstone_v2_0_s_full_ri_hz(network: &Network) -> Result<String> {
-    writer::write_touchstone_v2_0_s_full_ri_hz(network)
+pub fn write_touchstone_v2_0_power_full_ri_hz(
+    network: &Network,
+    parameter: TouchstoneParameter,
+) -> Result<String> {
+    writer::write_touchstone_v2_0_power_full_ri_hz(network, parameter)
 }
 
 /// Parse the deliberately bounded Touchstone 2.0 single-ended Full/Lower/Upper
