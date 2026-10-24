@@ -1,4 +1,4 @@
-use ndarray::Array3;
+use ndarray::{Array2, Array3};
 use num_complex::Complex64;
 use rfkit_touchstone::{
     TouchstoneParameter, parse_touchstone_v2_0_power, write_touchstone_v2_0_power_full_ri_hz,
@@ -46,6 +46,15 @@ fn physical_z_y_ingress_reorder_physical_egress_readback() {
         ],
     )
     .unwrap();
+    let expected_z0 = Array2::from_shape_vec(
+        (1, 3),
+        vec![
+            Complex64::new(97.0, 0.0),
+            Complex64::new(25.0, 0.0),
+            Complex64::new(61.0, 0.0),
+        ],
+    )
+    .unwrap();
     assert_eq!(reordered_z.z0()[[0, 0]], Complex64::new(97.0, 0.0));
     for (actual, expected) in recovered_z.iter().zip(expected_z.iter()) {
         assert!((*actual - *expected).norm() < 1.0e-12);
@@ -53,6 +62,8 @@ fn physical_z_y_ingress_reorder_physical_egress_readback() {
     let z_text = write_touchstone_v2_0_power_full_ri_hz(&reordered_z, TouchstoneParameter::Z)
         .expect("physical Z write succeeds");
     let z_reread = parse_touchstone_v2_0_power(&z_text).expect("written Z rereads");
+    assert_eq!(z_reread.frequency().hz(), &[1.0e9]);
+    assert_eq!(z_reread.z0(), &expected_z0);
     for (actual, expected) in z_reread
         .to_z_power()
         .unwrap()
@@ -92,6 +103,8 @@ fn physical_z_y_ingress_reorder_physical_egress_readback() {
     let y_text = write_touchstone_v2_0_power_full_ri_hz(&reordered_y, TouchstoneParameter::Y)
         .expect("physical Y write succeeds");
     let y_reread = parse_touchstone_v2_0_power(&y_text).expect("written Y rereads");
+    assert_eq!(y_reread.frequency().hz(), &[1.0e9]);
+    assert_eq!(y_reread.z0(), &expected_z0);
     for (actual, expected) in y_reread
         .to_y_direct_power()
         .unwrap()

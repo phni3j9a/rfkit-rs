@@ -1,6 +1,6 @@
 //! Load physical Touchstone 2.0 Z/Y data, explicitly reorder ports, export the
 //! selected physical quantity as Full v2 text, and read it back.
-use ndarray::Array3;
+use ndarray::{Array2, Array3};
 use num_complex::Complex64;
 use rfkit_touchstone::{
     TouchstoneParameter, parse_touchstone_v2_0_power, write_touchstone_v2_0_power_full_ri_hz,
@@ -45,12 +45,23 @@ fn main() -> rfkit_touchstone::Result<()> {
         ],
     )
     .expect("expected reordered Z shape");
+    let expected_z0 = Array2::from_shape_vec(
+        (1, 3),
+        vec![
+            Complex64::new(97.0, 0.0),
+            Complex64::new(25.0, 0.0),
+            Complex64::new(61.0, 0.0),
+        ],
+    )
+    .expect("expected reordered references shape");
     assert_eq!(reordered_z.z0()[[0, 0]], Complex64::new(97.0, 0.0));
     for (actual, expected) in recovered_z.iter().zip(expected_z.iter()) {
         assert!((*actual - *expected).norm() < 1.0e-12);
     }
     let z_text = write_touchstone_v2_0_power_full_ri_hz(&reordered_z, TouchstoneParameter::Z)?;
     let z_reread = parse_touchstone_v2_0_power(&z_text)?;
+    assert_eq!(z_reread.frequency().hz(), &[1.0e9]);
+    assert_eq!(z_reread.z0(), &expected_z0);
     for (actual, expected) in z_reread.to_z_power()?.iter().zip(recovered_z.iter()) {
         assert!((*actual - *expected).norm() < 1.0e-11);
     }
@@ -81,6 +92,8 @@ fn main() -> rfkit_touchstone::Result<()> {
     }
     let y_text = write_touchstone_v2_0_power_full_ri_hz(&reordered_y, TouchstoneParameter::Y)?;
     let y_reread = parse_touchstone_v2_0_power(&y_text)?;
+    assert_eq!(y_reread.frequency().hz(), &[1.0e9]);
+    assert_eq!(y_reread.z0(), &expected_z0);
     for (actual, expected) in y_reread.to_y_direct_power()?.iter().zip(expected_y.iter()) {
         assert!((*actual - *expected).norm() < 1.0e-12);
     }

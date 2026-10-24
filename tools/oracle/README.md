@@ -279,8 +279,13 @@ rows itself and compares raw serialized ohm/siemens matrices against those
 derived values before comparing pinned scikit-rf's parsed S directly with the
 authored source S. The checker validates v2's explicit directive/reference
 layout, one complete row-major record line per frequency, and natural `12_21`
-two-port order; Python unit tests deliberately mutate S/physical pair ordering
-and the reference vector to prove those drifts fail. This deliberately crosses
+two-port order. Its Python unit tests mutate pair placement in an S-parameter
+two-port record and the reference vector to prove those layout drifts fail. A
+separate physical unit test parses raw physical records and checks their
+frequency, shape, and value, while another validates independently authored
+asymmetric finite Z/Y recipes through the direct equations; no physical
+pair-order mutation is executed.
+This deliberately crosses
 the Rust/Python parser boundary; a Rust writer→Rust reader round trip alone is
 not sufficient interoperability evidence. CI runs this check after the
 canonical fixture checker and runs the checker unit tests.

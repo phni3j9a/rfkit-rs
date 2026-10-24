@@ -334,9 +334,10 @@ cargo run -p rfkit-touchstone --example touchstone_v2_parameter_workflow
 It loads a physical Z document, applies the existing `to_z_power` inspection,
 selects/reorders ports, exports physical Z through the explicit v2 writer, and
 reads the emitted physical matrix back. The same parser accepts physical Y and
-the writer can select `TouchstoneParameter::Y` through the direct Y→S
-constructor; the workflow's `to_z_power` operation is documented only for the
-nonsingular Z example used by the executable.
+converts it through `Network::from_y_direct_power` (Y→S); the writer selects
+`TouchstoneParameter::Y` through `Network::to_y_direct_power` (S→Y). The
+workflow independently checks both recovered physical matrices and their
+readback frequency/reference coordinates.
 
 The direct v2 preservation workflow (parse, select/reorder physical ports, write and
 read without renormalization) is executable with:
