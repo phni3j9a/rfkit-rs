@@ -3,7 +3,8 @@
 
 use num_complex::Complex64;
 use rfkit_touchstone::{
-    parse_touchstone_v1_0_s, parse_touchstone_v2_0_power, write_touchstone_v2_0_s_full_ri_hz,
+    TouchstoneParameter, parse_touchstone_v1_0_s, parse_touchstone_v2_0_power,
+    write_touchstone_v2_0_power_full_ri_hz,
 };
 
 const INPUT_A: &str = r#"# Hz S RI R 40
@@ -49,7 +50,7 @@ fn main() -> rfkit_touchstone::Result<()> {
     assert_eq!(reordered.z0()[[0, 3]], Complex64::new(70.0, 0.0));
     assert_eq!(reordered.z0()[[0, 4]], Complex64::new(70.0, 0.0));
 
-    let text = write_touchstone_v2_0_s_full_ri_hz(&reordered)
+    let text = write_touchstone_v2_0_power_full_ri_hz(&reordered, TouchstoneParameter::S)
         .expect("unequal real per-port references are writer-supported");
     let reread = parse_touchstone_v2_0_power(&text)?;
     assert_eq!(reread.frequency(), reordered.frequency());

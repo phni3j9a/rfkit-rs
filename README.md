@@ -26,7 +26,7 @@ The first vertical slice should make these excellent before expanding broadly:
 - Frequency and Network data model
 - Touchstone ingress/egress (the current public slice is explicitly limited to
   Touchstone 1.0 single-ended S ingress plus bounded Touchstone 2.0
-  single-ended S/Z/Y ingress and Full S egress; broader format support is
+  single-ended S/Z/Y ingress and explicit Full S/Z/Y egress; broader format support is
   future work)
 - S/Z/Y conversions
 - renormalization including complex and per-port Z0
@@ -136,30 +136,43 @@ values. MA/DB, Touchstone v2.x, metadata, noise, mixed-mode, and filesystem
 I/O remain outside this v1 writer API; the bounded v2 writer is documented
 below.
 
-Touchstone 2.0 Full S/RI/Hz export is available through a separate, explicit
-writer when preserving unequal real per-port references matters:
+Touchstone 2.0 Full export is available through one explicit writer when
+preserving unequal real per-port references matters. The required parameter
+selects stored S, physical Z (ohms), or physical Y (siemens):
 
 ```rust
 use rfkit_touchstone::{
-    parse_touchstone_v2_0_power, write_touchstone_v2_0_s_full_ri_hz,
+    parse_touchstone_v2_0_power, write_touchstone_v2_0_power_full_ri_hz,
+    TouchstoneParameter,
 };
 
 fn write_v2(input: &str) -> rfkit_touchstone::Result<String> {
     let source = parse_touchstone_v2_0_power(input)?;
-    write_touchstone_v2_0_s_full_ri_hz(&source)
+    write_touchstone_v2_0_power_full_ri_hz(&source, TouchstoneParameter::S)
 }
 ```
 
 The v2 writer emits deterministic ASCII/LF text with `[Version] 2.0`, an
 explicit per-port `[Reference]` vector, `[Matrix Format] Full`, and one
-complete row-major record line per frequency. It accepts only finite,
-strictly positive real references that are exactly constant for each physical
-port across the sweep; different ports may use different values. It does not
-renormalize, sort, interpolate, or infer metadata. MA/DB output, triangular or
-mixed-mode matrices, noise, vendor extensions, complex or frequency-varying
-references, and filesystem I/O remain outside this bounded writer. The v1
-writer above intentionally retains its stricter one-common-reference
+complete row-major record line per frequency. `S` preserves the historical
+successful output bytes and validation domain. `Z` calls `Network::to_z_power`
+and `Y` calls `Network::to_y_direct_power`; the selected physical values are
+written without reference normalization or a conversion fallback. It accepts
+only finite, strictly positive real references that are exactly constant for
+each physical port across the sweep; different ports may use different
+values. It does not sort, interpolate, infer metadata, or perform file I/O.
+MA/DB output, triangular or mixed-mode matrices, noise, vendor extensions,
+complex or frequency-varying references remain outside this bounded writer.
+The v1 writer above intentionally retains its stricter one-common-reference
 contract.
+
+Issue #132 supersedes the historical Issue #104 S-only writer decision. The
+old name was removed without an alias in this provisional 0.x API; migrate
+callers to `write_touchstone_v2_0_power_full_ri_hz(network,
+TouchstoneParameter::S)`. Z/Y export is the new explicit physical egress
+paired with v2 Z/Y ingress, while v1 semantics and all core conversion APIs
+remain unchanged. Rollback is a bounded PR revert with no persisted-data
+migration.
 
 The ingress, existing public transformation, and egress APIs compose directly:
 
@@ -304,7 +317,8 @@ rule, later `#` lines are ignored after the first option line. This function is
 pure in-memory; it does not inspect filenames or perform filesystem I/O. To
 use the existing v1 writer, explicitly direct-renormalize the parsed network
 to one common positive-real reference first. To preserve unequal real
-references, call the explicit v2 Full writer instead. The focused v2
+references, call the explicit v2 Full writer with the desired
+`TouchstoneParameter`. The focused v2
 ingress-to-v1 executable demonstrates the renormalization workflow:
 
 ```text
@@ -318,10 +332,11 @@ cargo run -p rfkit-touchstone --example touchstone_v2_parameter_workflow
 ```
 
 It loads a physical Z document, applies the existing `to_z_power` inspection,
-exports the resulting S network through the bounded Full v2 writer, and reads
-the emitted S text back. The same parser accepts physical Y and selects the
-direct Y→S constructor; the workflow's `to_z_power` operation is documented
-only for the nonsingular Z example used by the executable.
+selects/reorders ports, exports physical Z through the explicit v2 writer, and
+reads the emitted physical matrix back. The same parser accepts physical Y and
+the writer can select `TouchstoneParameter::Y` through the direct Y→S
+constructor; the workflow's `to_z_power` operation is documented only for the
+nonsingular Z example used by the executable.
 
 The direct v2 preservation workflow (parse, select/reorder physical ports, write and
 read without renormalization) is executable with:
@@ -1307,7 +1322,7 @@ back.
 
 ```text
 crates/rfkit-core/       Rust RF numerical core
-crates/rfkit-touchstone/ pure Touchstone v1.0 ingress/egress and bounded v2.0 S/Z/Y ingress plus Full S egress
+crates/rfkit-touchstone/ pure Touchstone v1.0 ingress/egress and bounded v2.0 S/Z/Y ingress plus explicit Full S/Z/Y egress
 tools/oracle/        scikit-rf reference/differential-test tools
 docs/                architecture, development, conformance and provenance policy
 ```

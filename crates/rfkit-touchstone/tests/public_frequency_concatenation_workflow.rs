@@ -1,5 +1,7 @@
 use num_complex::Complex64;
-use rfkit_touchstone::{Error, parse_touchstone_v2_0_power, write_touchstone_v2_0_s_full_ri_hz};
+use rfkit_touchstone::{
+    Error, TouchstoneParameter, parse_touchstone_v2_0_power, write_touchstone_v2_0_power_full_ri_hz,
+};
 
 const INPUT_A: &str = "[Version] 2.0\n\
 # Hz S RI R 35\n\
@@ -128,7 +130,7 @@ fn measured_segments_concatenate_select_analyze_and_round_trip_as_v2_full() {
     assert_eq!(sigma_max.len(), 3);
     assert!(sigma_max.iter().all(|value| value.is_finite()));
 
-    let text = write_touchstone_v2_0_s_full_ri_hz(&assembled)
+    let text = write_touchstone_v2_0_power_full_ri_hz(&assembled, TouchstoneParameter::S)
         .expect("separated finite bands with constant per-port references write");
     assert!(text.contains("[Matrix Format] Full\n"));
     assert!(text.contains("[Reference] 35 50 72\n"));
@@ -147,7 +149,10 @@ fn concatenation_does_not_repair_writer_grid_or_reference_diagnostics() {
             &parse_touchstone_v2_0_power(INPUT_B_DUPLICATE).expect("duplicate segment parses"),
         )
         .expect("structural concatenation accepts duplicate labels");
-    assert_writer_frequency_error(write_touchstone_v2_0_s_full_ri_hz(&duplicate));
+    assert_writer_frequency_error(write_touchstone_v2_0_power_full_ri_hz(
+        &duplicate,
+        TouchstoneParameter::S,
+    ));
 
     let nonmonotonic = source_a
         .concatenate_frequency_samples(
@@ -155,7 +160,10 @@ fn concatenation_does_not_repair_writer_grid_or_reference_diagnostics() {
                 .expect("nonmonotonic segment parses"),
         )
         .expect("structural concatenation accepts nonmonotonic labels");
-    assert_writer_frequency_error(write_touchstone_v2_0_s_full_ri_hz(&nonmonotonic));
+    assert_writer_frequency_error(write_touchstone_v2_0_power_full_ri_hz(
+        &nonmonotonic,
+        TouchstoneParameter::S,
+    ));
 
     let varying_reference = source_a
         .concatenate_frequency_samples(
@@ -164,7 +172,7 @@ fn concatenation_does_not_repair_writer_grid_or_reference_diagnostics() {
         )
         .expect("structural concatenation accepts changing references");
     assert!(matches!(
-        write_touchstone_v2_0_s_full_ri_hz(&varying_reference),
+        write_touchstone_v2_0_power_full_ri_hz(&varying_reference, TouchstoneParameter::S),
         Err(Error::WriterV2MismatchedZ0 { .. })
     ));
 }

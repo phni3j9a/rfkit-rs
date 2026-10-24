@@ -80,20 +80,42 @@ regression follows the ratified Touchstone 2.0 two-port semantics for both
 `21_12` and `12_21`, and this exception is not a general scikit-rf
 compatibility claim.
 
-Touchstone 2.0 Full S egress is covered as Issue #104's bounded complementary
-format boundary. Deterministic Rust tests exercise one-, two-, and larger-N
-asymmetric networks, unequal/non-50 real references, more than four ports,
-multiple samples, exact directive/order text, source immutability, malformed
-serde-created shapes, finite binary64 and signed-zero round trips, every
-frequency/S/reference domain rejection, later-sample single-port reference
-changes, and unchanged v1 heterogeneous-reference rejection. The v2 layout is
-one complete row-major record per frequency, with an explicit one-line
-`[Reference]` vector and `[Two-Port Data Order] 12_21` only for two ports.
-The focused `touchstone_v2_writer_workflow` parses unequal-reference v2 data,
-permutes physical ports, writes without renormalization, and independently
-checks reordered S/reference values after readback. The writer is still a
-subset: MA/DB, Lower/Upper, mixed-mode, noise, vendor metadata, complex or
-frequency-varying references, and filesystem I/O remain out of scope.
+Issue #104's historical S-only egress is superseded by Issue #132's sole
+public `write_touchstone_v2_0_power_full_ri_hz(&Network, TouchstoneParameter)`
+operation. Deterministic Rust tests preserve one-, two-, and larger-N S
+regressions byte-for-byte while exercising selected asymmetric physical Z/Y
+outputs, unequal/non-50 real references, units/no-reference-scaling, source
+immutability, malformed serde-created shapes, finite binary64/signed-zero
+handling, every frequency/S/reference domain rejection, and conversion
+failure context. Z uses the existing `to_z_power` path and Y the existing
+`to_y_direct_power` path; ideal-open Y and ideal-short Z succeed while the
+opposite parameter retains its singular `Error::Core` domain. The selected
+conversion completes before successful text construction and is never retried.
+The v2 layout remains one complete row-major record per frequency, with an
+explicit one-line `[Reference]` vector and `[Two-Port Data Order] 12_21` only
+for two ports. Physical records are written in ohms/siemens directly; the
+option-line resistance and `[Reference]` vector retain source S coordinates
+but do not scale physical values. The focused
+`touchstone_v2_parameter_workflow` now parses physical Z/Y, explicitly
+reorders ports, emits selected physical matrices, and checks readback against
+independent coordinates/matrices. MA/DB, Lower/Upper, mixed-mode, noise,
+vendor metadata, complex or frequency-varying references, and filesystem I/O
+remain out of scope.
+
+The writer interoperability oracle extends the Rust stdout producer and
+`tools/oracle/check_touchstone_writer.py` with independently authored,
+well-conditioned asymmetric N=3 Z/Y cases. Both cases start from one explicit
+source S and unequal real-positive z0, passed directly to Rust
+`Network::new`; Python reproduces that source independently and derives the
+expected physical matrices from direct voltage/current power-wave equations.
+It parses the actual Rust text through pinned scikit-rf `2.0.1` / NumPy
+`2.5.1` / SciPy `1.18.1`, checks frequency/reference metadata exactly,
+compares raw serialized physical matrices to those independently derived
+values, and compares parsed S directly to the authored source S at
+`rtol=1e-12`, `atol=1e-12`. Python tests cover the source recipe's
+asymmetry/finiteness/conditioning, physical equation residuals, and the
+physical headers/records; no same-library round trip is accepted as the sole
+physical-value evidence.
 
 ## Definition of "implemented"
 
