@@ -266,17 +266,29 @@ python check_touchstone_writer.py
 
 The script invokes `cargo run --package rfkit-touchstone --example
 touchstone_writer_oracle` for deterministic common-reference v1 two-/five-port
-cases and unequal-reference v2 two-/five-port cases. It writes the emitted
-ASCII to temporary `.s2p`/`.s5p` files, asks scikit-rf 2.0.1 to parse those
-files, and compares frequency and references exactly for the constructed
-values plus S with `rtol=1e-12`, `atol=1e-12` against the independently
-reproduced asymmetric recipe. The checker also validates v2's explicit
-directive/reference layout, one complete row-major record line per frequency,
-and natural `12_21` two-port order; Python unit tests deliberately mutate S
-pair ordering and the reference vector to prove those drifts fail. This
-deliberately crosses the Rust/Python parser boundary; a Rust writer→Rust
-reader round trip alone is not sufficient interoperability evidence. CI runs
-this check after the canonical fixture checker and runs the checker unit tests.
+cases, unequal-reference v2 S two-/five-port cases, and independently
+authored asymmetric N=3 physical Z/Y cases. It writes the emitted ASCII to
+temporary `.s2p`/`.s3p`/`.s5p` files, asks pinned scikit-rf 2.0.1 to parse
+those files, and compares frequency and references exactly plus S with
+`rtol=1e-12`, `atol=1e-12` against independent recipes. Each physical case
+starts from the same explicit source S and unequal real-positive z0, which the
+Rust producer passes directly to `Network::new`. The Python checker reproduces
+that source S and derives the expected physical Z/Y independently through the
+direct voltage/current power-wave equations; it parses the actual Rust Full/RI
+rows itself and compares raw serialized ohm/siemens matrices against those
+derived values before comparing pinned scikit-rf's parsed S directly with the
+authored source S. The checker validates v2's explicit directive/reference
+layout, one complete row-major record line per frequency, and natural `12_21`
+two-port order. Its Python unit tests mutate pair placement in an S-parameter
+two-port record and the reference vector to prove those layout drifts fail. A
+separate physical unit test parses raw physical records and checks their
+frequency, shape, and value, while another validates independently authored
+asymmetric finite Z/Y recipes through the direct equations; no physical
+pair-order mutation is executed.
+This deliberately crosses
+the Rust/Python parser boundary; a Rust writer→Rust reader round trip alone is
+not sufficient interoperability evidence. CI runs this check after the
+canonical fixture checker and runs the checker unit tests.
 
 ## Generate and verify
 

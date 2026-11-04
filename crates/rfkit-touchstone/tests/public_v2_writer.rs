@@ -1,9 +1,9 @@
 use ndarray::{Array2, Array3};
 use num_complex::Complex64;
-use rfkit_core::{Frequency, Network};
+use rfkit_core::{ConversionStage, Error as CoreError, Frequency, Network};
 use rfkit_touchstone::{
-    Error, parse_touchstone_v2_0_power, write_touchstone_v1_0_s_ri_hz,
-    write_touchstone_v2_0_s_full_ri_hz,
+    Error, TouchstoneParameter, parse_touchstone_v2_0_power, write_touchstone_v1_0_s_ri_hz,
+    write_touchstone_v2_0_power_full_ri_hz,
 };
 use serde_json::{Value, json};
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -56,18 +56,18 @@ fn assert_bitwise_equal(actual: &Network, expected: &Network) {
 fn emits_exact_headers_orders_and_one_record_line_per_frequency() {
     let one = make_network(1, &[1.0], &[73.0]);
     assert_eq!(
-        write_touchstone_v2_0_s_full_ri_hz(&one).unwrap(),
+        write_touchstone_v2_0_power_full_ri_hz(&one, TouchstoneParameter::S).unwrap(),
         "[Version] 2.0\n# Hz S RI R 73\n[Number of Ports] 1\n[Number of Frequencies] 1\n[Reference] 73\n[Matrix Format] Full\n[Network Data]\n1 0.01 -0.02\n[End]\n"
     );
 
     let two = make_network(2, &[1.0], &[37.0, 83.0]);
     assert_eq!(
-        write_touchstone_v2_0_s_full_ri_hz(&two).unwrap(),
+        write_touchstone_v2_0_power_full_ri_hz(&two, TouchstoneParameter::S).unwrap(),
         "[Version] 2.0\n# Hz S RI R 37\n[Number of Ports] 2\n[Two-Port Data Order] 12_21\n[Number of Frequencies] 1\n[Reference] 37 83\n[Matrix Format] Full\n[Network Data]\n1 0.01 -0.02 0.02 -0.04 0.03 -0.06 0.04 -0.08\n[End]\n"
     );
 
     let five = make_network(5, &[1.0, 2.0], &[37.0, 48.0, 59.0, 70.0, 81.0]);
-    let text = write_touchstone_v2_0_s_full_ri_hz(&five).unwrap();
+    let text = write_touchstone_v2_0_power_full_ri_hz(&five, TouchstoneParameter::S).unwrap();
     let lines: Vec<&str> = text.lines().collect();
     assert_eq!(lines.len(), 10);
     assert_eq!(lines[0], "[Version] 2.0");
@@ -106,8 +106,8 @@ fn preserves_asymmetric_data_unequal_references_and_exact_v2_roundtrip() {
     let z0 = Array2::from_shape_fn((3, 2), |(_, port)| Complex64::new(references[port], 0.0));
     let network = Network::new(frequency, s, z0).unwrap();
     let before = network.clone();
-    let first = write_touchstone_v2_0_s_full_ri_hz(&network).unwrap();
-    let second = write_touchstone_v2_0_s_full_ri_hz(&network).unwrap();
+    let first = write_touchstone_v2_0_power_full_ri_hz(&network, TouchstoneParameter::S).unwrap();
+    let second = write_touchstone_v2_0_power_full_ri_hz(&network, TouchstoneParameter::S).unwrap();
     assert_eq!(first, second);
     assert_eq!(network, before);
 
@@ -126,7 +126,7 @@ fn preserves_nontrivial_binary64_and_signed_zero_values() {
     let s = Array3::from_shape_fn((3, 1, 1), |(index, _, _)| values[index]);
     let z0 = Array2::from_elem((3, 1), Complex64::new(61.25, 0.0));
     let network = Network::new(frequency, s, z0).unwrap();
-    let text = write_touchstone_v2_0_s_full_ri_hz(&network).unwrap();
+    let text = write_touchstone_v2_0_power_full_ri_hz(&network, TouchstoneParameter::S).unwrap();
     assert!(text.contains("-0"));
     let reread = parse_touchstone_v2_0_power(&text).unwrap();
     assert_bitwise_equal(&reread, &network);
@@ -135,7 +135,7 @@ fn preserves_nontrivial_binary64_and_signed_zero_values() {
 #[test]
 fn accepts_unequal_ports_but_rejects_frequency_varying_single_port() {
     let network = make_network(3, &[1.0, 2.0], &[37.0, 61.0, 83.0]);
-    let text = write_touchstone_v2_0_s_full_ri_hz(&network).unwrap();
+    let text = write_touchstone_v2_0_power_full_ri_hz(&network, TouchstoneParameter::S).unwrap();
     assert!(text.contains("[Reference] 37 61 83\n"));
 
     let varying = Network::new(
@@ -155,7 +155,8 @@ fn accepts_unequal_ports_but_rejects_frequency_varying_single_port() {
         .unwrap(),
     )
     .unwrap();
-    let error = write_touchstone_v2_0_s_full_ri_hz(&varying).unwrap_err();
+    let error =
+        write_touchstone_v2_0_power_full_ri_hz(&varying, TouchstoneParameter::S).unwrap_err();
     assert!(matches!(
         error,
         Error::WriterV2MismatchedZ0 {
@@ -179,7 +180,7 @@ fn rejects_every_v2_writer_domain_class_with_context() {
         value["frequency"]["hz"] = json!([]);
     });
     assert!(matches!(
-        write_touchstone_v2_0_s_full_ri_hz(&empty),
+        write_touchstone_v2_0_power_full_ri_hz(&empty, TouchstoneParameter::S),
         Err(Error::WriterEmptyFrequency)
     ));
 
@@ -187,7 +188,7 @@ fn rejects_every_v2_writer_domain_class_with_context() {
         value["s"]["dim"] = json!([2, 1, 4]);
     });
     assert!(matches!(
-        write_touchstone_v2_0_s_full_ri_hz(&invalid_s_shape),
+        write_touchstone_v2_0_power_full_ri_hz(&invalid_s_shape, TouchstoneParameter::S),
         Err(Error::WriterV2InvalidSShape { .. })
     ));
 
@@ -196,7 +197,7 @@ fn rejects_every_v2_writer_domain_class_with_context() {
         value["s"]["data"] = json!([[0.01, -0.02], [0.02, -0.04], [0.03, -0.06], [0.04, -0.08]]);
     });
     assert!(matches!(
-        write_touchstone_v2_0_s_full_ri_hz(&mismatched_frequency_shape),
+        write_touchstone_v2_0_power_full_ri_hz(&mismatched_frequency_shape, TouchstoneParameter::S),
         Err(Error::WriterV2InvalidSShape { .. })
     ));
 
@@ -205,7 +206,7 @@ fn rejects_every_v2_writer_domain_class_with_context() {
         value["z0"]["data"] = json!([[37.0, 0.0], [37.0, 0.0]]);
     });
     assert!(matches!(
-        write_touchstone_v2_0_s_full_ri_hz(&invalid_z0_shape),
+        write_touchstone_v2_0_power_full_ri_hz(&invalid_z0_shape, TouchstoneParameter::S),
         Err(Error::WriterV2InvalidZ0Shape { .. })
     ));
 
@@ -217,7 +218,7 @@ fn rejects_every_v2_writer_domain_class_with_context() {
         )
         .unwrap();
         assert!(matches!(
-            write_touchstone_v2_0_s_full_ri_hz(&network),
+            write_touchstone_v2_0_power_full_ri_hz(&network, TouchstoneParameter::S),
             Err(Error::WriterV2InvalidFrequency { .. })
         ));
     }
@@ -225,7 +226,7 @@ fn rejects_every_v2_writer_domain_class_with_context() {
     for frequencies in [vec![2.0, 1.0], vec![1.0, 1.0]] {
         let network = make_network(1, &frequencies, &[50.0]);
         assert!(matches!(
-            write_touchstone_v2_0_s_full_ri_hz(&network),
+            write_touchstone_v2_0_power_full_ri_hz(&network, TouchstoneParameter::S),
             Err(Error::WriterV2FrequencyNotStrictlyIncreasing { .. })
         ));
     }
@@ -237,7 +238,7 @@ fn rejects_every_v2_writer_domain_class_with_context() {
     )
     .unwrap();
     assert!(matches!(
-        write_touchstone_v2_0_s_full_ri_hz(&nonfinite_s),
+        write_touchstone_v2_0_power_full_ri_hz(&nonfinite_s, TouchstoneParameter::S),
         Err(Error::WriterV2NonFiniteS { .. })
     ));
 
@@ -255,7 +256,7 @@ fn rejects_every_v2_writer_domain_class_with_context() {
         )
         .unwrap();
         assert!(matches!(
-            write_touchstone_v2_0_s_full_ri_hz(&network),
+            write_touchstone_v2_0_power_full_ri_hz(&network, TouchstoneParameter::S),
             Err(Error::WriterV2InvalidZ0 { .. })
         ));
     }
@@ -267,7 +268,7 @@ fn rejects_every_v2_writer_domain_class_with_context() {
         Array2::from_elem((1, 1), Complex64::new(50.0, -0.0)),
     )
     .unwrap();
-    assert!(write_touchstone_v2_0_s_full_ri_hz(&signed_zero).is_ok());
+    assert!(write_touchstone_v2_0_power_full_ri_hz(&signed_zero, TouchstoneParameter::S).is_ok());
 
     // v1 remains deliberately stricter: heterogeneous references are still
     // rejected rather than silently repaired or renormalized.
@@ -296,7 +297,7 @@ fn malformed_serde_values_never_panic() {
     ];
     for network in malformed {
         let result = catch_unwind(AssertUnwindSafe(|| {
-            write_touchstone_v2_0_s_full_ri_hz(&network)
+            write_touchstone_v2_0_power_full_ri_hz(&network, TouchstoneParameter::S)
         }));
         assert!(
             result.is_ok(),
@@ -304,4 +305,209 @@ fn malformed_serde_values_never_panic() {
         );
         assert!(result.unwrap().is_err());
     }
+}
+
+#[test]
+fn emits_selected_physical_z_and_y_without_reference_scaling() {
+    let one_frequency = Frequency::from_hz(vec![1.0e9]).unwrap();
+    let one_z = Network::from_z_power(
+        one_frequency.clone(),
+        Array3::from_elem((1, 1, 1), Complex64::new(100.0, 0.0)),
+        Array2::from_elem((1, 1), Complex64::new(25.0, 0.0)),
+    )
+    .unwrap();
+    let one_y = Network::from_y_direct_power(
+        one_frequency,
+        Array3::from_elem((1, 1, 1), Complex64::new(0.01, 0.0)),
+        Array2::from_elem((1, 1), Complex64::new(75.0, 0.0)),
+    )
+    .unwrap();
+    let one_z_text =
+        write_touchstone_v2_0_power_full_ri_hz(&one_z, TouchstoneParameter::Z).unwrap();
+    let one_y_text =
+        write_touchstone_v2_0_power_full_ri_hz(&one_y, TouchstoneParameter::Y).unwrap();
+    assert!(one_z_text.contains("# Hz Z RI R 25\n"));
+    assert!(one_y_text.contains("# Hz Y RI R 75\n"));
+    for (text, expected) in [(&one_z_text, 100.0), (&one_y_text, 0.01)] {
+        let values: Vec<f64> = text
+            .lines()
+            .find(|line| line.starts_with("1000000000 "))
+            .expect("one-port physical record")
+            .split_whitespace()
+            .map(|token| token.parse().unwrap())
+            .collect();
+        assert!((values[1] - expected).abs() < 1.0e-12);
+        assert!(values[2].abs() < 1.0e-12);
+    }
+
+    let frequency = Frequency::from_hz(vec![1.0e9, 2.0e9]).unwrap();
+    let z0 = Array2::from_shape_fn((2, 3), |(_, port)| {
+        Complex64::new([25.0, 61.0, 97.0][port], 0.0)
+    });
+    let z = Array3::from_shape_fn((2, 3, 3), |(sample, row, column)| {
+        Complex64::new(
+            12.0 + 5.0 * sample as f64 + 3.0 * row as f64 + column as f64,
+            -0.25 * (1 + sample + row + 2 * column) as f64,
+        )
+    });
+    let y = Array3::from_shape_fn((2, 3, 3), |(sample, row, column)| {
+        Complex64::new(
+            0.004 + 0.001 * sample as f64 + 0.0007 * row as f64 + 0.0002 * column as f64,
+            -0.0001 * (1 + sample + row + column) as f64,
+        )
+    });
+    let z_network = Network::from_z_power(frequency.clone(), z.clone(), z0.clone()).unwrap();
+    let y_network = Network::from_y_direct_power(frequency, y.clone(), z0).unwrap();
+    let z_before = z_network.clone();
+    let y_before = y_network.clone();
+
+    let z_text = write_touchstone_v2_0_power_full_ri_hz(&z_network, TouchstoneParameter::Z)
+        .expect("well-conditioned Z conversion succeeds");
+    let y_text = write_touchstone_v2_0_power_full_ri_hz(&y_network, TouchstoneParameter::Y)
+        .expect("well-conditioned Y conversion succeeds");
+    assert_eq!(z_network, z_before);
+    assert_eq!(y_network, y_before);
+    assert!(z_text.starts_with("[Version] 2.0\n# Hz Z RI R 25\n"));
+    assert!(y_text.starts_with("[Version] 2.0\n# Hz Y RI R 25\n"));
+    assert!(z_text.contains("[Reference] 25 61 97\n"));
+    assert!(y_text.contains("[Reference] 25 61 97\n"));
+
+    // The selected physical values are serialized directly in row-major
+    // order.  In particular, the first Z/Y diagonal is not multiplied or
+    // divided by the per-port reference values.
+    let z_data = z_text
+        .lines()
+        .find(|line| line.starts_with("1000000000 "))
+        .expect("first Z record");
+    let y_data = y_text
+        .lines()
+        .find(|line| line.starts_with("1000000000 "))
+        .expect("first Y record");
+    let z_tokens: Vec<f64> = z_data
+        .split_whitespace()
+        .map(|token| token.parse().unwrap())
+        .collect();
+    let y_tokens: Vec<f64> = y_data
+        .split_whitespace()
+        .map(|token| token.parse().unwrap())
+        .collect();
+    for (actual, expected) in [
+        (z_tokens[1], z[[0, 0, 0]].re),
+        (z_tokens[2], z[[0, 0, 0]].im),
+        (z_tokens[3], z[[0, 0, 1]].re),
+        (z_tokens[4], z[[0, 0, 1]].im),
+        (y_tokens[1], y[[0, 0, 0]].re),
+        (y_tokens[2], y[[0, 0, 0]].im),
+        (y_tokens[3], y[[0, 0, 1]].re),
+        (y_tokens[4], y[[0, 0, 1]].im),
+    ] {
+        assert!((actual - expected).abs() < 1.0e-12);
+    }
+
+    let z_readback = parse_touchstone_v2_0_power(&z_text).unwrap();
+    let y_readback = parse_touchstone_v2_0_power(&y_text).unwrap();
+    for (actual, expected) in z_readback.to_z_power().unwrap().iter().zip(z.iter()) {
+        assert!((*actual - *expected).norm() < 1.0e-10);
+    }
+    for (actual, expected) in y_readback.to_y_direct_power().unwrap().iter().zip(y.iter()) {
+        assert!((*actual - *expected).norm() < 1.0e-12);
+    }
+}
+
+#[test]
+fn preserves_two_port_row_major_order_for_physical_output() {
+    let frequency = Frequency::from_hz(vec![1.0e9]).unwrap();
+    let z0 = Array2::from_shape_vec(
+        (1, 2),
+        vec![Complex64::new(37.0, 0.0), Complex64::new(83.0, 0.0)],
+    )
+    .unwrap();
+    let z = Array3::from_shape_vec(
+        (1, 2, 2),
+        vec![
+            Complex64::new(10.0, 1.0),
+            Complex64::new(20.0, 2.0),
+            Complex64::new(30.0, 3.0),
+            Complex64::new(40.0, 4.0),
+        ],
+    )
+    .unwrap();
+    let network = Network::from_z_power(frequency, z, z0).unwrap();
+    let text = write_touchstone_v2_0_power_full_ri_hz(&network, TouchstoneParameter::Z).unwrap();
+    assert!(text.contains("[Two-Port Data Order] 12_21\n"));
+    let values = text
+        .lines()
+        .find(|line| line.starts_with("1000000000 "))
+        .expect("two-port physical record")
+        .split_whitespace()
+        .skip(1)
+        .map(|value| value.parse::<f64>().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(values.len(), 8);
+    for (actual, expected) in values
+        .iter()
+        .zip([10.0, 1.0, 20.0, 2.0, 30.0, 3.0, 40.0, 4.0])
+    {
+        assert!((*actual - expected).abs() < 1.0e-12);
+    }
+}
+
+#[test]
+fn retains_open_short_parameter_domain_asymmetry_and_core_context() {
+    let frequency = Frequency::from_hz(vec![1.0]).unwrap();
+    let z0 = Array2::from_elem((1, 1), Complex64::new(50.0, 0.0));
+
+    let open = Network::new(
+        frequency.clone(),
+        Array3::from_elem((1, 1, 1), Complex64::new(1.0, 0.0)),
+        z0.clone(),
+    )
+    .unwrap();
+    let open_y = write_touchstone_v2_0_power_full_ri_hz(&open, TouchstoneParameter::Y)
+        .expect("direct Y exports an ideal open");
+    assert!(open_y.contains("1 0 0\n"));
+    assert!(matches!(
+        write_touchstone_v2_0_power_full_ri_hz(&open, TouchstoneParameter::Z),
+        Err(Error::Core(_))
+    ));
+
+    let short = Network::new(
+        frequency,
+        Array3::from_elem((1, 1, 1), Complex64::new(-1.0, 0.0)),
+        z0,
+    )
+    .unwrap();
+    let short_z = write_touchstone_v2_0_power_full_ri_hz(&short, TouchstoneParameter::Z)
+        .expect("power-wave Z exports an ideal short");
+    assert!(short_z.contains("1 0 0\n"));
+    assert!(matches!(
+        write_touchstone_v2_0_power_full_ri_hz(&short, TouchstoneParameter::Y),
+        Err(Error::Core(_))
+    ));
+}
+
+#[test]
+fn selected_conversion_nonfinite_failure_is_reported_as_core_error() {
+    let network = Network::new(
+        Frequency::from_hz(vec![1.0]).unwrap(),
+        Array3::from_elem((1, 1, 1), Complex64::new(f64::MAX, 0.0)),
+        Array2::from_elem((1, 1), Complex64::new(f64::MAX, 0.0)),
+    )
+    .unwrap();
+    assert!(matches!(
+        write_touchstone_v2_0_power_full_ri_hz(&network, TouchstoneParameter::Z),
+        Err(Error::Core(CoreError::NonFiniteComputation {
+            stage: ConversionStage::SToZ,
+            frequency: 0,
+            ..
+        }))
+    ));
+    assert!(matches!(
+        write_touchstone_v2_0_power_full_ri_hz(&network, TouchstoneParameter::Y),
+        Err(Error::Core(CoreError::NonFiniteComputation {
+            stage: ConversionStage::SToY,
+            frequency: 0,
+            ..
+        }))
+    ));
 }

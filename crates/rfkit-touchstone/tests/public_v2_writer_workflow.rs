@@ -1,6 +1,8 @@
 use ndarray::{Array2, Array3};
 use num_complex::Complex64;
-use rfkit_touchstone::{parse_touchstone_v2_0_power, write_touchstone_v2_0_s_full_ri_hz};
+use rfkit_touchstone::{
+    TouchstoneParameter, parse_touchstone_v2_0_power, write_touchstone_v2_0_power_full_ri_hz,
+};
 
 const INPUT: &str = "[Version] 2.0\n\
 # Hz S RI R 37\n\
@@ -69,8 +71,8 @@ fn v2_parse_permute_write_read_preserves_physical_s_and_references() {
     // This is intentionally a direct v2 export: no renormalization is used,
     // so the unequal physical references and the reordered S coordinates are
     // retained exactly.
-    let text =
-        write_touchstone_v2_0_s_full_ri_hz(&reordered).expect("v2 writer accepts references");
+    let text = write_touchstone_v2_0_power_full_ri_hz(&reordered, TouchstoneParameter::S)
+        .expect("v2 writer accepts references");
     assert!(text.contains("[Reference] 83 37 61\n"));
     assert!(text.contains("[Matrix Format] Full\n"));
     let reread = parse_touchstone_v2_0_power(&text).expect("v2 output parses");
